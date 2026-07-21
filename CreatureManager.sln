@@ -1,0 +1,27 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CreatureManager", "CreatureManager.csproj", "{4358610B-F3F4-4843-B7AF-98B7BC60DCDE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YamlSyncContractCheck", "tools\YamlSyncContractCheck\YamlSyncContractCheck.csproj", "{6B5791D9-76DD-4E35-9F10-591345960CBD}"
+EndProject
+Project("{66A26720-8FB5-11D2-AA7E-00C04F688DDE}") = "Solution Items", "Solution Items", "{9D3177D6-3D6B-46A7-A471-9B4E909F2D8F}"
+	ProjectSection(SolutionItems) = preProject
+		README.md = README.md
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4358610B-F3F4-4843-B7AF-98B7BC60DCDE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4358610B-F3F4-4843-B7AF-98B7BC60DCDE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4358610B-F3F4-4843-B7AF-98B7BC60DCDE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4358610B-F3F4-4843-B7AF-98B7BC60DCDE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B5791D9-76DD-4E35-9F10-591345960CBD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B5791D9-76DD-4E35-9F10-591345960CBD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B5791D9-76DD-4E35-9F10-591345960CBD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B5791D9-76DD-4E35-9F10-591345960CBD}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

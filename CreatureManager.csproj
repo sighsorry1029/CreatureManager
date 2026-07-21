@@ -1,0 +1,271 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')"/>
+    <Import Project="environment.props" Condition="Exists('environment.props')"/>
+    <PropertyGroup>
+        <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+        <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+        <ProjectGuid>{4358610B-F3F4-4843-B7AF-98B7BC60DCDE}</ProjectGuid>
+        <OutputType>Library</OutputType>
+        <AppDesignerFolder>Properties</AppDesignerFolder>
+        <RootNamespace>CreatureManager</RootNamespace>
+        <AssemblyName>CreatureManager</AssemblyName>
+        <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+        <FileAlignment>512</FileAlignment>
+        <LangVersion>12.0</LangVersion>
+        <Nullable>enable</Nullable>
+        <DeployToValheim Condition="'$(DeployToValheim)' == ''">false</DeployToValheim>
+        <BuildPackages Condition="'$(BuildPackages)' == '' And '$(Configuration)' == 'Release'">true</BuildPackages>
+        <BuildPackages Condition="'$(BuildPackages)' == ''">false</BuildPackages>
+    </PropertyGroup>
+    <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+        <PlatformTarget>AnyCPU</PlatformTarget>
+        <DebugSymbols>true</DebugSymbols>
+        <DebugType>full</DebugType>
+        <Optimize>false</Optimize>
+        <OutputPath>bin\Debug\</OutputPath>
+        <DefineConstants>DEBUG;TRACE</DefineConstants>
+        <ErrorReport>prompt</ErrorReport>
+        <WarningLevel>4</WarningLevel>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+    <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+        <PlatformTarget>AnyCPU</PlatformTarget>
+        <DebugType>pdbonly</DebugType>
+        <Optimize>true</Optimize>
+        <OutputPath>bin\Release\</OutputPath>
+        <DefineConstants>TRACE</DefineConstants>
+        <ErrorReport>prompt</ErrorReport>
+        <WarningLevel>4</WarningLevel>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+    <Choose>
+        <When Condition="($(OS) == 'Unix' OR $(OS) == 'OSX') AND $(GamePath) == ''">
+            <PropertyGroup>
+                <GamePath Condition="!Exists('$(GamePath)')">$(HOME)/.steam/steam/steamapps/common/Valheim</GamePath>
+                <GamePath Condition="!Exists('$(GamePath)')">$(HOME)/Library/Application Support/Steam/steamapps/common/Valheim/Contents/MacOS</GamePath>
+                <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed</CorlibPath>
+                <CorlibPath Condition="!Exists('$(CorlibPath)')">$(GamePath)/unstripped_corelib</CorlibPath>
+            </PropertyGroup>
+        </When>
+        <When Condition="($(OS) == 'Windows_NT') AND $(GamePath) == ''">
+            <PropertyGroup>
+                <GamePath Condition="!Exists('$(GamePath)')">$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 892970', 'InstallLocation', null, RegistryView.Registry64, RegistryView.Registry32))</GamePath>
+                <_SteamLibraryPath>$([MSBuild]::GetRegistryValueFromView('HKEY_CURRENT_USER\SOFTWARE\Valve\Steam', 'SteamPath', null, RegistryView.Registry32))</_SteamLibraryPath>
+                <GamePath Condition="!Exists('$(GamePath)') AND '$(_SteamLibraryPath)' != ''">$(_SteamLibraryPath)\steamapps\common\Valheim</GamePath>
+                <GamePath Condition="!Exists('$(GamePath)') AND Exists('$(ValheimGamePath)')">$(ValheimGamePath)</GamePath>
+                <GamePath Condition="!Exists('$(GamePath)')">C:\Program Files\Steam\steamapps\common\Valheim</GamePath>
+                <GamePath Condition="!Exists('$(GamePath)')">C:\Program Files (x86)\Steam\steamapps\common\Valheim</GamePath>
+                <GamePath Condition="!Exists('$(GamePath)')">D:\SteamLibrary\steamapps\common\Valheim</GamePath>
+                <BepInExPath Condition="!Exists('$(BepInExPath)')AND Exists('$(GamePath)')">$(GamePath)\BepInEx</BepInExPath>
+                <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed</CorlibPath>
+                <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\unstripped_corlib</CorlibPath>
+                <PublicizedAssembliesPath Condition="!Exists('$(PublicizedAssembliesPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed\publicized_assemblies</PublicizedAssembliesPath>
+            </PropertyGroup>
+        </When>
+    </Choose>
+    <ItemGroup>
+        <Reference Include="0Harmony">
+            <HintPath>$(BepInExPath)\core\0Harmony.dll</HintPath>
+        </Reference>
+        <Reference Include="assembly_guiutils">
+            <HintPath>$(PublicizedAssembliesPath)\assembly_guiutils_publicized.dll</HintPath>
+        </Reference>
+        <Reference Include="assembly_utils">
+            <HintPath>$(PublicizedAssembliesPath)\assembly_utils_publicized.dll</HintPath>
+        </Reference>
+        <Reference Include="gui_framework">
+            <HintPath>$(CorlibPath)\gui_framework.dll</HintPath>
+            <Private>False</Private>
+        </Reference>
+        <Reference Include="assembly_valheim">
+            <HintPath>$(PublicizedAssembliesPath)\assembly_valheim_publicized.dll</HintPath>
+        </Reference>
+        <Reference Include="BepInEx">
+            <HintPath>$(BepInExPath)\core\BepInEx.dll</HintPath>
+        </Reference>
+        <Reference Include="ServerSync">
+            <HintPath>Libs\ServerSync.dll</HintPath>
+        </Reference>
+        <Reference Include="System"/>
+        <Reference Include="System.Core"/>
+        <Reference Include="System.Data"/>
+        <Reference Include="System.Xml"/>
+        <Reference Include="UnityEngine">
+            <HintPath>$(CorlibPath)\UnityEngine.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.AnimationModule">
+            <HintPath>$(CorlibPath)\UnityEngine.AnimationModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.AssetBundleModule">
+            <HintPath>$(CorlibPath)\UnityEngine.AssetBundleModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.CoreModule">
+            <HintPath>$(CorlibPath)\UnityEngine.CoreModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.IMGUIModule">
+            <HintPath>$(CorlibPath)\UnityEngine.IMGUIModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.InputLegacyModule">
+            <HintPath>$(CorlibPath)\UnityEngine.InputLegacyModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.PhysicsModule">
+            <HintPath>$(CorlibPath)\UnityEngine.PhysicsModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.UI">
+            <HintPath>$(CorlibPath)\UnityEngine.UI.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.TextRenderingModule">
+            <HintPath>$(CorlibPath)\UnityEngine.TextRenderingModule.dll</HintPath>
+        </Reference>
+        <Reference Include="Unity.TextMeshPro">
+            <HintPath>$(GamePath)\valheim_Data\Managed\Unity.TextMeshPro.dll</HintPath>
+        </Reference>
+        <!-- PackageReference restore does not add compile references for this legacy project format. -->
+        <Reference Include="YamlDotNet">
+            <HintPath>$(PkgYamlDotNet)\lib\net47\YamlDotNet.dll</HintPath>
+        </Reference>
+    </ItemGroup>
+    <ItemGroup>
+        <Compile Include="CreatureConsoleCommands.cs"/>
+        <Compile Include="CreatureCompendiumManager.cs"/>
+        <Compile Include="CreatureDefinitions.cs"/>
+        <Compile Include="CreatureDomainManager.cs"/>
+        <Compile Include="CreatureFactionManager.cs"/>
+        <Compile Include="CreatureHarmonyPatches.cs"/>
+        <Compile Include="CreatureKarmaManager.cs"/>
+        <Compile Include="CreatureLevelManager.cs"/>
+        <Compile Include="CreatureLocalization.cs"/>
+        <Compile Include="CreatureModifierManager.cs"/>
+        <Compile Include="CreaturePrefabBaseline.cs"/>
+        <Compile Include="CreaturePrefabRegistry.cs"/>
+        <Compile Include="CreatureReferenceSections.cs"/>
+        <Compile Include="CreatureReferenceWriter.cs"/>
+        <Compile Include="CreatureServerLocalization.cs"/>
+        <Compile Include="CreatureSwiftMovementSystem.cs"/>
+        <Compile Include="CreatureTextureRegistry.cs"/>
+        <Compile Include="CreatureYaml.cs"/>
+        <Compile Include="LocalizationManager.cs"/>
+        <Compile Include="Plugin.cs"/>
+        <Compile Include="Properties\AssemblyInfo.cs"/>
+    </ItemGroup>
+    <ItemGroup>
+        <Content Include=".gitignore"/>
+        <Content Include="environment.props.example"/>
+        <Content Include="ILRepack.targets"/>
+        <Content Include="Libs\ServerSync.dll">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </Content>
+        <Content Include="LICENSE.txt"/>
+        <Content Include="README.md"/>
+        <Content Include="docs\modifier-icons\*.png"/>
+        <Content Include="Thunderstore\CHANGELOG.md"/>
+        <Content Include="Thunderstore\icon.png"/>
+        <Content Include="Thunderstore\manifest.json"/>
+        <EmbeddedResource Include="translations\English.yml">
+            <LogicalName>translations.English.yml</LogicalName>
+            <Type>Non-Resx</Type>
+            <WithCulture>false</WithCulture>
+        </EmbeddedResource>
+        <EmbeddedResource Include="translations\Korean.yml">
+            <LogicalName>translations.Korean.yml</LogicalName>
+            <Type>Non-Resx</Type>
+            <WithCulture>false</WithCulture>
+        </EmbeddedResource>
+        <EmbeddedResource Include="defaults\creatures.sample.yml">
+            <LogicalName>CreatureManager.defaults.creatures.sample.yml</LogicalName>
+            <Type>Non-Resx</Type>
+            <WithCulture>false</WithCulture>
+        </EmbeddedResource>
+        <EmbeddedResource Include="defaults\attacks.sample.yml">
+            <LogicalName>CreatureManager.defaults.attacks.sample.yml</LogicalName>
+            <Type>Non-Resx</Type>
+            <WithCulture>false</WithCulture>
+        </EmbeddedResource>
+        <EmbeddedResource Include="defaults\textures\*.png">
+            <LogicalName>CreatureManager.defaults.textures.%(Filename)%(Extension)</LogicalName>
+            <Type>Non-Resx</Type>
+            <WithCulture>false</WithCulture>
+        </EmbeddedResource>
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.44.1">
+          <PrivateAssets>all</PrivateAssets>
+          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+        <PackageReference Include="YamlDotNet" Version="16.3.0" GeneratePathProperty="true" />
+    </ItemGroup>
+    <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
+    <Target Name="GetAssemblyVersion" AfterTargets="ILRepacker"
+            Condition="'$(DeployToValheim)' == 'true' Or '$(BuildPackages)' == 'true'">
+        <GetAssemblyIdentity AssemblyFiles="$(TargetPath)">
+            <Output TaskParameter="Assemblies" ItemName="Targets"/>
+        </GetAssemblyIdentity>
+        <ItemGroup>
+            <AssemblyVersions Include="@(Targets->'%(Version)')"/>
+        </ItemGroup>
+        <Error Text="Failed to get Assembly Version." Condition="'%(AssemblyVersions.Identity)' == ''"/>
+        <PropertyGroup>
+            <AssemblyVersion>%(AssemblyVersions.Identity)</AssemblyVersion>
+            <Major>$(AssemblyVersion.Split('.')[0])</Major>
+            <Minor>$(AssemblyVersion.Split('.')[1])</Minor>
+            <Patch>$(AssemblyVersion.Split('.')[2])</Patch>
+            <PackageName>$(AssemblyName)_v$(Major).$(Minor).$(Patch)</PackageName>
+            <PackageVersion>$(Major).$(Minor).$(Patch)</PackageVersion>
+            <VersionString>$(Major).$(Minor).$(Patch)</VersionString>
+        </PropertyGroup>
+    </Target>
+    <Target Name="CopyOutputDLL" AfterTargets="GetAssemblyVersion" Condition="'$(DeployToValheim)' == 'true'">
+        <Error Text="DLL not found in target directory." Condition="!Exists('$(TargetDir)$(AssemblyName).dll')"/>
+        <Error Text="DeployToValheim=true requires an existing CopyOutputDLLPath in environment.props or on the command line."
+               Condition="'$(CopyOutputDLLPath)' == '' Or !Exists('$(CopyOutputDLLPath)')"/>
+        <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath)" OverwriteReadOnlyFiles="true"/>
+        <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath2)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath2)')"/>
+        <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath3)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath3)')"/>
+    </Target>
+    <Target Name="BuildReleasePackages" AfterTargets="GetAssemblyVersion"
+            Condition="'$(BuildPackages)' == 'true' And '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+        <PropertyGroup>
+            <PackageStagingRoot>$(BaseIntermediateOutputPath)package</PackageStagingRoot>
+            <ThunderstoreStagingDir>$(PackageStagingRoot)\thunderstore\$(PackageName)</ThunderstoreStagingDir>
+            <NexusStagingDir>$(PackageStagingRoot)\nexus\$(PackageName)</NexusStagingDir>
+            <PackageOutputRoot>$(ProjectDir)artifacts</PackageOutputRoot>
+        </PropertyGroup>
+        <Error Text="README.md not found in project directory." Condition="!Exists('$(ProjectDir)README.md')"/>
+        <Error Text="CHANGELOG.md not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\CHANGELOG.md')"/>
+        <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\manifest.json')"/>
+        <Error Text="icon.png not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\icon.png')"/>
+        <Error Text="English translation not found in translations directory." Condition="!Exists('$(ProjectDir)translations\English.yml')"/>
+        <PropertyGroup>
+            <ThunderstoreManifestPath>$(ProjectDir)Thunderstore\manifest.json</ThunderstoreManifestPath>
+            <ThunderstoreManifestText>$([System.IO.File]::ReadAllText('$(ThunderstoreManifestPath)'))</ThunderstoreManifestText>
+            <ThunderstoreManifestVersionPattern>&quot;version_number&quot;\s*:\s*&quot;[^&quot;]*&quot;</ThunderstoreManifestVersionPattern>
+            <ThunderstoreManifestVersionReplacement>&quot;version_number&quot;: &quot;$(PackageVersion)&quot;</ThunderstoreManifestVersionReplacement>
+            <UpdatedThunderstoreManifestText>$([System.Text.RegularExpressions.Regex]::Replace('$(ThunderstoreManifestText)', '$(ThunderstoreManifestVersionPattern)', '$(ThunderstoreManifestVersionReplacement)'))</UpdatedThunderstoreManifestText>
+        </PropertyGroup>
+        <Error Text="Thunderstore manifest.json has no version_number string."
+               Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(ThunderstoreManifestText)', '$(ThunderstoreManifestVersionPattern)')) != 'True'"/>
+        <WriteLinesToFile File="$(ThunderstoreManifestPath)" Lines="$(UpdatedThunderstoreManifestText)" Overwrite="true"/>
+        <ReadLinesFromFile File="$(ProjectDir)Thunderstore\manifest.json">
+            <Output TaskParameter="Lines" ItemName="ThunderstoreManifestLines"/>
+        </ReadLinesFromFile>
+        <PropertyGroup>
+            <ThunderstoreManifestText>@(ThunderstoreManifestLines, ' ')</ThunderstoreManifestText>
+        </PropertyGroup>
+        <Error Text="Thunderstore manifest version_number must match assembly version $(PackageVersion)."
+               Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(ThunderstoreManifestText)', '&quot;version_number&quot;\s*:\s*&quot;$(PackageVersion)&quot;')) != 'True'"/>
+        <RemoveDir Directories="$(PackageStagingRoot)" Condition="Exists('$(PackageStagingRoot)')"/>
+        <MakeDir Directories="$(ThunderstoreStagingDir);$(NexusStagingDir);$(PackageOutputRoot)\Thunderstore;$(PackageOutputRoot)\Nexus"/>
+        <ItemGroup>
+            <ThunderstorePackageFiles Include="$(TargetPath);$(ProjectDir)README.md;$(ProjectDir)Thunderstore\CHANGELOG.md;$(ProjectDir)Thunderstore\manifest.json;$(ProjectDir)Thunderstore\icon.png"/>
+            <NexusPackageFiles Include="$(TargetPath)"/>
+        </ItemGroup>
+        <Copy SourceFiles="@(ThunderstorePackageFiles)" DestinationFolder="$(ThunderstoreStagingDir)"/>
+        <Copy SourceFiles="$(ProjectDir)translations\English.yml" DestinationFiles="$(ThunderstoreStagingDir)\$(AssemblyName).English.yml"/>
+        <Copy SourceFiles="@(NexusPackageFiles)" DestinationFolder="$(NexusStagingDir)"/>
+        <ZipDirectory SourceDirectory="$(ThunderstoreStagingDir)" DestinationFile="$(PackageOutputRoot)\Thunderstore\$(PackageName).zip" Overwrite="true"/>
+        <ZipDirectory SourceDirectory="$(NexusStagingDir)" DestinationFile="$(PackageOutputRoot)\Nexus\$(PackageName).zip" Overwrite="true"/>
+        <RemoveDir Directories="$(PackageStagingRoot)"/>
+    </Target>
+
+</Project>

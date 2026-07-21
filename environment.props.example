@@ -1,0 +1,16 @@
+<Project>
+  <!-- Copy this file to environment.props for machine-local paths. -->
+  <PropertyGroup>
+    <GamePath>C:\Program Files (x86)\Steam\steamapps\common\Valheim</GamePath>
+    <BepInExPath>$(GamePath)\BepInEx</BepInExPath>
+    <CorlibPath>$(GamePath)\valheim_Data\Managed</CorlibPath>
+    <PublicizedAssembliesPath>$(CorlibPath)\publicized_assemblies</PublicizedAssembliesPath>
+
+    <!-- Defaults keep normal builds local. Set both values explicitly to opt in. -->
+    <DeployToValheim>false</DeployToValheim>
+    <CopyOutputDLLPath>$(BepInExPath)\plugins</CopyOutputDLLPath>
+
+    <!-- Opt-in Release packages are written under artifacts without changing tracked metadata. -->
+    <BuildPackages>false</BuildPackages>
+  </PropertyGroup>
+</Project>
