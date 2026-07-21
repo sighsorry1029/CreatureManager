@@ -1,8 +1,164 @@
 # CreatureManager
 
-CreatureManager is a server-synced Valheim framework for creating, tuning, and scaling creatures without taking ownership of drops or spawn tables.
+Add 32 combat modifiers and launch live boss hunt events across dungeons and the open world. Clone and configure creatures, attacks, AI, equipment, appearances, and textures; inspect resistances and scale difficulty by biome, distance, or preset.
 
-It is built around a simple workflow: discover loaded content, copy only what you need, and keep the resulting configuration small.
+## Showcase
+
+### Live Enforcer Hunts
+
+![Black Forest dungeon Enforcer encounter](https://i.ibb.co/bjRJt0s9/blackforestdungeonenforcer.gif)
+
+*Dungeon-specific candidates bring Enforcer encounters into Black Forest interiors.*
+
+![Swamp Enforcer encounter](https://i.ibb.co/WvNj02sD/swampenforcer.gif)
+
+*Biome-specific rules create a distinct Enforcer hunt in the Swamp.*
+
+![Mountain Enforcer encounter](https://i.ibb.co/KxDkMY9L/mountainenforcer.gif)
+
+*The same live encounter system selects Mountain-specific Enforcers in the highlands.*
+
+### Creature Cloning and Customization
+
+![Vincent custom creature](https://i.ibb.co/5XKJvDhx/vincent.gif)
+
+*Vincent demonstrates a MonsterLabZ NPC clone configured as a custom ranged boss.*
+
+![Root Witch custom creature](https://i.ibb.co/YB9YQhDH/rootwitch.gif)
+
+*Root Witch demonstrates a MonsterLabZ spellcaster clone with a custom appearance, loadout, and attack set.*
+
+![Bonebeard custom creature](https://i.ibb.co/RtnVCBC/bonebeard.gif)
+
+*Bonebeard demonstrates a MonsterLabZ creature clone assembled as a custom melee boss.*
+
+### Combat Modifiers
+
+![Creatures displaying multiple modifier icons](https://i.ibb.co/60JDRCGW/mobswithmodifiers.png)
+
+*Creatures roll modifiers independently and display their active effects directly beneath their nameplates.*
+
+#### Offense and Defense
+
+![Spirit modifier adding Spirit damage](https://i.ibb.co/chZwZNDR/spirit.gif)
+
+*Spirit adds Spirit damage to the creature's attacks.*
+
+![Undodgeable modifier bypassing a dodge](https://i.ibb.co/X18bTyr/undodgeable.gif)
+
+*Undodgeable attacks ignore dodge invulnerability, while blocking and parrying remain effective.*
+
+![Deathward modifier preventing a lethal hit](https://i.ibb.co/cKynXmkb/deathward.gif)
+
+*Deathward cancels a lethal hit and restores part of the creature's maximum health.*
+
+![Reflection modifier returning melee damage](https://i.ibb.co/84LqjWMj/reflection.gif)
+
+*Reflection returns part of the creature's actual health loss to a direct melee attacker.*
+
+![Vortex modifier negating a projectile](https://i.ibb.co/k2FtL0g8/vortex.gif)
+
+*Vortex can negate a projectile hit together with its damage and secondary effects.*
+
+![Unflinching modifier preventing stagger](https://i.ibb.co/Ld3psjHY/unflinching.gif)
+
+*Unflinching prevents stagger from normal hits and perfect parries.*
+
+#### Afflictions
+
+![Affliction modifier icons and duration counters](https://i.ibb.co/FbbtDgfN/Afflictionmodifiers.png)
+
+*Timed Afflictions use distinct icons and counters so their remaining duration stays readable in combat.*
+
+#### Special
+
+![Blink modifier teleporting toward a target](https://i.ibb.co/3mVwS3pz/blink.gif)
+
+*Blink teleports the creature near its target to close distance quickly.*
+
+![Omen modifier triggering an Enforcer check](https://i.ibb.co/G4x2sPfH/omen.gif)
+
+*Omen can request an Enforcer encounter after the creature kills a player.*
+
+![Juggernaut modifier producing heavy knockback](https://i.ibb.co/xKxGBpjK/juggernaut.gif)
+
+*Juggernaut turns successful hits into heavy knockback while resisting attack push.*
+
+![Blamer modifier raising regional Karma](https://i.ibb.co/9mvPYZy1/blamer.gif)
+
+*Blamer flees and raises regional Karma after its health threshold is crossed, then expires when its Karma budget is exhausted.*
+
+### In-game Tools
+
+![Creature resistance inspection](https://i.ibb.co/03cfhV8/inspectresistance.png)
+
+*Creature inspection shows effective resistances, weaknesses, and immunities beneath the target's nameplate.*
+
+![Defensive modifier entries in the Compendium](https://i.ibb.co/C3VG6r3B/compendium.png)
+
+*The in-game Compendium documents defensive modifiers and their exact behavior.*
+
+![Affliction modifier entries in the Compendium](https://i.ibb.co/21KT36KS/compendium2.png)
+
+*Affliction details are available in the same localized Compendium without leaving the game.*
+
+### Combat Modifiers specific
+
+CreatureManager provides 32 modifiers in four groups. Natural rolls select at most one modifier from each group, for up to four visible modifiers. The values below are the generated `Global` defaults; `levels.yml` and `karma.yml` can override them for Global, Boss, prefab/group, Enforcer, and individual Enforcer rules.
+
+#### Offense
+
+| Icon | Modifier | Effect with generated `Global` defaults |
+| :---: | --- | --- |
+| <img src="https://i.ibb.co/BVx9sb3K/enraged.png" width="40" height="40" alt="Enraged icon"> | **Enraged** (`enraged`) | Deals 15% more damage. |
+| <img src="https://i.ibb.co/0ygZZD0Y/fire.png" width="40" height="40" alt="Fire icon"> | **Fire** (`fire`) | Adds Fire damage equal to 20% of the original hit. |
+| <img src="https://i.ibb.co/JR3ckSFN/frost.png" width="40" height="40" alt="Frost icon"> | **Frost** (`frost`) | Adds Frost damage equal to 10% of the original hit. |
+| <img src="https://i.ibb.co/9kvRbPqK/lightning.png" width="40" height="40" alt="Lightning icon"> | **Lightning** (`lightning`) | Adds Lightning damage equal to 10% of the original hit. |
+| <img src="https://i.ibb.co/nsJX4zm1/spirit.png" width="40" height="40" alt="Spirit icon"> | **Spirit** (`spirit`) | Adds Spirit damage equal to 5% of the original hit. Against players, its Spirit damage over time bypasses armor and resistance. |
+| <img src="https://i.ibb.co/WNJrnsHg/armor-Piercing.png" width="40" height="40" alt="Armor Piercing icon"> | **Armor Piercing** (`armorPiercing`) | Ignores 30% of player body armor. |
+| <img src="https://i.ibb.co/Jw8T4gkG/staggering.png" width="40" height="40" alt="Staggering icon"> | **Staggering** (`staggering`) | Adds 60% normal-hit and block-stagger buildup. |
+| <img src="https://i.ibb.co/rR8dTsFw/undodgeable.png" width="40" height="40" alt="Undodgeable icon"> | **Undodgeable** (`undodgeable`) | Ignores player dodge invulnerability but deals 25% less damage. Blocking and parrying still work. |
+
+#### Defense
+
+| Icon | Modifier | Effect with generated `Global` defaults |
+| :---: | --- | --- |
+| <img src="https://i.ibb.co/wNHPbYF1/armored.png" width="40" height="40" alt="Armored icon"> | **Armored** (`armored`) | Takes 30% less damage. |
+| <img src="https://i.ibb.co/ns25Rvk0/deathward.png" width="40" height="40" alt="Deathward icon"> | **Deathward** (`deathward`) | Cancels lethal damage and restores 20% of max health. Has a 10s cooldown and up to 3 activations. |
+| <img src="https://i.ibb.co/x8s20mxk/regenerating.png" width="40" height="40" alt="Regenerating icon"> | **Regenerating** (`regenerating`) | Heals a configurable share of max health per second. Defaults are 1% for Global creatures, 0.2% for bosses, and 0.5% for Enforcers. |
+| <img src="https://i.ibb.co/S4q133Xd/reflection.png" width="40" height="40" alt="Reflection icon"> | **Reflection** (`reflection`) | Has a 50% chance on a direct melee hit to reflect 10% of the health actually lost, bypassing defense and resistance. |
+| <img src="https://i.ibb.co/1JYL26MD/vortex.png" width="40" height="40" alt="Vortex icon"> | **Vortex** (`vortex`) | Has a 50% chance to negate projectile damage, push, stagger, and status effects. |
+| <img src="https://i.ibb.co/KjW1GynX/adaptive.png" width="40" height="40" alt="Adaptive icon"> | **Adaptive** (`adaptive`) | Remembers the dominant hit type for 5s and reduces matching damage by 50%. |
+| <img src="https://i.ibb.co/mrcBq1d6/unflinching.png" width="40" height="40" alt="Unflinching icon"> | **Unflinching** (`unflinching`) | Immune to normal-hit and perfect-parry stagger. |
+| <img src="https://i.ibb.co/JjW33Mc3/chameleon.png" width="40" height="40" alt="Chameleon icon"> | **Chameleon** (`chameleon`) | While alerted, gains one rotating damage-type immunity and switches it every 10s. |
+
+#### Affliction
+
+| Icon | Modifier | Effect with generated `Global` defaults |
+| :---: | --- | --- |
+| <img src="https://i.ibb.co/dJBntfKg/exposed.png" width="40" height="40" alt="Exposed icon"> | **Exposed** (`exposed`) | Has a 50% chance to make the player take 20% more damage for 5s. |
+| <img src="https://i.ibb.co/F42w0PQ5/weakened.png" width="40" height="40" alt="Weakened icon"> | **Weakened** (`weakened`) | Has a 50% chance to make the player deal 20% less damage for 5s. |
+| <img src="https://i.ibb.co/RqB7wdW/withered.png" width="40" height="40" alt="Withered icon"> | **Withered** (`withered`) | Has a 50% chance to reduce healing received by 50% for 5s. |
+| <img src="https://i.ibb.co/LzG2TYkb/crippling.png" width="40" height="40" alt="Crippling icon"> | **Crippling** (`crippling`) | Has a 50% chance to reduce movement speed and jump force by 50% for 5s. |
+| <img src="https://i.ibb.co/sdY1NFzg/disruptive.png" width="40" height="40" alt="Disruptive icon"> | **Disruptive** (`disruptive`) | Has a 50% chance to reduce stamina and Eitr recovery by 50% for 5s. |
+| <img src="https://i.ibb.co/sJJkksLr/adrenaline-Drain.png" width="40" height="40" alt="Adrenaline Drain icon"> | **Adrenaline Drain** (`adrenalineDrain`) | Has a 50% chance to remove 50% of current adrenaline and reduce adrenaline gain by 50% for 5s. |
+| <img src="https://i.ibb.co/HTnv5QHG/corrosive.png" width="40" height="40" alt="Corrosive icon"> | **Corrosive** (`corrosive`) | Has a 50% chance to increase durability loss to equipped gear by 50% for 5s. |
+| <img src="https://i.ibb.co/FbcNsZ56/toxic-Death.png" width="40" height="40" alt="Toxic Death icon"> | **Toxic Death** (`toxicDeath`) | On death, poisons players within 4m for 30% of their max health. |
+
+#### Special
+
+| Icon | Modifier | Effect with generated `Global` defaults |
+| :---: | --- | --- |
+| <img src="https://i.ibb.co/3mfDdZgF/swift.png" width="40" height="40" alt="Swift icon"> | **Swift** (`swift`) | Increases movement speed, acceleration, and turning speed by 40%. |
+| <img src="https://i.ibb.co/xKKMTzcq/attack-Speed.png" width="40" height="40" alt="Attack Speed icon"> | **Attack Speed** (`attackSpeed`) | Increases animation speed by 30%; attack intervals become 76.92% of normal. |
+| <img src="https://i.ibb.co/SXqZd5Pq/vampiric.png" width="40" height="40" alt="Vampiric icon"> | **Vampiric** (`vampiric`) | Heals for 30% of health removed by direct hits; delayed damage over time is excluded. |
+| <img src="https://i.ibb.co/Jw9yV49Z/reaping.png" width="40" height="40" alt="Reaping icon"> | **Reaping** (`reaping`) | Nearby kills heal 5% of base max health (up to 20 activations) and grant +10% max health, +1% damage, and +5% size per kill, capped at +200%, +20%, and +50%. No new size is gained in dungeons. |
+| <img src="https://i.ibb.co/Gfqc089L/blink.png" width="40" height="40" alt="Blink icon"> | **Blink** (`blink`) | Teleports near its player target within 24m every 6s. |
+| <img src="https://i.ibb.co/ZpnXrfGq/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** (`omen`) | Has a 50% chance on a direct player kill to force an Enforcer check regardless of cooldown. |
+| <img src="https://i.ibb.co/spF4n7Wg/juggernaut.png" width="40" height="40" alt="Juggernaut icon"> | **Juggernaut** (`juggernaut`) | Player hits have at least 150 push force. An actual push starts a 5s cooldown, and the creature is immune to attack push. |
+| <img src="https://i.ibb.co/TBCgrbkt/blamer.png" width="40" height="40" alt="Blamer icon"> | **Blamer** (`blamer`) | Below 75% health, flees and adds 0.5 Karma per second up to 45 lifetime Karma. When exhausted, the modifier, icon, and flee behavior end. |
+
+Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains a CreatureManager page with modifier names, icons, and descriptions using the active global values. English and Korean localization are embedded.
 
 ## Highlights
 
@@ -18,55 +174,6 @@ It is built around a simple workflow: discover loaded content, copy only what yo
 - Add regional Karma progression and configurable Enforcer encounters.
 - Inspect loaded creatures, attacks, AI, loadouts, projectiles, textures, and level visuals through generated references.
 - Hot-reload YAML and local PNG textures while keeping synchronized gameplay definitions server-authoritative.
-
-## Why CreatureManager
-
-**Focused ownership**
-
-CreatureManager handles creature identity, combat, AI, visuals, levels, and regional pressure. Drops and spawn tables remain available to dedicated tools such as DropNSpawn.
-
-**Reference-driven configuration**
-
-Generated reference files include content from Valheim and loaded mods, grouped by best-effort source. You do not need to guess prefab, attack, projectile, equipment, or texture names.
-
-**Small overrides**
-
-Configuration files contain only intentional changes. Full scaffolds are available when discovery is more useful than compact references, but they are never required as active configuration.
-
-**Predictable schemas**
-
-Only the documented canonical YAML fields are accepted. Schema comments and complete examples live in the generated configuration files so they stay next to the values they describe.
-
-## Installation
-
-1. Install BepInEx for Valheim.
-2. Place `CreatureManager.dll` in `BepInEx/plugins`.
-3. Start Valheim once to generate configuration and reference files.
-4. For multiplayer, install the same CreatureManager version on the server and every client.
-
-ServerSync requires the configured CreatureManager version during connection and synchronizes gameplay configuration from the server. Client-only display options remain local.
-
-## Building from Source
-
-Debug builds neither deploy to Valheim nor create release archives. The project discovers common Steam install locations automatically; if discovery fails, copy `environment.props.example` to the ignored `environment.props` file and update its machine-local paths.
-
-```powershell
-dotnet build CreatureManager.sln -c Debug
-```
-
-Set `DeployToValheim=true` only when the built DLL should be copied to the configured `CopyOutputDLLPath`:
-
-```powershell
-dotnet build CreatureManager.sln -c Debug -p:DeployToValheim=true
-```
-
-Release builds create archives in `artifacts/Thunderstore` and `artifacts/Nexus`. The merged DLL assembly version supplies the package version and updates the tracked `Thunderstore/manifest.json` automatically. This root file is the single README source and is copied only into the temporary Thunderstore staging directory.
-
-```powershell
-dotnet build CreatureManager.sln -c Release
-```
-
-Pass `-p:BuildPackages=false` when a Release DLL is needed without archives.
 
 ## Getting Started
 
@@ -100,14 +207,21 @@ The creature, attack, projectile, AI, and level domains load both `.yml` and `.y
 
 Files directly under `localization/` are flat `token: text` mappings. Both `.yml` and `.yaml` are accepted, but keep only one file for each Valheim language name. A token key may have one leading `$`; CreatureManager removes it while loading, so `rootwitch` and `$rootwitch` define the same token. Use `$token` in `creatures.yml` or another localized field. English is applied as the fallback before the client's selected language.
 
+`localization/English.yml`
+
 ```yaml
-# localization/English.yml
 cm_rootwitch_name: Root Witch
+```
 
-# localization/Korean.yml
+`localization/Korean.yml`
+
+```yaml
 cm_rootwitch_name: 뿌리 마녀
+```
 
-# creatures.yml
+`creatures.yml`
+
+```yaml
 character:
   name: $cm_rootwitch_name
 ```
@@ -145,64 +259,6 @@ Levels can control weighted star distribution, health, damage, visual scale, dis
 
 CreatureManager is spawn-aware. Natural hostile spawns receive the complete matching rule, while breeding, eggs, grow-up transitions, tamed restores, Blood Magic summons, and explicit console spawns preserve or restrict values according to their lifecycle instead of blindly rerolling every creature initialization.
 
-### Combat Modifiers
-
-CreatureManager provides 32 modifiers in four groups. Natural rolls select at most one modifier from each group, for up to four visible modifiers. The values below are the generated `Global` defaults; `levels.yml` and `karma.yml` can override them for Global, Boss, prefab/group, Enforcer, and individual Enforcer rules.
-
-#### Offense
-
-| Icon | Modifier | Effect with generated `Global` defaults |
-| :---: | --- | --- |
-| <img src="docs/modifier-icons/enraged.png" width="40" height="40" alt="Enraged icon"> | **Enraged** (`enraged`) | Deals 15% more damage. |
-| <img src="docs/modifier-icons/fire.png" width="40" height="40" alt="Fire icon"> | **Fire** (`fire`) | Adds Fire damage equal to 20% of the original hit. |
-| <img src="docs/modifier-icons/frost.png" width="40" height="40" alt="Frost icon"> | **Frost** (`frost`) | Adds Frost damage equal to 10% of the original hit. |
-| <img src="docs/modifier-icons/lightning.png" width="40" height="40" alt="Lightning icon"> | **Lightning** (`lightning`) | Adds Lightning damage equal to 10% of the original hit. |
-| <img src="docs/modifier-icons/spirit.png" width="40" height="40" alt="Spirit icon"> | **Spirit** (`spirit`) | Adds Spirit damage equal to 5% of the original hit. Against players, its Spirit damage over time bypasses armor and resistance. |
-| <img src="docs/modifier-icons/armorPiercing.png" width="40" height="40" alt="Armor Piercing icon"> | **Armor Piercing** (`armorPiercing`) | Ignores 30% of player body armor. |
-| <img src="docs/modifier-icons/staggering.png" width="40" height="40" alt="Staggering icon"> | **Staggering** (`staggering`) | Adds 60% normal-hit and block-stagger buildup. |
-| <img src="docs/modifier-icons/undodgeable.png" width="40" height="40" alt="Undodgeable icon"> | **Undodgeable** (`undodgeable`) | Ignores player dodge invulnerability but deals 25% less damage. Blocking and parrying still work. |
-
-#### Defense
-
-| Icon | Modifier | Effect with generated `Global` defaults |
-| :---: | --- | --- |
-| <img src="docs/modifier-icons/armored.png" width="40" height="40" alt="Armored icon"> | **Armored** (`armored`) | Takes 30% less damage. |
-| <img src="docs/modifier-icons/deathward.png" width="40" height="40" alt="Deathward icon"> | **Deathward** (`deathward`) | Cancels lethal damage and restores 20% of max health. Has a 10s cooldown and up to 3 activations. |
-| <img src="docs/modifier-icons/regenerating.png" width="40" height="40" alt="Regenerating icon"> | **Regenerating** (`regenerating`) | Heals a configurable share of max health per second. Defaults are 1% for Global creatures, 0.2% for bosses, and 0.5% for Enforcers. |
-| <img src="docs/modifier-icons/reflection.png" width="40" height="40" alt="Reflection icon"> | **Reflection** (`reflection`) | Has a 50% chance on a direct melee hit to reflect 10% of the health actually lost, bypassing defense and resistance. |
-| <img src="docs/modifier-icons/vortex.png" width="40" height="40" alt="Vortex icon"> | **Vortex** (`vortex`) | Has a 50% chance to negate projectile damage, push, stagger, and status effects. |
-| <img src="docs/modifier-icons/adaptive.png" width="40" height="40" alt="Adaptive icon"> | **Adaptive** (`adaptive`) | Remembers the dominant hit type for 5s and reduces matching damage by 50%. |
-| <img src="docs/modifier-icons/unflinching.png" width="40" height="40" alt="Unflinching icon"> | **Unflinching** (`unflinching`) | Immune to normal-hit and perfect-parry stagger. |
-| <img src="docs/modifier-icons/chameleon.png" width="40" height="40" alt="Chameleon icon"> | **Chameleon** (`chameleon`) | While alerted, gains one rotating damage-type immunity and switches it every 10s. |
-
-#### Affliction
-
-| Icon | Modifier | Effect with generated `Global` defaults |
-| :---: | --- | --- |
-| <img src="docs/modifier-icons/exposed.png" width="40" height="40" alt="Exposed icon"> | **Exposed** (`exposed`) | Has a 50% chance to make the player take 20% more damage for 5s. |
-| <img src="docs/modifier-icons/weakened.png" width="40" height="40" alt="Weakened icon"> | **Weakened** (`weakened`) | Has a 50% chance to make the player deal 20% less damage for 5s. |
-| <img src="docs/modifier-icons/withered.png" width="40" height="40" alt="Withered icon"> | **Withered** (`withered`) | Has a 50% chance to reduce healing received by 50% for 5s. |
-| <img src="docs/modifier-icons/crippling.png" width="40" height="40" alt="Crippling icon"> | **Crippling** (`crippling`) | Has a 50% chance to reduce movement speed and jump force by 50% for 5s. |
-| <img src="docs/modifier-icons/disruptive.png" width="40" height="40" alt="Disruptive icon"> | **Disruptive** (`disruptive`) | Has a 50% chance to reduce stamina and Eitr recovery by 50% for 5s. |
-| <img src="docs/modifier-icons/adrenalineDrain.png" width="40" height="40" alt="Adrenaline Drain icon"> | **Adrenaline Drain** (`adrenalineDrain`) | Has a 50% chance to remove 50% of current adrenaline and reduce adrenaline gain by 50% for 5s. |
-| <img src="docs/modifier-icons/corrosive.png" width="40" height="40" alt="Corrosive icon"> | **Corrosive** (`corrosive`) | Has a 50% chance to increase durability loss to equipped gear by 50% for 5s. |
-| <img src="docs/modifier-icons/toxicDeath.png" width="40" height="40" alt="Toxic Death icon"> | **Toxic Death** (`toxicDeath`) | On death, poisons players within 4m for 30% of their max health. |
-
-#### Special
-
-| Icon | Modifier | Effect with generated `Global` defaults |
-| :---: | --- | --- |
-| <img src="docs/modifier-icons/swift.png" width="40" height="40" alt="Swift icon"> | **Swift** (`swift`) | Increases movement speed, acceleration, and turning speed by 40%. |
-| <img src="docs/modifier-icons/attackSpeed.png" width="40" height="40" alt="Attack Speed icon"> | **Attack Speed** (`attackSpeed`) | Increases animation speed by 30%; attack intervals become 76.92% of normal. |
-| <img src="docs/modifier-icons/vampiric.png" width="40" height="40" alt="Vampiric icon"> | **Vampiric** (`vampiric`) | Heals for 30% of health removed by direct hits; delayed damage over time is excluded. |
-| <img src="docs/modifier-icons/reaping.png" width="40" height="40" alt="Reaping icon"> | **Reaping** (`reaping`) | Nearby kills heal 5% of base max health (up to 20 activations) and grant +10% max health, +1% damage, and +5% size per kill, capped at +200%, +20%, and +50%. No new size is gained in dungeons. |
-| <img src="docs/modifier-icons/blink.png" width="40" height="40" alt="Blink icon"> | **Blink** (`blink`) | Teleports near its player target within 24m every 6s. |
-| <img src="docs/modifier-icons/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** (`omen`) | Has a 50% chance on a direct player kill to force an Enforcer check regardless of cooldown. |
-| <img src="docs/modifier-icons/juggernaut.png" width="40" height="40" alt="Juggernaut icon"> | **Juggernaut** (`juggernaut`) | Player hits have at least 150 push force. An actual push starts a 5s cooldown, and the creature is immune to attack push. |
-| <img src="docs/modifier-icons/blamer.png" width="40" height="40" alt="Blamer icon"> | **Blamer** (`blamer`) | Below 75% health, flees and adds 0.5 Karma per second up to 45 lifetime Karma. When exhausted, the modifier, icon, and flee behavior end. |
-
-Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains a CreatureManager page with modifier names, icons, and descriptions using the active global values. English and Korean localization are embedded.
-
 ### Karma and Enforcers
 
 Karma is a regional pressure system based on a sliding 3x3 neighborhood of vanilla zones. Kills of untamed, non-player creatures by a player, a tamed creature, or another player-side creature raise local Karma; runtime-summoned creatures, including Enforcers and their minions, do not. Higher thresholds can add levels to future natural spawns, and idle regions decay over time.
@@ -219,22 +275,12 @@ Karma is currently stored in server memory and resets when the server process re
 
 Find it in `creatures.reference.yml`, copy its identity into `creatures.yml`, and add only the fields being changed.
 
-**Build a customizable humanoid NPC**
-
-Clone a suitable humanoid prefab, choose equipment from `creatureLoadout.reference.txt`, and assign an existing or reusable AI definition.
-
-Use `humanoid.randomHair` for attachable NPC hair prefabs that must remain visible with a helmet. It is visual-only: unlike `randomArmor`, it does not consume the helmet equipment slot or grant the source item's armor and equipment effects. The creature's `appearance.hairColor` also tints the selected random-hair visual and its ragdoll; white hair textures provide the most predictable tint. `appearance` is a partial mapping, so omitted fields inherit the source prefab while `hair: ''` or `beard: ''` explicitly clears that ordinary appearance slot. Explicit hair, beard, colors, and model index are copied to a target-specific death ragdoll; normal equipped armor continues through Valheim's own ragdoll setup, while CreatureManager does not force held weapons onto a corpse. Full scaffold generation moves a `randomArmor` list to `randomHair` only when every entry is confirmed as attachable customization hair; mixed hair/helmet lists keep their original one-choice semantics.
-
-**Create a custom combat kit**
-
-Clone attacks in `attacks.yml`, then place those attack prefab names in the creature's humanoid loadout. Use `projectile.reference.yml` to discover candidates and `projectile.yml` to clone them or replace `projectile.spawnOnHit` and `spawnAbility.spawnPrefabs`. Each spawn entry uses `Prefab[:weight]`; an omitted weight is `1`, and weights are relative. A weight may be from 1 to 1000, with at most 4096 expanded slots per list. For example, this selects Skeleton with `10/11` probability and Blob with `1/11` probability:
-
-```yaml
-spawnAbility:
-  spawnPrefabs: [Skeleton:10, Blob]
-```
+**Build a customizable humanoid NPC or creature**
 
 Generated references compact repeated prefab entries into this weighted notation while preserving their first-occurrence order. The generated `usedByAttacks` field is informational and is ignored in active configuration. Component blocks already identify their kind, so no `type` field is generated or accepted.
+
+Install MonsterlabZ and refer to samples in creatures.sample.yml and attacks.sample.yml. Change those files name into creatures_sample.yml and attacks_sample.yml, respectively.
+
 
 **Create world progression**
 
@@ -266,39 +312,5 @@ Inspect `textures.reference.txt`, place a PNG in the `textures` directory when n
 
 The spawn command supports prefab and comma-separated modifier completion. It is intended for testing and does not perform a normal level or modifier roll. `cm:spawn` and `cm:karma` are available only to the local listen-server host, not remote administrators or a dedicated-server console.
 
-## Reload Behavior
-
-Saving YAML or replacing PNG files schedules one consolidated reload. Updated definitions affect future spawns and reusable prefab data without repeatedly rebuilding references.
-
-All seven gameplay YAML domains are parsed, validated, and synchronized as one versioned snapshot. If any gameplay domain is invalid, CreatureManager keeps the complete last successfully loaded snapshot and does not synchronize a partial update. An intentionally empty file or top-level `[]` clears that file's user entries; built-in faction defaults, level presets, and Karma defaults still apply. This is separate from `modifiers: []`, which blocks lower modifier fallback.
-
-Localization is synchronized as a separate last-known-good payload so a translation error cannot reject gameplay configuration or trigger a full prefab reapply. A comment-only language file is a valid empty file. Removing a token restores the translation that existed before CreatureManager overrode it, provided another mod has not changed that token afterward.
-
-Existing creatures keep already assigned levels, health, modifiers, and equipment. For future spawns, a reload restores prefab fields that were removed from YAML. Removed CreatureManager clones remain registered until the world closes so existing entities and prefab references stay valid; they are unregistered and destroyed during world teardown. Changing `clonedFrom` for an existing clone name is rejected at runtime; restart Valheim to make that source change.
-
-## Compatibility
-
-- Supports vanilla and loaded mod prefabs discovered through `ZNetScene` and `ObjectDB`.
-- Supports Expand World Data custom biome names and cloned location names for level and Enforcer selection.
-- Preserves lifecycle values for breeding, egg hatching, grow-up, and pokeball-style tamed restores.
-- Detects FeedLikeGrandma when available without requiring it as a dependency.
-- Prevents normal level and modifier rerolls for Blood Magic summons and explicit console spawns.
-- Uses ServerSync for required-version checks and server-authoritative gameplay configuration.
-
-## Scope
-
-CreatureManager does not manage:
-
-- Player prefab editing or cloning.
-- Creature drop tables outside optional Enforcer bonus loot.
-- `SpawnSystem`, `CreatureSpawner`, or `SpawnArea` configuration.
-- Full effect-list scaffolding.
-- Player weapon and recipe configuration.
-
-These boundaries are intentional: CreatureManager is designed to compose with focused spawn, drop, item, and world-data mods instead of replacing them.
-
-## Author
-
-Created by **sighsorry**.
-
-Release notes live in `Thunderstore/CHANGELOG.md` in the source tree and are packaged as `CHANGELOG.md`. Source is distributed under `LICENSE.txt`.
+## Git
+https://github.com/sighsorry1029/CreatureManager

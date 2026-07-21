@@ -3693,7 +3693,7 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 1, "health: 1                            # Base max-health multiplier. Omit or keep 1 to keep level 1 baseline.");
         AppendIndented(builder, 1, "healthPerLevel: 1                    # Max-health growth per level above 1, based on level 1 health. 1 keeps vanilla level growth.");
         AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # damagePerStep, healthPerStep, interval, maxSteps. maxSteps 0 = no cap.");
-        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.03, 1000, 8] # chancePerStep, stepDistance, maxSteps. Scales each chance before its group total is evaluated.");
+        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.03, 1000, 8] # Each chance * (1 + 0.03 * steps), 1 step per 1000 distance, max 8; e.g. 20% becomes 20.6% at 1000 and 24.8% at 8000+.");
         AppendDefaultLevelModifiers(builder, bossDefaults: false);
         builder.AppendLine();
 
@@ -3707,6 +3707,10 @@ internal static class CreatureDomainManager
         AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # Boss damage/health distance scaling tuple.");
         AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.02, 1000, 6] # Optional Boss scaling. Omit to leave boss modifier chances unscaled by distance.");
         AppendDefaultLevelModifiers(builder, bossDefaults: true);
+        builder.AppendLine();
+
+        builder.AppendLine("TentaRoot:");
+        AppendIndented(builder, 1, "modifiers: []                       # Terminal clear: disable modifier rolls and block lower-specificity fallback for this prefab.");
         builder.AppendLine();
 
         AppendTemplateComment(builder, "Optional examples. Uncomment or copy only the blocks you want to use.");
@@ -3759,9 +3763,6 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 2, "# Defense: Armored to Chameleon");
         AppendTemplateLine(builder, 2, "armored: 50, 0.5");
         AppendTemplateLine(builder, 2, "reflection: 10, 0.2, 0.5");
-        AppendTemplateBlankLine(builder);
-        AppendTemplateLine(builder, 0, "TentaRoot:");
-        AppendTemplateLine(builder, 1, "modifiers: []                       # Terminal clear: disable modifier rolls and block lower-specificity fallback for this prefab.");
         AppendTemplateBlankLine(builder);
         AppendTemplateLine(builder, 0, "VC_Vaettr:");
         AppendTemplateLine(builder, 1, "Meadows:");

@@ -212,7 +212,7 @@ internal static class CreatureKarmaManager
 # A mapping overrides listed values only. Candidates inherit Enforcer.modifiers, and Enforcer.modifiers inherits omitted values from levels.yml.
 
 karma:
-  thresholds: [60, 120, 180, 240, 300]   # Karma values reached for +1, +2, +3... level bonus.
+  thresholds: [60, 120, 180]             # Karma values reached for +1, +2, +3 level bonus; append more values to extend this to +4, +5, and beyond.
   decay: [15, 30, 100]                   # [afterMinutes, karmaPerMinute, playerDeathClearKarma].
   gain: [1, 25, 0.3, 0.15, 4]            # [kill, bossKill, karmaScaling, bossKarmaScaling, dungeonMultiplier].
   prefabs:                               # Per-prefab Karma gain overrides.
@@ -914,10 +914,13 @@ AshLands:
             return false;
         }
 
+        bool ignoreCooldown =
+            CreatureManagerPlugin.BlockOmenEnforcerDuringCooldown?.Value == CreatureManagerPlugin.Toggle.Off;
+
         return TrySummonForPlayer(
             player,
             Time.time,
-            ignoreCooldown: true,
+            ignoreCooldown: ignoreCooldown,
             ignoreChance: true,
             ignoreRequiredKarma: true);
     }
@@ -3348,7 +3351,7 @@ AshLands:
 
     private sealed class KarmaGainSettings
     {
-        internal List<float> Thresholds = new() { 60f, 120f, 180f, 240f, 300f };
+        internal List<float> Thresholds = new() { 60f, 120f, 180f };
         internal float DecayAfterMinutes = 15f;
         internal float DecayPerMinute = 30f;
         internal float PlayerDeathClearKarma = 100f;

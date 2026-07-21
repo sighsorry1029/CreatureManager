@@ -2730,6 +2730,161 @@ internal static class CreatureManagerPlayerGetBodyArmorPatch
 }
 
 [HarmonyPatch]
+internal static class CreatureManagerHumanoidOnStopMovingCompatibilityPatch
+{
+    private static bool _warningLogged;
+
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        MethodInfo? method = CreatureHarmonyTargetResolver.FindDeclared(
+            typeof(Humanoid),
+            nameof(Humanoid.OnStopMoving),
+            "Humanoid.OnStopMoving current-attack null-condition compatibility fix",
+            Type.EmptyTypes);
+        if (method != null)
+        {
+            yield return method;
+        }
+    }
+
+    [HarmonyPriority(Priority.Last)]
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        List<CodeInstruction> codes = instructions.ToList();
+        FieldInfo? currentAttackField = AccessTools.Field(typeof(Humanoid), nameof(Humanoid.m_currentAttack));
+        FieldInfo? speedFactorField = AccessTools.Field(typeof(Attack), nameof(Attack.m_speedFactor));
+        FieldInfo? rotationSpeedFactorField = AccessTools.Field(typeof(Attack), nameof(Attack.m_speedFactorRotation));
+        MethodInfo? inAttackMethod = AccessTools.Method(typeof(Character), nameof(Character.InAttack), Type.EmptyTypes);
+        if (currentAttackField == null ||
+            speedFactorField == null ||
+            rotationSpeedFactorField == null ||
+            inAttackMethod == null)
+        {
+            WarnOnce(
+                "Could not resolve Humanoid.OnStopMoving compatibility members; the vanilla null-condition fix was not applied.");
+            return codes;
+        }
+
+        List<int> defectiveGuards = FindKnownGuardMatches(
+            codes,
+            currentAttackField,
+            speedFactorField,
+            rotationSpeedFactorField,
+            inAttackMethod,
+            branchWhenNull: true);
+        List<int> correctedGuards = FindKnownGuardMatches(
+            codes,
+            currentAttackField,
+            speedFactorField,
+            rotationSpeedFactorField,
+            inAttackMethod,
+            branchWhenNull: false);
+
+        if (defectiveGuards.Count == 1 && correctedGuards.Count == 0)
+        {
+            int branchIndex = defectiveGuards[0];
+            codes[branchIndex].opcode = codes[branchIndex].opcode == OpCodes.Brfalse_S
+                ? OpCodes.Brtrue_S
+                : OpCodes.Brtrue;
+            return codes;
+        }
+
+        if (defectiveGuards.Count == 0 && correctedGuards.Count == 1)
+        {
+            // Valheim or another transpiler has already corrected the guard.
+            return codes;
+        }
+
+        WarnOnce(
+            $"Expected one known Humanoid.OnStopMoving current-attack guard, found " +
+            $"{defectiveGuards.Count} defective and {correctedGuards.Count} corrected matches; " +
+            "the vanilla null-condition compatibility fix was not applied.");
+        return codes;
+    }
+
+    private static List<int> FindKnownGuardMatches(
+        IReadOnlyList<CodeInstruction> codes,
+        FieldInfo currentAttackField,
+        FieldInfo speedFactorField,
+        FieldInfo rotationSpeedFactorField,
+        MethodInfo inAttackMethod,
+        bool branchWhenNull)
+    {
+        List<int> matches = new();
+        for (int index = 0; index <= codes.Count - 6; index++)
+        {
+            OpCode branchOpcode = codes[index + 2].opcode;
+            bool expectedBranch = branchWhenNull
+                ? branchOpcode == OpCodes.Brfalse || branchOpcode == OpCodes.Brfalse_S
+                : branchOpcode == OpCodes.Brtrue || branchOpcode == OpCodes.Brtrue_S;
+            if (!expectedBranch ||
+                codes[index].opcode != OpCodes.Ldarg_0 ||
+                codes[index + 1].opcode != OpCodes.Ldfld ||
+                !Equals(codes[index + 1].operand, currentAttackField) ||
+                codes[index + 3].opcode != OpCodes.Ret ||
+                codes[index + 4].opcode != OpCodes.Ldarg_0 ||
+                !codes[index + 5].Calls(inAttackMethod) ||
+                !BranchesTo(codes[index + 2], codes[index + 4]) ||
+                CountCurrentAttackZeroStores(codes, index + 4, currentAttackField, speedFactorField) != 1 ||
+                CountCurrentAttackZeroStores(codes, index + 4, currentAttackField, rotationSpeedFactorField) != 1)
+            {
+                continue;
+            }
+
+            matches.Add(index + 2);
+        }
+
+        return matches;
+    }
+
+    private static int CountCurrentAttackZeroStores(
+        IReadOnlyList<CodeInstruction> codes,
+        int startIndex,
+        FieldInfo currentAttackField,
+        FieldInfo destinationField)
+    {
+        int matches = 0;
+        for (int index = startIndex; index <= codes.Count - 4; index++)
+        {
+            if (codes[index].opcode == OpCodes.Ldarg_0 &&
+                codes[index + 1].opcode == OpCodes.Ldfld &&
+                Equals(codes[index + 1].operand, currentAttackField) &&
+                codes[index + 2].opcode == OpCodes.Ldc_R4 &&
+                codes[index + 2].operand is float value &&
+                value == 0f &&
+                codes[index + 3].opcode == OpCodes.Stfld &&
+                Equals(codes[index + 3].operand, destinationField))
+            {
+                matches++;
+            }
+        }
+
+        return matches;
+    }
+
+    private static bool BranchesTo(CodeInstruction branch, CodeInstruction target)
+    {
+        return branch.operand switch
+        {
+            Label label => target.labels.Contains(label),
+            CodeInstruction instruction => ReferenceEquals(instruction, target),
+            _ => false
+        };
+    }
+
+    private static void WarnOnce(string message)
+    {
+        if (_warningLogged)
+        {
+            return;
+        }
+
+        _warningLogged = true;
+        CreatureManagerPlugin.Log.LogWarning(message);
+    }
+}
+
+[HarmonyPatch]
 internal static class CreatureManagerCharacterAnimEventSpeedPatch
 {
     private static IEnumerable<MethodBase> TargetMethods()
