@@ -66,7 +66,7 @@ cm_modifier_reaping_description: "When a player or this creature kills a nearby 
 cm_modifier_blink_name: "Blink"
 cm_modifier_blink_description: "Can teleport near a player target within {range} every {cooldown}."
 cm_modifier_omen_name: "Omen"
-cm_modifier_omen_description: "When killed directly by a player, has a {power} chance to force an Enforcer summon check regardless of cooldown."
+cm_modifier_omen_description: "When killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player, has a {power} chance to force an Enforcer summon check. Cooldown blocking follows the server setting."
 cm_modifier_juggernaut_name: "Juggernaut"
 cm_modifier_juggernaut_description: "On a damaging hit against a player, raises push force to at least {force}. A hit that reaches vanilla pushback starts a {cooldown} cooldown. Attack hits cannot push this creature."
 cm_modifier_blamer_name: "Blamer"

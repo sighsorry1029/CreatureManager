@@ -1489,6 +1489,15 @@ internal static class CreatureManagerTerminalUpdateSearchPatch
     }
 }
 
+[HarmonyPatch(typeof(ZNet), nameof(ZNet.RPC_RemoteCommand))]
+internal static class CreatureManagerZNetRemoteCommandPatch
+{
+    private static bool Prefix(ZNet __instance, ZRpc rpc, string command)
+    {
+        return !CreatureConsoleCommands.TryHandleRemoteAdminCommand(__instance, rpc, command);
+    }
+}
+
 [HarmonyPatch(typeof(Character), nameof(Character.Awake))]
 internal static class CreatureManagerCharacterAwakePatch
 {
@@ -1733,10 +1742,10 @@ internal static class CreatureManagerSpawnLifecycle
             ZDO zdo = nview.GetZDO();
             if (zdo != null)
             {
-                int stored = zdo.GetInt(SpawnSourceKey, 0);
-                if (stored != 0 && Enum.IsDefined(typeof(CreatureSpawnSourceKind), stored))
+                CreatureSpawnSourceKind stored = GetSpawnSource(zdo);
+                if (stored != CreatureSpawnSourceKind.Unknown)
                 {
-                    return (CreatureSpawnSourceKind)stored;
+                    return stored;
                 }
             }
         }
@@ -1748,6 +1757,19 @@ internal static class CreatureManagerSpawnLifecycle
 
         return character.IsTamed()
             ? CreatureSpawnSourceKind.TamedRestore
+            : CreatureSpawnSourceKind.Unknown;
+    }
+
+    internal static CreatureSpawnSourceKind GetSpawnSource(ZDO zdo)
+    {
+        if (zdo == null)
+        {
+            return CreatureSpawnSourceKind.Unknown;
+        }
+
+        int stored = zdo.GetInt(SpawnSourceKey, 0);
+        return stored != 0 && Enum.IsDefined(typeof(CreatureSpawnSourceKind), stored)
+            ? (CreatureSpawnSourceKind)stored
             : CreatureSpawnSourceKind.Unknown;
     }
 
@@ -2654,10 +2676,12 @@ internal static class CreatureManagerCharacterOnDeathPatch
 {
     private static void Prefix(Character __instance)
     {
-        CreatureModifierManager.HandleDeath(__instance);
+        CreatureModifierManager.FinalDeathAttribution attribution =
+            CreatureModifierManager.CaptureFinalDeathAttribution(__instance);
+        CreatureModifierManager.HandleDeath(__instance, attribution);
         if (!__instance.IsPlayer())
         {
-            CreatureKarmaManager.RecordDeath(__instance);
+            CreatureKarmaManager.RecordDeath(__instance, attribution);
         }
     }
 }

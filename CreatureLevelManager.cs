@@ -747,7 +747,12 @@ internal static class CreatureLevelManager
 
     private static SpawnPolicy GetSpawnPolicy(Character character)
     {
-        return CreatureManagerSpawnLifecycle.GetSpawnSource(character) switch
+        return GetSpawnPolicy(CreatureManagerSpawnLifecycle.GetSpawnSource(character));
+    }
+
+    private static SpawnPolicy GetSpawnPolicy(CreatureSpawnSourceKind source)
+    {
+        return source switch
         {
             CreatureSpawnSourceKind.Command => new SpawnPolicy(
                 rollLevel: false,
@@ -829,6 +834,15 @@ internal static class CreatureLevelManager
                GetModifierMode(character) != ModifierApplicationMode.Block;
     }
 
+    internal static bool AllowsModifierEffects(ZDO zdo, bool isBoss, bool isEnforcer)
+    {
+        return zdo != null &&
+               IsLevelSystemEnabled() &&
+               AreModifiersEnabled(isBoss, isEnforcer) &&
+               GetSpawnPolicy(CreatureManagerSpawnLifecycle.GetSpawnSource(zdo)).ModifierMode !=
+               ModifierApplicationMode.Block;
+    }
+
     private static bool AreModifiersEnabled(Character character)
     {
         if (character == null || character.IsPlayer())
@@ -836,16 +850,16 @@ internal static class CreatureLevelManager
             return false;
         }
 
-        bool categoryEnabled = character.IsBoss()
+        return AreModifiersEnabled(character.IsBoss(), CreatureKarmaManager.IsEnforcer(character));
+    }
+
+    private static bool AreModifiersEnabled(bool isBoss, bool isEnforcer)
+    {
+        bool categoryEnabled = isBoss
             ? CreatureManagerPlugin.EnableBossModifiers?.Value != CreatureManagerPlugin.Toggle.Off
             : CreatureManagerPlugin.EnableGlobalModifiers?.Value != CreatureManagerPlugin.Toggle.Off;
         bool enforcerEnabled = CreatureManagerPlugin.EnableEnforcerModifiers?.Value != CreatureManagerPlugin.Toggle.Off;
-        if (categoryEnabled && enforcerEnabled)
-        {
-            return true;
-        }
-
-        return CreatureKarmaManager.IsEnforcer(character) ? enforcerEnabled : categoryEnabled;
+        return isEnforcer ? enforcerEnabled : categoryEnabled;
     }
 
     private static ModifierApplicationMode GetModifierMode(Character character)

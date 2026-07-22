@@ -205,6 +205,8 @@ internal static class CreatureModifierManager
     private const float BlamerKarmaRequestTimeout = 5f;
     private const float BlamerServerMinimumRequestInterval = 0.9f;
     private const float BlamerServerTargetValidationRange = 128f;
+    private const float BlamerRejectionLogInterval = 10f;
+    private const float BlamerGlobalRejectionLogInterval = 2f;
     private const float ReflectionServerMinimumRequestInterval = 0.05f;
     private const float VortexEffectServerMinimumRequestInterval = 0.075f;
     private const float ModifierRequestValidationRange = 128f;
@@ -312,7 +314,7 @@ internal static class CreatureModifierManager
         new(ModifierGroup.Special, "vampiric", "Vampiric", ModifierMask.Vampiric, VampiricPowerKey, VampiricDefaultPower, GetVampiricSprite, value => value.Vampiric, (value, chance) => value.Vampiric = chance, value => value.Vampiric, (value, power) => value.Vampiric = power, power => $"Heals the creature for {FormatPercent(power)} of health removed by direct hits. Delayed damage-over-time is excluded."),
         new(ModifierGroup.Special, "reaping", "Reaping", ModifierMask.Reaping, ReapingPowerKey, ReapingDefaultPower, GetReapingSprite, value => value.Reaping, (value, chance) => value.Reaping = chance, value => value.Reaping, (value, power) => value.Reaping = power, power => DescribeReaping(power, ReapingDefaultMaxHealthPerKill, ReapingDefaultDamagePerKill, ReapingDefaultScalePerKill)),
         new(ModifierGroup.Special, "blink", "Blink", ModifierMask.Blink, BlinkPowerKey, BlinkFixedProcChance, GetBlinkSprite, value => value.Blink, (value, chance) => value.Blink = chance, value => value.Blink, (value, power) => value.Blink = power, _ => DescribeBlink(BlinkDefaultCooldown, BlinkDefaultMaxRange)),
-        new(ModifierGroup.Special, "omen", "Omen", ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, GetOmenSprite, value => value.Omen, (value, chance) => value.Omen = chance, value => value.Omen, (value, power) => value.Omen = power, power => $"When killed directly by a player, has a {FormatPercent(power)} chance to force an Enforcer summon check regardless of cooldown."),
+        new(ModifierGroup.Special, "omen", "Omen", ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, GetOmenSprite, value => value.Omen, (value, chance) => value.Omen = chance, value => value.Omen, (value, power) => value.Omen = power, power => $"When killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player, has a {FormatPercent(power)} chance to force an Enforcer summon check. Cooldown blocking follows the server setting."),
         new(ModifierGroup.Special, "juggernaut", "Juggernaut", ModifierMask.Knockback, KnockbackPowerKey, KnockbackDefaultPower, GetKnockbackSprite, value => value.Knockback, (value, chance) => value.Knockback = chance, value => value.Knockback, (value, power) => value.Knockback = power, power => DescribeKnockback(power, KnockbackDefaultCooldown), ClampKnockbackPower),
         new(ModifierGroup.Special, "blamer", "Blamer", ModifierMask.Blamer, BlamerKarmaPerSecondKey, BlamerDefaultKarmaPerSecond, GetBlamerSprite, value => value.Blamer, (value, chance) => value.Blamer = chance, value => value.Blamer, (value, power) => value.Blamer = power, power => DescribeBlamer(power, BlamerDefaultMaxKarmaGain, BlamerDefaultFleeHealthRatio), ResolveBlamerKarmaPerSecond)
     };
@@ -352,6 +354,7 @@ internal static class CreatureModifierManager
     private static readonly Dictionary<int, float> LocalKnockbackReadyTimes = new();
     private static readonly Dictionary<int, PendingBlamerKarmaRequest> PendingBlamerKarmaRequests = new();
     private static readonly Dictionary<ZDOID, ServerBlamerKarmaState> ServerBlamerKarmaStates = new();
+    private static readonly Dictionary<ZDOID, float> NextBlamerRejectionLogTimes = new();
     private static readonly Dictionary<ZDOID, ServerReflectionRequestState> ServerReflectionRequestStates = new();
     private static readonly Dictionary<ZDOID, float> ServerVortexEffectNextAllowedTimes = new();
     private static readonly Dictionary<ZDOID, float> ServerKnockbackNextAllowedTimes = new();
@@ -408,6 +411,7 @@ internal static class CreatureModifierManager
     private static bool DeathwardRuntimeFailureReported;
     private static int VortexHitTypeEncodingState;
     private static long NextBlamerKarmaRequestId;
+    private static float NextBlamerGlobalRejectionLogTime;
     private static long NextReflectionRequestId = DateTime.UtcNow.Ticks;
     [ThreadStatic]
     private static float BlockStaggerMultiplier;
@@ -924,6 +928,34 @@ internal static class CreatureModifierManager
         internal Character Target { get; }
         internal ZDOID Source { get; }
         internal bool SourceWasPlayer { get; }
+    }
+
+    internal enum DeathAttributionKind
+    {
+        None,
+        Direct,
+        Delayed
+    }
+
+    internal readonly struct FinalDeathAttribution
+    {
+        internal FinalDeathAttribution(
+            ZDOID source,
+            DeathAttributionKind kind,
+            bool sourceWasPlayer,
+            Character? resolvedSource)
+        {
+            Source = source;
+            Kind = kind;
+            SourceWasPlayer = sourceWasPlayer;
+            ResolvedSource = resolvedSource;
+        }
+
+        internal ZDOID Source { get; }
+        internal DeathAttributionKind Kind { get; }
+        internal bool SourceWasPlayer { get; }
+        internal Character? ResolvedSource { get; }
+        internal bool HasSource => Source != ZDOID.None && Kind != DeathAttributionKind.None;
     }
 
     internal struct RpcDamageContext
@@ -1927,6 +1959,7 @@ internal static class CreatureModifierManager
         if (characterId != ZDOID.None)
         {
             ServerBlamerKarmaStates.Remove(characterId);
+            NextBlamerRejectionLogTimes.Remove(characterId);
         }
     }
 
@@ -1972,6 +2005,7 @@ internal static class CreatureModifierManager
         LocalKnockbackReadyTimes.Clear();
         PendingBlamerKarmaRequests.Clear();
         ServerBlamerKarmaStates.Clear();
+        NextBlamerRejectionLogTimes.Clear();
         ServerReflectionRequestStates.Clear();
         ServerVortexEffectNextAllowedTimes.Clear();
         ServerKnockbackNextAllowedTimes.Clear();
@@ -1979,6 +2013,7 @@ internal static class CreatureModifierManager
         ServerPendingReapingRespawns.Clear();
         ServerAuthorizedReapingDeaths.Clear();
         NextBlamerKarmaRequestId = 0;
+        NextBlamerGlobalRejectionLogTime = 0f;
         NextReflectionRequestId = DateTime.UtcNow.Ticks;
         CurrentVortexProjectileImpact = null;
         CurrentRpcDamageContext = default;
@@ -2447,6 +2482,11 @@ internal static class CreatureModifierManager
                             HasEligibleChameleonType(character);
         ZNetView? nview = character.m_nview;
         bool canRunPassiveModifier = nview != null && nview.IsValid() && nview.IsOwner();
+        if (!canRunPassiveModifier)
+        {
+            PendingBlamerKarmaRequests.Remove(id);
+        }
+
         bool hasStoredBlamer = HasModifier(mask, ModifierMask.Blamer);
         bool blamerHasKarmaRemaining = HasBlamerKarmaRemaining(zdo);
         if (hasStoredBlamer && !blamerHasKarmaRemaining && canRunPassiveModifier)
@@ -4300,7 +4340,6 @@ internal static class CreatureModifierManager
             character.IsPlayer() ||
             character.IsTamed() ||
             !TryGetHotPathModifierZdo(character, ModifierMask.Blamer, out ZDO zdo) ||
-            !zdo.GetBool(BlamerActiveKey, false) ||
             !HasBlamerKarmaRemaining(zdo) ||
             !IsBlamerFleeTargetValid(character, monsterAI!, zdo))
         {
@@ -5342,10 +5381,13 @@ internal static class CreatureModifierManager
     {
         if (current.Kind == DelayedDamageAttributionKind.Exact &&
             incoming.Kind == DelayedDamageAttributionKind.Exact &&
-            current.Source == incoming.Source &&
-            current.SourceWasPlayer == incoming.SourceWasPlayer)
+            current.Source == incoming.Source)
         {
-            return current;
+            // The ZDOID is the source identity. A remote player Character may resolve on only
+            // some contributing hits; keep the exact source and let the server validate its type.
+            return DelayedDamageAttribution.FromSource(
+                current.Source,
+                current.SourceWasPlayer || incoming.SourceWasPlayer);
         }
 
         if (current.Kind == DelayedDamageAttributionKind.Unattributed &&
@@ -5467,10 +5509,11 @@ internal static class CreatureModifierManager
 
         if (fire.Kind == DelayedDamageAttributionKind.Exact &&
             spirit.Kind == DelayedDamageAttributionKind.Exact &&
-            fire.Source == spirit.Source &&
-            fire.SourceWasPlayer == spirit.SourceWasPlayer)
+            fire.Source == spirit.Source)
         {
-            return fire;
+            return DelayedDamageAttribution.FromSource(
+                fire.Source,
+                fire.SourceWasPlayer || spirit.SourceWasPlayer);
         }
 
         if (fire.Kind == DelayedDamageAttributionKind.Unattributed &&
@@ -6428,10 +6471,12 @@ internal static class CreatureModifierManager
             return;
         }
 
+        // Flee behavior and its HUD marker describe the creature's current state. They must
+        // not depend on a round trip to the authoritative Karma server.
+        SetBlamerActive(character, zdo, true);
         BlamerKarmaAddResult addResult = TryAddBlamerKarma(character, zdo, amount, out float confirmedAccumulated);
         if (addResult == BlamerKarmaAddResult.Failed)
         {
-            SetBlamerActive(character, zdo, false);
             return;
         }
 
@@ -6502,16 +6547,22 @@ internal static class CreatureModifierManager
         float now = Time.unscaledTime;
         if (PendingBlamerKarmaRequests.TryGetValue(characterId, out PendingBlamerKarmaRequest pending))
         {
-            if (now - pending.SentAt < BlamerKarmaRequestTimeout)
+            if (pending.TargetId != targetId)
             {
-                return BlamerKarmaAddResult.Pending;
+                PendingBlamerKarmaRequests.Remove(characterId);
             }
+            else
+            {
+                if (now - pending.SentAt < BlamerKarmaRequestTimeout)
+                {
+                    return BlamerKarmaAddResult.Pending;
+                }
 
-            SetBlamerActive(character, zdo, false);
-            pending.SentAt = now;
-            return SendBlamerKarmaRequest(nview, pending)
-                ? BlamerKarmaAddResult.Pending
-                : BlamerKarmaAddResult.Failed;
+                pending.SentAt = now;
+                return SendBlamerKarmaRequest(nview, pending)
+                    ? BlamerKarmaAddResult.Pending
+                    : BlamerKarmaAddResult.Failed;
+            }
         }
 
         long requestId = unchecked(++NextBlamerKarmaRequestId);
@@ -6570,6 +6621,11 @@ internal static class CreatureModifierManager
 
         if (zdo.GetOwner() != sender)
         {
+            LogBlamerRequestRejection(
+                character,
+                zdo,
+                sender,
+                $"ZDO owner {zdo.GetOwner()} does not match the request sender");
             SendBlamerKarmaResponse(character, sender, requestId, false, Mathf.Max(0f, observed));
             return;
         }
@@ -6598,9 +6654,17 @@ internal static class CreatureModifierManager
             return;
         }
 
-        if (IsServerBlamerRequestValid(character, zdo, targetId))
+        if (IsServerBlamerRequestValid(character, zdo, targetId, out string rejectionReason))
         {
             accepted = TryGrantServerBlamerKarma(character, zdo, out _, out state);
+            if (!accepted && Time.unscaledTime >= state.NextAllowedTime)
+            {
+                LogBlamerRequestRejection(character, zdo, sender, "the authoritative Karma grant was unavailable");
+            }
+        }
+        else
+        {
+            LogBlamerRequestRejection(character, zdo, sender, rejectionReason);
         }
 
         state.LastRequestId = requestId;
@@ -6610,33 +6674,107 @@ internal static class CreatureModifierManager
         SendBlamerKarmaResponse(character, sender, requestId, accepted, state.Accumulated);
     }
 
-    private static bool IsServerBlamerRequestValid(Character character, ZDO zdo, ZDOID targetId)
+    private static bool IsServerBlamerRequestValid(
+        Character character,
+        ZDO zdo,
+        ZDOID targetId,
+        out string rejectionReason)
     {
+        rejectionReason = "unknown validation failure";
         float fleeHealthRatio = ResolveBlamerFleeHealthRatio(
             zdo.GetFloat(BlamerFleeHealthRatioKey, BlamerDefaultFleeHealthRatio));
         if (!zdo.GetBool(AppliedKey, false) ||
-            !HasModifier(GetStoredModifierMask(zdo), ModifierMask.Blamer) ||
-            fleeHealthRatio <= 0f ||
-            character.IsDead() ||
-            character.IsTamed() ||
-            character.GetBaseAI() is not MonsterAI ||
-            CreatureKarmaManager.IsKarmaSummonedCreature(character) ||
-            !CreatureLevelManager.AllowsModifierEffects(character) ||
-            character.GetHealthPercentage() >= fleeHealthRatio ||
-            !zdo.GetBool(ZDOVars.s_alert) ||
-            !zdo.GetBool(ZDOVars.s_haveTargetHash) ||
-            targetId == ZDOID.None ||
-            ZNetScene.instance == null)
+            !HasModifier(GetStoredModifierMask(zdo), ModifierMask.Blamer))
         {
+            rejectionReason = "the Blamer modifier is not present in the authoritative ZDO";
+            return false;
+        }
+
+        if (fleeHealthRatio <= 0f)
+        {
+            rejectionReason = "the configured flee-health ratio is zero";
+            return false;
+        }
+
+        if (character.IsDead() || character.IsTamed() || character.GetBaseAI() is not MonsterAI)
+        {
+            rejectionReason = "the creature is dead, tamed, or has no MonsterAI";
+            return false;
+        }
+
+        if (CreatureKarmaManager.IsKarmaSummonedCreature(character) ||
+            !CreatureLevelManager.AllowsModifierEffects(character))
+        {
+            rejectionReason = "modifier effects are disabled for this creature";
+            return false;
+        }
+
+        float maxHealth = Mathf.Max(0.01f, character.GetMaxHealth());
+        float syncedHealth = zdo.GetFloat(ZDOVars.s_health, character.GetHealth());
+        float syncedHealthRatio = Mathf.Clamp01(syncedHealth / maxHealth);
+        if (syncedHealthRatio >= fleeHealthRatio)
+        {
+            rejectionReason = $"server health {syncedHealthRatio:P0} is not below {fleeHealthRatio:P0}";
+            return false;
+        }
+
+        if (!zdo.GetBool(ZDOVars.s_alert) || !zdo.GetBool(ZDOVars.s_haveTargetHash))
+        {
+            rejectionReason = "the server ZDO is not alerted or has no target";
+            return false;
+        }
+
+        if (targetId == ZDOID.None || ZNetScene.instance == null)
+        {
+            rejectionReason = "the player target id or server scene is unavailable";
             return false;
         }
 
         GameObject targetObject = ZNetScene.instance.FindInstance(targetId);
         Player? target = targetObject != null ? targetObject.GetComponent<Player>() : null;
-        return target != null &&
-               !target.IsDead() &&
-               IsHostileAttacker(character, target) &&
-               Vector3.Distance(zdo.GetPosition(), target.transform.position) <= BlamerServerTargetValidationRange;
+        if (target == null || target.IsDead())
+        {
+            rejectionReason = "the player target is missing or dead on the server";
+            return false;
+        }
+
+        if (!IsHostileAttacker(character, target))
+        {
+            rejectionReason = "the target is not hostile to the creature";
+            return false;
+        }
+
+        float distance = Vector3.Distance(zdo.GetPosition(), target.transform.position);
+        if (distance > BlamerServerTargetValidationRange)
+        {
+            rejectionReason = $"the player target is {distance:0.#}m away";
+            return false;
+        }
+
+        rejectionReason = "";
+        return true;
+    }
+
+    private static void LogBlamerRequestRejection(
+        Character character,
+        ZDO zdo,
+        long sender,
+        string reason)
+    {
+        ZDOID characterId = zdo.m_uid;
+        float now = Time.unscaledTime;
+        if (characterId == ZDOID.None ||
+            now < NextBlamerGlobalRejectionLogTime ||
+            (NextBlamerRejectionLogTimes.TryGetValue(characterId, out float nextLogTime) && now < nextLogTime))
+        {
+            return;
+        }
+
+        NextBlamerRejectionLogTimes[characterId] = now + BlamerRejectionLogInterval;
+        NextBlamerGlobalRejectionLogTime = now + BlamerGlobalRejectionLogInterval;
+        CreatureManagerPlugin.Log.LogWarning(
+            $"Blamer Karma request rejected for '{Utils.GetPrefabName(character.gameObject)}' " +
+            $"({characterId}) from owner {sender}: {reason}.");
     }
 
     private static ServerBlamerKarmaState GetServerBlamerKarmaState(Character character, ZDO zdo)
@@ -6761,8 +6899,7 @@ internal static class CreatureModifierManager
             return;
         }
 
-        bool conditionsStillValid = accepted &&
-                                    !character.IsTamed() &&
+        bool conditionsStillValid = !character.IsTamed() &&
                                     !CreatureKarmaManager.IsKarmaSummonedCreature(character) &&
                                     character.GetBaseAI() is MonsterAI monsterAI &&
                                     IsBlamerFleeTargetValid(character, monsterAI, zdo);
@@ -6777,7 +6914,6 @@ internal static class CreatureModifierManager
     {
         if (float.IsNaN(accumulated) || float.IsInfinity(accumulated))
         {
-            SetBlamerActive(character, zdo, false);
             return;
         }
 
@@ -6932,7 +7068,7 @@ internal static class CreatureModifierManager
         }
     }
 
-    internal static void HandleDeath(Character character)
+    internal static void HandleDeath(Character character, FinalDeathAttribution attribution)
     {
         if (!CreatureLevelManager.IsLevelSystemEnabled() || character == null || character.IsPlayer())
         {
@@ -6946,9 +7082,9 @@ internal static class CreatureModifierManager
             return;
         }
 
-        Character? finalAttacker = ResolveFinalReapingAttacker(character, out bool finalAttackerWasPlayer);
+        Character? finalAttacker = ResolveFinalDeathAttributionCharacter(attribution);
         ClearDelayedDamageTracking(character);
-        if (finalAttackerWasPlayer)
+        if (attribution.SourceWasPlayer)
         {
             ApplyReapingForNearbyDeaths(character);
         }
@@ -6999,7 +7135,8 @@ internal static class CreatureModifierManager
             return;
         }
 
-        Character? finalAttacker = ResolveFinalReapingAttacker(player, out _);
+        FinalDeathAttribution attribution = CaptureFinalDeathAttribution(player);
+        Character? finalAttacker = ResolveFinalDeathAttributionCharacter(attribution);
         ClearDelayedDamageTracking(player);
         TryApplyDirectReapingGain(finalAttacker, player);
     }
@@ -7021,25 +7158,63 @@ internal static class CreatureModifierManager
             ReapingRespawnRequestRpc);
     }
 
-    private static Character? ResolveFinalReapingAttacker(Character dead, out bool sourceWasPlayer)
+    internal static FinalDeathAttribution CaptureFinalDeathAttribution(Character dead)
     {
+        if (dead == null)
+        {
+            return default;
+        }
+
         int id = dead.GetInstanceID();
         if (PendingDelayedDamageDeathCredits.TryGetValue(id, out DelayedDamageDeathCredit credit) &&
             ReferenceEquals(credit.Target, dead))
         {
-            sourceWasPlayer = credit.SourceWasPlayer;
-            if (credit.Source == ZDOID.None || sourceWasPlayer || ZNetScene.instance == null)
+            if (credit.Source == ZDOID.None)
             {
-                return null;
+                return default;
             }
 
-            GameObject sourceObject = ZNetScene.instance.FindInstance(credit.Source);
-            return sourceObject == null ? null : sourceObject.GetComponent<Character>();
+            Character? resolvedSource = credit.SourceWasPlayer
+                ? null
+                : TryFindCharacter(credit.Source, out Character delayedSource)
+                    ? delayedSource
+                    : null;
+            return new FinalDeathAttribution(
+                credit.Source,
+                DeathAttributionKind.Delayed,
+                credit.SourceWasPlayer,
+                resolvedSource);
         }
 
         Character? directAttacker = dead.m_lastHit?.GetAttacker();
-        sourceWasPlayer = directAttacker != null && directAttacker.IsPlayer();
-        return directAttacker;
+        ZDOID directSource = dead.m_lastHit?.m_attacker ?? ZDOID.None;
+        if (directSource == ZDOID.None && directAttacker != null)
+        {
+            directSource = directAttacker.GetZDOID();
+        }
+
+        return directSource == ZDOID.None
+            ? default
+            : new FinalDeathAttribution(
+                directSource,
+                DeathAttributionKind.Direct,
+                directAttacker != null && directAttacker.IsPlayer(),
+                directAttacker);
+    }
+
+    private static Character? ResolveFinalDeathAttributionCharacter(FinalDeathAttribution attribution)
+    {
+        if (attribution.ResolvedSource != null)
+        {
+            return attribution.ResolvedSource;
+        }
+
+        if (!attribution.HasSource || attribution.SourceWasPlayer)
+        {
+            return null;
+        }
+
+        return TryFindCharacter(attribution.Source, out Character source) ? source : null;
     }
 
     private static void ClearDelayedDamageTracking(Character character)
@@ -7695,15 +7870,18 @@ internal static class CreatureModifierManager
         ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, "RPC_DamageText", package);
     }
 
-    internal static bool TryRollOmenEnforcerTrigger(Character character, out float chance)
+    internal static bool TryGetOmenEnforcerChance(ZDO zdo, out float chance)
     {
         chance = 0f;
-        if (!TryGetModifierPower(character, ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, out chance))
+        if (zdo == null ||
+            !zdo.GetBool(AppliedKey, false) ||
+            !HasModifier(GetStoredModifierMask(zdo), ModifierMask.Omen))
         {
             return false;
         }
 
-        return UnityEngine.Random.Range(0f, 1f) < chance;
+        chance = Mathf.Clamp01(zdo.GetFloat(OmenPowerKey, OmenDefaultPower));
+        return chance > 0f;
     }
 
     private static void ApplyRuntimeModifierStats(Character character, ZDO zdo)

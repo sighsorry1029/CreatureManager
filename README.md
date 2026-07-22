@@ -6,43 +6,51 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 
 ### Live Enforcer Hunts
 
+![Regional Karma display](https://i.ibb.co/wFDKytnS/karma.png)
+
+*Killing creatures raises regional Karma, which can strengthen future spawns and trigger Enforcer encounters.*
+
 ![Black Forest dungeon Enforcer encounter](https://i.ibb.co/bjRJt0s9/blackforestdungeonenforcer.gif)
 
-*Dungeon-specific candidates bring Enforcer encounters into Black Forest interiors.*
+*Karma accumulates faster in dungeons, so stay alert.*
 
 ![Swamp Enforcer encounter](https://i.ibb.co/WvNj02sD/swampenforcer.gif)
 
-*Biome-specific rules create a distinct Enforcer hunt in the Swamp.*
+*Outdoor and dungeon Enforcer encounters can be configured separately in `karma.yml`, including guaranteed bonus loot.*
 
 ![Mountain Enforcer encounter](https://i.ibb.co/KxDkMY9L/mountainenforcer.gif)
 
-*The same live encounter system selects Mountain-specific Enforcers in the highlands.*
+*Enforcers spawn at higher levels, are more likely to carry modifiers, and may bring minions that hunt players down.*
 
 ### Creature Cloning and Customization
 
-![Vincent custom creature](https://i.ibb.co/5XKJvDhx/vincent.gif)
+Existing creatures can be modified or cloned. For advanced examples, install [MonsterLabZ](https://thunderstore.io/c/valheim/p/MonsterLabZFix/MonsterLabZ/) and see `creatures.sample.yml` and `attacks.sample.yml`.
 
-*Vincent demonstrates a MonsterLabZ NPC clone configured as a custom ranged boss.*
-
-![Root Witch custom creature](https://i.ibb.co/YB9YQhDH/rootwitch.gif)
-
-*Root Witch demonstrates a MonsterLabZ spellcaster clone with a custom appearance, loadout, and attack set.*
+*The following custom bosses were created with CreatureManager and MonsterLabZ.*
 
 ![Bonebeard custom creature](https://i.ibb.co/RtnVCBC/bonebeard.gif)
 
-*Bonebeard demonstrates a MonsterLabZ creature clone assembled as a custom melee boss.*
+*Bonebeard is a melee boss who infuses every attack with poison.*
+
+![Vincent custom creature](https://i.ibb.co/5XKJvDhx/vincent.gif)
+
+*Vincent the Cunning is a ranged boss who fires a variety of projectiles.*
+
+![Root Witch custom creature](https://i.ibb.co/YB9YQhDH/rootwitch.gif)
+
+*Root Witch is a spellcaster boss who casts a variety of spells.*
 
 ### Combat Modifiers
 
 ![Creatures displaying multiple modifier icons](https://i.ibb.co/60JDRCGW/mobswithmodifiers.png)
 
-*Creatures roll modifiers independently and display their active effects directly beneath their nameplates.*
+*Creatures roll modifiers independently and display their active effects beneath their nameplates. Levels above 3 appear as a star followed by the level number.*
 
 #### Offense and Defense
 
 ![Spirit modifier adding Spirit damage](https://i.ibb.co/chZwZNDR/spirit.gif)
 
-*Spirit adds Spirit damage to the creature's attacks.*
+*Spirit adds Spirit damage to the creature's attacks; against players, its damage over time bypasses armor and resistance.*
 
 ![Undodgeable modifier bypassing a dodge](https://i.ibb.co/X18bTyr/undodgeable.gif)
 
@@ -78,7 +86,7 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 
 ![Omen modifier triggering an Enforcer check](https://i.ibb.co/G4x2sPfH/omen.gif)
 
-*Omen can request an Enforcer encounter after the creature kills a player.*
+*Omen can request an Enforcer encounter when the affected creature is killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player.*
 
 ![Juggernaut modifier producing heavy knockback](https://i.ibb.co/xKxGBpjK/juggernaut.gif)
 
@@ -86,13 +94,13 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 
 ![Blamer modifier raising regional Karma](https://i.ibb.co/9mvPYZy1/blamer.gif)
 
-*Blamer flees and raises regional Karma after its health threshold is crossed, then expires when its Karma budget is exhausted.*
+*Blamer flees and raises regional Karma once its health drops below the trigger threshold, then expires when its Karma budget is exhausted.*
 
 ### In-game Tools
 
 ![Creature resistance inspection](https://i.ibb.co/03cfhV8/inspectresistance.png)
 
-*Creature inspection shows effective resistances, weaknesses, and immunities beneath the target's nameplate.*
+*While sneaking, inspect a creature to view its effective resistances, weaknesses, and immunities beneath the target's nameplate.*
 
 ![Defensive modifier entries in the Compendium](https://i.ibb.co/C3VG6r3B/compendium.png)
 
@@ -154,7 +162,7 @@ CreatureManager provides 32 modifiers in four groups. Natural rolls select at mo
 | <img src="https://i.ibb.co/SXqZd5Pq/vampiric.png" width="40" height="40" alt="Vampiric icon"> | **Vampiric** (`vampiric`) | Heals for 30% of health removed by direct hits; delayed damage over time is excluded. |
 | <img src="https://i.ibb.co/Jw9yV49Z/reaping.png" width="40" height="40" alt="Reaping icon"> | **Reaping** (`reaping`) | Nearby kills heal 5% of base max health (up to 20 activations) and grant +10% max health, +1% damage, and +5% size per kill, capped at +200%, +20%, and +50%. No new size is gained in dungeons. |
 | <img src="https://i.ibb.co/Gfqc089L/blink.png" width="40" height="40" alt="Blink icon"> | **Blink** (`blink`) | Teleports near its player target within 24m every 6s. |
-| <img src="https://i.ibb.co/ZpnXrfGq/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** (`omen`) | Has a 50% chance on a direct player kill to force an Enforcer check regardless of cooldown. |
+| <img src="https://i.ibb.co/ZpnXrfGq/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** (`omen`) | Has a 50% chance when killed directly by a player or by unambiguously player-attributed poison, fire, or spirit damage over time to force an Enforcer check; cooldown blocking follows the server setting. |
 | <img src="https://i.ibb.co/spF4n7Wg/juggernaut.png" width="40" height="40" alt="Juggernaut icon"> | **Juggernaut** (`juggernaut`) | Player hits have at least 150 push force. An actual push starts a 5s cooldown, and the creature is immune to attack push. |
 | <img src="https://i.ibb.co/TBCgrbkt/blamer.png" width="40" height="40" alt="Blamer icon"> | **Blamer** (`blamer`) | Below 75% health, flees and adds 0.5 Karma per second up to 45 lifetime Karma. When exhausted, the modifier, icon, and flee behavior end. |
 
@@ -310,7 +318,7 @@ Inspect `textures.reference.txt`, place a PNG in the `textures` directory when n
 | `cm:karma` | Show the current neighborhood Karma. |
 | `cm:karma <value>` | Set the current neighborhood Karma to a non-negative value. |
 
-The spawn command supports prefab and comma-separated modifier completion. It is intended for testing and does not perform a normal level or modifier roll. `cm:spawn` and `cm:karma` are available only to the local listen-server host, not remote administrators or a dedicated-server console.
+The spawn command supports prefab and comma-separated modifier completion. It is intended for testing and does not perform a normal level or modifier roll. `cm:spawn` and `cm:karma` are available to the local listen-server host and connected dedicated-server administrators; a dedicated-server console has no player position to target.
 
 ## Git
 https://github.com/sighsorry1029/CreatureManager

@@ -49,6 +49,7 @@ internal static class CreatureConsoleCommands
             isNetwork: true,
             onlyServer: true,
             optionsFetcher: GetSpawnPrefabOptions,
+            remoteCommand: true,
             onlyAdmin: true);
         new Terminal.ConsoleCommand(
             "cm:karma",
@@ -57,6 +58,7 @@ internal static class CreatureConsoleCommands
             isCheat: true,
             isNetwork: true,
             onlyServer: true,
+            remoteCommand: true,
             onlyAdmin: true);
     }
 
@@ -331,10 +333,15 @@ internal static class CreatureConsoleCommands
             return;
         }
 
-        Vector3 position = ((Component)player).transform.position;
+        ExecuteKarma(args, player, message => args.Context?.AddString(message));
+    }
+
+    private static void ExecuteKarma(Terminal.ConsoleEventArgs args, Player player, Action<string> reply)
+    {
+        Vector3 position = player.transform.position;
         if (args.Length == 1)
         {
-            args.Context?.AddString(CreatureKarmaManager.GetDebugLine(position));
+            reply(CreatureKarmaManager.GetDebugLine(position));
             return;
         }
 
@@ -344,12 +351,12 @@ internal static class CreatureConsoleCommands
             float.IsInfinity(value) ||
             value < 0f)
         {
-            args.Context?.AddString("Syntax: cm:karma [non-negative value]");
+            reply("Syntax: cm:karma [non-negative value]");
             return;
         }
 
         CreatureKarmaManager.SetDebugKarma(position, value);
-        args.Context?.AddString(CreatureKarmaManager.GetDebugLine(position));
+        reply(CreatureKarmaManager.GetDebugLine(position));
     }
 
     private static void Spawn(Terminal.ConsoleEventArgs args)
@@ -372,22 +379,27 @@ internal static class CreatureConsoleCommands
             return;
         }
 
+        ExecuteSpawn(args, player, message => args.Context?.AddString(message));
+    }
+
+    private static void ExecuteSpawn(Terminal.ConsoleEventArgs args, Player player, Action<string> reply)
+    {
         if (!TryParseSpawnArguments(args, out string prefabName, out int level, out List<string> modifiers, out string error))
         {
-            args.Context?.AddString(error);
+            reply(error);
             return;
         }
 
         GameObject? prefab = CreaturePrefabRegistry.GetPrefab(prefabName);
         if (prefab == null)
         {
-            args.Context?.AddString($"Creature prefab '{prefabName}' was not found.");
+            reply($"Creature prefab '{prefabName}' was not found.");
             return;
         }
 
         if (prefab.GetComponent<Character>() == null || CreaturePrefabRegistry.IsPlayerPrefab(prefab))
         {
-            args.Context?.AddString($"Prefab '{prefabName}' is not a supported non-player creature.");
+            reply($"Prefab '{prefabName}' is not a supported non-player creature.");
             return;
         }
 
@@ -410,7 +422,7 @@ internal static class CreatureConsoleCommands
 
         if (spawned == null)
         {
-            args.Context?.AddString(error.Length > 0 ? error : $"Failed to spawn '{prefabName}'.");
+            reply(error.Length > 0 ? error : $"Failed to spawn '{prefabName}'.");
             return;
         }
 
@@ -420,13 +432,113 @@ internal static class CreatureConsoleCommands
             !CreatureLevelManager.TryApplyForcedLevel(character, level, out error))
         {
             UnityEngine.Object.Destroy(spawned);
-            args.Context?.AddString(error.Length > 0 ? error : $"Failed to initialize '{prefabName}'.");
+            reply(error.Length > 0 ? error : $"Failed to initialize '{prefabName}'.");
             return;
         }
 
         CreatureManagerCharacterLifecycle.ApplyLevelAndModifiers(character);
         string modifierText = modifiers.Count > 0 ? string.Join(", ", modifiers) : "none";
-        args.Context?.AddString($"Spawned {prefab.name} at level {level} with modifiers: {modifierText}.");
+        reply($"Spawned {prefab.name} at level {level} with modifiers: {modifierText}.");
+    }
+
+    internal static bool TryHandleRemoteAdminCommand(ZNet znet, ZRpc rpc, string command)
+    {
+        string commandName = GetRemoteCommandName(command);
+        if (!string.Equals(commandName, SpawnCommandName, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(commandName, "cm:karma", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        Action<string> reply = message => znet.RemotePrint(rpc, message);
+        try
+        {
+            string hostName = rpc.GetSocket()?.GetHostName() ?? "";
+            if (hostName.Length == 0 || !znet.IsAdmin(hostName))
+            {
+                reply("You are not admin");
+                return true;
+            }
+
+            ZNetPeer? peer = null;
+            foreach (ZNetPeer candidate in znet.GetPeers())
+            {
+                if (candidate != null && ReferenceEquals(candidate.m_rpc, rpc))
+                {
+                    peer = candidate;
+                    break;
+                }
+            }
+
+            if (peer == null ||
+                !peer.IsReady() ||
+                peer.m_characterID.IsNone() ||
+                ZDOMan.instance == null ||
+                ZNetScene.instance == null)
+            {
+                reply("Could not resolve the remote admin's active player.");
+                return true;
+            }
+
+            ZDO playerZdo = ZDOMan.instance.GetZDO(peer.m_characterID);
+            GameObject? playerPrefab = playerZdo != null
+                ? ZNetScene.instance.GetPrefab(playerZdo.GetPrefab())
+                : null;
+            if (playerZdo == null ||
+                playerZdo.GetOwner() != peer.m_uid ||
+                playerPrefab == null ||
+                playerPrefab.GetComponent<Player>() == null)
+            {
+                reply("Could not validate the remote admin's active player.");
+                return true;
+            }
+
+            GameObject playerObject = ZNetScene.instance.FindInstance(peer.m_characterID);
+            Player? player = playerObject != null ? playerObject.GetComponent<Player>() : null;
+            if (player == null || player.GetZDOID() != peer.m_characterID)
+            {
+                reply("Could not resolve the remote admin's active player.");
+                return true;
+            }
+
+            Terminal.ConsoleEventArgs args = new(command, Console.instance);
+            if (string.Equals(commandName, SpawnCommandName, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!CreatureLevelManager.IsLevelSystemEnabled())
+                {
+                    reply("CreatureManager level system is disabled.");
+                    return true;
+                }
+
+                ExecuteSpawn(args, player, reply);
+            }
+            else
+            {
+                ExecuteKarma(args, player, reply);
+            }
+
+            CreatureManagerPlugin.Log.LogInfo(
+                $"Remote admin '{hostName}' executed CreatureManager command '{commandName}'.");
+        }
+        catch (Exception ex)
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Failed to execute remote CreatureManager command '{commandName}': {ex.Message}");
+            reply("CreatureManager could not execute the remote command. Check the server log.");
+        }
+
+        return true;
+    }
+
+    private static string GetRemoteCommandName(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return "";
+        }
+
+        int separator = command.IndexOfAny(ArgumentSeparators);
+        return (separator >= 0 ? command.Substring(0, separator) : command).Trim();
     }
 
     private static bool RequireAuthoritativeAdmin(Terminal.ConsoleEventArgs args)

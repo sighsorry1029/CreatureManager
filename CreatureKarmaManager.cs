@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -20,9 +21,15 @@ internal static class CreatureKarmaManager
     private const string EnforcerBossHudKey = "CreatureManager_KarmaEnforcerBossHud";
     private const string EnforcerLootKey = "CreatureManager_KarmaEnforcerLoot";
     private const string PlayerDeathRpc = "CreatureManager_KarmaPlayerDeath";
+    private const string CreatureDeathRpc = "CreatureManager_KarmaCreatureDeath";
     private const string KarmaStatusRequestRpc = "CreatureManager_KarmaStatusRequest";
     private const string KarmaStatusResponseRpc = "CreatureManager_KarmaStatusResponse";
     private const float KarmaStatusRequestInterval = 1f;
+    private const float CreatureDeathSyncTimeout = 2f;
+    private const float CreatureDeathPositionTolerance = 8f;
+    private const float ProcessedCreatureDeathRetention = 300f;
+    private const int MaximumPendingCreatureDeaths = 512;
+    private const int MaximumPendingCreatureDeathsPerPeer = 64;
     private const string EnforcerNameSuffix = "$cm_suffix_enforcer";
     private const string EnforcerMinionSuffix = "$cm_suffix_minion";
     private const int ZoneRadius = 1;
@@ -74,6 +81,11 @@ internal static class CreatureKarmaManager
     private static readonly Dictionary<int, List<EnforcerLootDefinition>> RuntimeEnforcerLoot = new();
     private static readonly HashSet<int> AppliedEnforcerLootIds = new();
     private static readonly Dictionary<ZDOID, bool> ObservedPlayerDeathStates = new();
+    private static readonly HashSet<ZDOID> ServerPendingCreatureDeaths = new();
+    private static readonly Dictionary<long, int> ServerPendingCreatureDeathCounts = new();
+    private static readonly Dictionary<ZDOID, float> ServerProcessedCreatureDeaths = new();
+    private static readonly List<ZDOID> StaleProcessedCreatureDeaths = new();
+    private static uint CreatureDeathEpoch;
     private static KarmaSettings Settings = KarmaSettings.Default();
     private static ZRoutedRpc? RegisteredRoutedRpc;
     private static FieldInfo? ExpandWorldDataCurrentLocationField;
@@ -89,6 +101,41 @@ internal static class CreatureKarmaManager
     private static float ClientKarmaStatusValue;
     private static int ClientKarmaStatusLevel;
     private static bool ClientKarmaStatusValid;
+
+    private sealed class CreatureDeathContext
+    {
+        internal ZDOID DeadId;
+        internal string Prefab = "";
+        internal Vector3 Position;
+        internal int Level;
+        internal bool Boss;
+        internal bool Enforcer;
+        internal bool KarmaSummoned;
+        internal bool PlayerAttributedKill;
+        internal ZDOID PlayerKillerId;
+        internal CreatureModifierManager.DeathAttributionKind AttributionKind;
+        internal float OmenChance;
+        internal uint Epoch;
+    }
+
+    private enum EnforcerSummonFailure
+    {
+        None,
+        FeatureDisabled,
+        ServerUnavailable,
+        KillerUnavailable,
+        BiomeNotConfigured,
+        BiomeDisabled,
+        NoCandidates,
+        ActiveEnforcerCap,
+        ActiveBoss,
+        Cooldown,
+        ChanceRollFailed,
+        NoEligibleCandidate,
+        InvalidCandidate,
+        NoSpawnPosition,
+        SpawnFailed
+    }
 
     private static bool IsKarmaSystemEnabled()
     {
@@ -124,7 +171,7 @@ internal static class CreatureKarmaManager
         return CreatureManagerPlugin.BlockEnforcerWhileBossActive?.Value != CreatureManagerPlugin.Toggle.Off;
     }
 
-    private static bool ShouldBlockKarmaGain(Character killedCharacter)
+    private static bool ShouldBlockKarmaGain(Vector3 position, ZDOID excludedCharacterId)
     {
         bool blockForBoss = CreatureManagerPlugin.BlockKarmaGainWhileBossActive?.Value == CreatureManagerPlugin.Toggle.On;
         bool blockForEnforcer = CreatureManagerPlugin.BlockKarmaGainWhileEnforcerActive?.Value == CreatureManagerPlugin.Toggle.On;
@@ -134,10 +181,10 @@ internal static class CreatureKarmaManager
         }
 
         GetEnforcerBlockerState(
-            killedCharacter.transform.position,
+            position,
             out int activeEnforcers,
             out bool hasNonEnforcerBoss,
-            killedCharacter);
+            excludedCharacterId: excludedCharacterId);
         return (blockForBoss && hasNonEnforcerBoss) ||
                (blockForEnforcer && activeEnforcers > 0);
     }
@@ -155,6 +202,7 @@ internal static class CreatureKarmaManager
         }
 
         ZRoutedRpc.instance.Register<ZPackage>(PlayerDeathRpc, RPC_PlayerDeath);
+        ZRoutedRpc.instance.Register<ZPackage>(CreatureDeathRpc, RPC_CreatureDeath);
         ZRoutedRpc.instance.Register<ZPackage>(KarmaStatusRequestRpc, RPC_KarmaStatusRequest);
         ZRoutedRpc.instance.Register<ZPackage>(KarmaStatusResponseRpc, RPC_KarmaStatusResponse);
         RegisteredRoutedRpc = ZRoutedRpc.instance;
@@ -172,10 +220,16 @@ internal static class CreatureKarmaManager
         RuntimeEnforcerSettings.Remove(id);
         RuntimeEnforcerLoot.Remove(id);
         AppliedEnforcerLootIds.Remove(id);
+
     }
 
     internal static void ResetRuntimeState()
     {
+        unchecked
+        {
+            CreatureDeathEpoch++;
+        }
+
         lock (Sync)
         {
             Sectors.Clear();
@@ -186,6 +240,10 @@ internal static class CreatureKarmaManager
         RuntimeEnforcerSettings.Clear();
         RuntimeEnforcerLoot.Clear();
         AppliedEnforcerLootIds.Clear();
+        ServerPendingCreatureDeaths.Clear();
+        ServerPendingCreatureDeathCounts.Clear();
+        ServerProcessedCreatureDeaths.Clear();
+        StaleProcessedCreatureDeaths.Clear();
         DungeonComponentPositionCache.Clear();
         // Registration follows the ZRoutedRpc instance lifetime. It has no unregister API and Register uses Dictionary.Add.
         NextSummonCheckTime = 0f;
@@ -398,15 +456,18 @@ AshLands:
         if (character.IsPlayer())
         {
             RecordPlayerDeath(character);
-            return;
         }
+    }
 
-        if (character.IsTamed())
-        {
-            return;
-        }
-
-        if (ZNet.instance != null && !ZNet.instance.IsServer())
+    internal static void RecordDeath(
+        Character character,
+        CreatureModifierManager.FinalDeathAttribution attribution)
+    {
+        if (!IsKarmaSystemEnabled() ||
+            character == null ||
+            character.IsPlayer() ||
+            character.IsTamed() ||
+            !attribution.HasSource)
         {
             return;
         }
@@ -423,46 +484,42 @@ AshLands:
             return;
         }
 
-        zdo.Set(CountedDeathKey, true);
-        HitData? lastHit = character.m_lastHit;
-        Character? finalAttacker = lastHit?.GetAttacker();
-        bool directPlayerKill = finalAttacker != null && finalAttacker.IsPlayer();
-        bool playerSideKill = directPlayerKill ||
-                              (finalAttacker != null &&
-                               (finalAttacker.IsTamed() || finalAttacker.GetFaction() == Character.Faction.PlayerSpawned));
-        if (!playerSideKill)
+        Vector3 deathPosition = character.transform.position;
+        if (!IsFinite(deathPosition))
         {
             return;
         }
 
-        if (IsEnforcer(character))
+        if (ZNet.instance == null || ZNet.instance.IsServer())
         {
-            BroadcastCenterQuote(EnforcerDeathQuotes);
-        }
-
-        if (zdo.GetBool(EnforcerSummonedKey, false) || IsRuntimeSummonedCreature(character))
-        {
-            return;
-        }
-
-        string prefab = GetPrefabName(character);
-        if (!ShouldBlockKarmaGain(character))
-        {
-            float amount = GetKillKarma(prefab, character.IsBoss(), character.GetLevel(), IsLikelyDungeonPosition(character.transform.position));
-            if (amount > 0f)
+            if (TryBuildCreatureDeathContext(
+                    zdo,
+                    character,
+                    attribution.Source,
+                    attribution.Kind,
+                    deathPosition,
+                    out CreatureDeathContext context))
             {
-                AddKarma(character.transform.position, amount);
+                ProcessAuthorizedCreatureDeath(context, zdo, validatedDestroyedZdo: false);
             }
+
+            return;
         }
 
-        if (directPlayerKill &&
-            IsEnforcerEnabled() &&
-            CreatureModifierManager.TryRollOmenEnforcerTrigger(character, out float omenChance))
+        if (ZRoutedRpc.instance == null)
         {
-            bool summoned = TryForceEnforcerSummonNear(character.transform.position);
-            CreatureManagerPlugin.Log.LogInfo(
-                $"Karma Omen triggered by {prefab}: chance={omenChance:P0} summoned={summoned}");
+            return;
         }
+
+        ZPackage package = new();
+        package.Write(zdo.m_uid);
+        package.Write(attribution.Source);
+        package.Write((int)attribution.Kind);
+        package.Write(deathPosition);
+        ZRoutedRpc.instance.InvokeRoutedRPC(
+            ZRoutedRpc.instance.GetServerPeerID(),
+            CreatureDeathRpc,
+            package);
     }
 
     private static void RecordPlayerDeath(Character player)
@@ -522,6 +579,383 @@ AshLands:
         {
             CreatureManagerPlugin.Log.LogWarning($"Failed to process Karma player death RPC: {ex.Message}");
         }
+    }
+
+    private static void RPC_CreatureDeath(long sender, ZPackage package)
+    {
+        if (!IsKarmaSystemEnabled() ||
+            ZNet.instance == null ||
+            !ZNet.instance.IsServer() ||
+            ZDOMan.instance == null ||
+            ZNetScene.instance == null)
+        {
+            return;
+        }
+
+        ZDOID pendingDeathId = ZDOID.None;
+        try
+        {
+            ZDOID deadId = package.ReadZDOID();
+            ZDOID sourceId = package.ReadZDOID();
+            int kindValue = package.ReadInt();
+            Vector3 reportedPosition = package.ReadVector3();
+            if (deadId == ZDOID.None ||
+                sourceId == ZDOID.None ||
+                sourceId == deadId ||
+                !Enum.IsDefined(typeof(CreatureModifierManager.DeathAttributionKind), kindValue) ||
+                kindValue == (int)CreatureModifierManager.DeathAttributionKind.None ||
+                !IsFinite(reportedPosition))
+            {
+                return;
+            }
+
+            ZDO deadZdo = ZDOMan.instance.GetZDO(deadId);
+            if (deadZdo == null ||
+                deadZdo.GetOwner() != sender ||
+                deadZdo.GetBool(CountedDeathKey, false) ||
+                !IsFinite(deadZdo.GetPosition()) ||
+                (deadZdo.GetPosition() - reportedPosition).sqrMagnitude >
+                CreatureDeathPositionTolerance * CreatureDeathPositionTolerance ||
+                ServerProcessedCreatureDeaths.ContainsKey(deadId) ||
+                ServerPendingCreatureDeaths.Contains(deadId) ||
+                ServerPendingCreatureDeaths.Count >= MaximumPendingCreatureDeaths ||
+                (ServerPendingCreatureDeathCounts.TryGetValue(sender, out int senderPending) &&
+                 senderPending >= MaximumPendingCreatureDeathsPerPeer))
+            {
+                return;
+            }
+
+            ServerPendingCreatureDeaths.Add(deadId);
+            ServerPendingCreatureDeathCounts[sender] = senderPending + 1;
+            pendingDeathId = deadId;
+
+            Character? deadCharacter = TryFindCharacter(deadId);
+            if (!TryBuildCreatureDeathContext(
+                    deadZdo,
+                    deadCharacter,
+                    sourceId,
+                    (CreatureModifierManager.DeathAttributionKind)kindValue,
+                    reportedPosition,
+                    out CreatureDeathContext context))
+            {
+                ReleasePendingCreatureDeath(deadId, sender);
+                pendingDeathId = ZDOID.None;
+                return;
+            }
+
+            ZDOMan authority = ZDOMan.instance;
+            ZNet.instance.StartCoroutine(
+                AuthorizeCreatureDeathAfterSync(sender, reportedPosition, context, authority));
+            pendingDeathId = ZDOID.None;
+        }
+        catch (Exception ex)
+        {
+            if (pendingDeathId != ZDOID.None)
+            {
+                ReleasePendingCreatureDeath(pendingDeathId, sender);
+            }
+
+            CreatureManagerPlugin.Log.LogDebug(
+                $"Failed to process Karma creature death RPC: {ex.Message}");
+        }
+    }
+
+    private static IEnumerator AuthorizeCreatureDeathAfterSync(
+        long sender,
+        Vector3 reportedPosition,
+        CreatureDeathContext context,
+        ZDOMan authority)
+    {
+        float deadline = Time.realtimeSinceStartup + CreatureDeathSyncTimeout;
+        try
+        {
+            while (Time.realtimeSinceStartup <= deadline)
+            {
+                if (!ReferenceEquals(ZDOMan.instance, authority) ||
+                    context.Epoch != CreatureDeathEpoch)
+                {
+                    yield break;
+                }
+
+                ZDO deadZdo = authority.GetZDO(context.DeadId);
+                if (deadZdo == null)
+                {
+                    // The routed report was accepted only while this sender still owned a live,
+                    // matching ZDO. Within the same ZDOMan lifetime, disappearance is the vanilla
+                    // DestroyZDO confirmation and may arrive before the final health sync.
+                    ProcessAuthorizedCreatureDeath(context, null, validatedDestroyedZdo: true);
+                    yield break;
+                }
+
+                if (deadZdo.GetOwner() != sender ||
+                    deadZdo.GetBool(CountedDeathKey, false) ||
+                    !IsFinite(deadZdo.GetPosition()) ||
+                    (deadZdo.GetPosition() - reportedPosition).sqrMagnitude >
+                    CreatureDeathPositionTolerance * CreatureDeathPositionTolerance)
+                {
+                    yield break;
+                }
+
+                bool observedDead = deadZdo.GetBool(ZDOVars.s_dead, false) ||
+                                    deadZdo.GetFloat(ZDOVars.s_health, float.PositiveInfinity) <= 0f;
+                Character? deadCharacter = TryFindCharacter(context.DeadId);
+                if (!observedDead && deadCharacter != null)
+                {
+                    observedDead = deadCharacter.IsDead() || deadCharacter.GetHealth() <= 0f;
+                }
+
+                if (observedDead)
+                {
+                    context.Position = deadZdo.GetPosition();
+                    ProcessAuthorizedCreatureDeath(context, deadZdo, validatedDestroyedZdo: false);
+                    yield break;
+                }
+
+                yield return null;
+            }
+        }
+        finally
+        {
+            ReleasePendingCreatureDeath(context.DeadId, sender);
+        }
+    }
+
+    private static bool TryBuildCreatureDeathContext(
+        ZDO deadZdo,
+        Character? deadCharacter,
+        ZDOID sourceId,
+        CreatureModifierManager.DeathAttributionKind attributionKind,
+        Vector3 reportedPosition,
+        out CreatureDeathContext context)
+    {
+        context = null!;
+        if (deadZdo == null ||
+            sourceId == ZDOID.None ||
+            sourceId == deadZdo.m_uid ||
+            attributionKind == CreatureModifierManager.DeathAttributionKind.None ||
+            !IsFinite(reportedPosition) ||
+            deadZdo.GetBool(ZDOVars.s_tamed, deadCharacter != null && deadCharacter.IsTamed()) ||
+            ZNetScene.instance == null ||
+            !TryValidatePlayerSideDeathSource(sourceId, out bool sourceIsPlayer))
+        {
+            return false;
+        }
+
+        GameObject prefabObject = ZNetScene.instance.GetPrefab(deadZdo.GetPrefab());
+        Character? prefabCharacter = prefabObject != null ? prefabObject.GetComponent<Character>() : null;
+        if (prefabCharacter == null || prefabCharacter.IsPlayer())
+        {
+            return false;
+        }
+
+        bool boss = deadCharacter != null ? deadCharacter.IsBoss() : prefabCharacter.IsBoss();
+        bool enforcer = deadZdo.GetBool(EnforcerKey, false);
+        bool playerAttributedKill = sourceIsPlayer &&
+                                    attributionKind is CreatureModifierManager.DeathAttributionKind.Direct or
+                                        CreatureModifierManager.DeathAttributionKind.Delayed;
+        float omenChance = 0f;
+        if (playerAttributedKill &&
+            CreatureLevelManager.AllowsModifierEffects(deadZdo, boss, enforcer))
+        {
+            CreatureModifierManager.TryGetOmenEnforcerChance(deadZdo, out omenChance);
+        }
+
+        context = new CreatureDeathContext
+        {
+            DeadId = deadZdo.m_uid,
+            Prefab = Utils.GetPrefabName(prefabObject),
+            Position = deadZdo.GetPosition(),
+            Level = Mathf.Max(1, deadZdo.GetInt(ZDOVars.s_level, deadCharacter?.GetLevel() ?? 1)),
+            Boss = boss,
+            Enforcer = enforcer,
+            KarmaSummoned = deadZdo.GetBool(EnforcerSummonedKey, false) ||
+                            (deadCharacter != null && IsRuntimeSummonedCreature(deadCharacter)),
+            PlayerAttributedKill = playerAttributedKill,
+            PlayerKillerId = playerAttributedKill ? sourceId : ZDOID.None,
+            AttributionKind = attributionKind,
+            OmenChance = omenChance,
+            Epoch = CreatureDeathEpoch
+        };
+        return context.DeadId != ZDOID.None && IsFinite(context.Position);
+    }
+
+    private static void ProcessAuthorizedCreatureDeath(
+        CreatureDeathContext context,
+        ZDO? deadZdo,
+        bool validatedDestroyedZdo)
+    {
+        if (!IsKarmaSystemEnabled() ||
+            context == null ||
+            context.DeadId == ZDOID.None ||
+            context.Epoch != CreatureDeathEpoch ||
+            (deadZdo == null && !validatedDestroyedZdo) ||
+            (deadZdo != null && deadZdo.m_uid != context.DeadId))
+        {
+            return;
+        }
+
+        PruneProcessedCreatureDeaths();
+        if ((deadZdo != null && deadZdo.GetBool(CountedDeathKey, false)) ||
+            ServerProcessedCreatureDeaths.ContainsKey(context.DeadId))
+        {
+            return;
+        }
+
+        ServerProcessedCreatureDeaths[context.DeadId] =
+            Time.realtimeSinceStartup + ProcessedCreatureDeathRetention;
+        deadZdo?.Set(CountedDeathKey, true);
+        if (context.Enforcer)
+        {
+            BroadcastCenterQuote(EnforcerDeathQuotes);
+        }
+
+        if (context.KarmaSummoned)
+        {
+            return;
+        }
+
+        if (!ShouldBlockKarmaGain(context.Position, context.DeadId))
+        {
+            float amount = GetKillKarma(
+                context.Prefab,
+                context.Boss,
+                context.Level,
+                IsLikelyDungeonPosition(context.Position));
+            if (amount > 0f)
+            {
+                AddKarma(context.Position, amount);
+            }
+        }
+
+        if (context.PlayerAttributedKill &&
+            IsEnforcerEnabled() &&
+            context.OmenChance > 0f &&
+            UnityEngine.Random.Range(0f, 1f) < context.OmenChance)
+        {
+            bool summoned = TryForceEnforcerSummonNear(
+                context.PlayerKillerId,
+                context.DeadId,
+                out EnforcerSummonFailure failure);
+            string failureSuffix = summoned ? "" : $" reason={failure}";
+            CreatureManagerPlugin.Log.LogInfo(
+                $"Karma Omen triggered by {context.Prefab}: attribution={context.AttributionKind} " +
+                $"chance={context.OmenChance:P0} summoned={summoned}{failureSuffix}");
+        }
+    }
+
+    private static bool TryValidatePlayerSideDeathSource(ZDOID sourceId, out bool sourceIsPlayer)
+    {
+        sourceIsPlayer = false;
+        if (sourceId == ZDOID.None || ZNetScene.instance == null)
+        {
+            return false;
+        }
+
+        if (Player.m_localPlayer != null && Player.m_localPlayer.GetZDOID() == sourceId)
+        {
+            sourceIsPlayer = true;
+            return true;
+        }
+
+        if (ZNet.instance != null)
+        {
+            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
+            {
+                if (peer != null && peer.IsReady() && peer.m_characterID == sourceId)
+                {
+                    sourceIsPlayer = true;
+                    return true;
+                }
+            }
+        }
+
+        Character? sourceCharacter = TryFindCharacter(sourceId);
+        if (sourceCharacter != null)
+        {
+            if (sourceCharacter.IsPlayer())
+            {
+                return false;
+            }
+
+            return sourceCharacter.IsTamed() ||
+                   sourceCharacter.GetFaction() == Character.Faction.PlayerSpawned;
+        }
+
+        if (ZDOMan.instance == null)
+        {
+            return false;
+        }
+
+        ZDO sourceZdo = ZDOMan.instance.GetZDO(sourceId);
+        if (sourceZdo == null)
+        {
+            return false;
+        }
+
+        if (sourceZdo.GetBool(ZDOVars.s_tamed, false))
+        {
+            return true;
+        }
+
+        GameObject sourcePrefab = ZNetScene.instance.GetPrefab(sourceZdo.GetPrefab());
+        Character? sourcePrefabCharacter = sourcePrefab != null ? sourcePrefab.GetComponent<Character>() : null;
+        return sourcePrefabCharacter != null &&
+               !sourcePrefabCharacter.IsPlayer() &&
+               sourcePrefabCharacter.GetFaction() == Character.Faction.PlayerSpawned;
+    }
+
+    private static Character? TryFindCharacter(ZDOID id)
+    {
+        if (id == ZDOID.None || ZNetScene.instance == null)
+        {
+            return null;
+        }
+
+        GameObject instance = ZNetScene.instance.FindInstance(id);
+        return instance != null ? instance.GetComponent<Character>() : null;
+    }
+
+    private static void PruneProcessedCreatureDeaths()
+    {
+        float now = Time.realtimeSinceStartup;
+        StaleProcessedCreatureDeaths.Clear();
+        foreach (KeyValuePair<ZDOID, float> entry in ServerProcessedCreatureDeaths)
+        {
+            if (entry.Value <= now)
+            {
+                StaleProcessedCreatureDeaths.Add(entry.Key);
+            }
+        }
+
+        foreach (ZDOID id in StaleProcessedCreatureDeaths)
+        {
+            ServerProcessedCreatureDeaths.Remove(id);
+        }
+
+        StaleProcessedCreatureDeaths.Clear();
+    }
+
+    private static void ReleasePendingCreatureDeath(ZDOID deadId, long sender)
+    {
+        if (deadId == ZDOID.None || !ServerPendingCreatureDeaths.Remove(deadId))
+        {
+            return;
+        }
+
+        if (!ServerPendingCreatureDeathCounts.TryGetValue(sender, out int count) || count <= 1)
+        {
+            ServerPendingCreatureDeathCounts.Remove(sender);
+            return;
+        }
+
+        ServerPendingCreatureDeathCounts[sender] = count - 1;
+    }
+
+    private static bool IsFinite(Vector3 value)
+    {
+        return !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
+               !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
+               !float.IsNaN(value.z) && !float.IsInfinity(value.z);
     }
 
     private static void RequestKarmaStatus()
@@ -769,6 +1203,7 @@ AshLands:
             TrySummonForPlayer(
                 representative,
                 now,
+                out _,
                 regionPosition: centerPosition,
                 regionZoneKeys: regionZoneKeys);
         }
@@ -897,20 +1332,27 @@ AshLands:
         return false;
     }
 
-    internal static bool TryForceEnforcerSummonNear(Vector3 position)
+    private static bool TryForceEnforcerSummonNear(
+        ZDOID killerId,
+        ZDOID excludedDeadId,
+        out EnforcerSummonFailure failure)
     {
+        failure = EnforcerSummonFailure.None;
         if (!IsEnforcerEnabled())
         {
+            failure = EnforcerSummonFailure.FeatureDisabled;
             return false;
         }
 
         if (ZNet.instance == null || !ZNet.instance.IsServer() || ZNetScene.instance == null)
         {
+            failure = EnforcerSummonFailure.ServerUnavailable;
             return false;
         }
 
-        if (!TryFindNearestAlivePlayer(position, out Character player))
+        if (!TryFindConnectedAlivePlayer(killerId, out Character player))
         {
+            failure = EnforcerSummonFailure.KillerUnavailable;
             return false;
         }
 
@@ -920,33 +1362,43 @@ AshLands:
         return TrySummonForPlayer(
             player,
             Time.time,
+            out failure,
             ignoreCooldown: ignoreCooldown,
             ignoreChance: true,
-            ignoreRequiredKarma: true);
+            ignoreRequiredKarma: true,
+            excludedCharacterId: excludedDeadId);
     }
 
-    private static bool TryFindNearestAlivePlayer(Vector3 position, out Character player)
+    private static bool TryFindConnectedAlivePlayer(ZDOID playerId, out Character player)
     {
         player = null!;
-        float nearestDistance = float.MaxValue;
-        foreach (Character character in Character.GetAllCharacters())
+        if (playerId == ZDOID.None || ZNet.instance == null)
         {
-            if (character == null || !character.IsPlayer() || character.IsDead())
-            {
-                continue;
-            }
-
-            float distance = Utils.DistanceXZ(character.transform.position, position);
-            if (distance >= nearestDistance)
-            {
-                continue;
-            }
-
-            nearestDistance = distance;
-            player = character;
+            return false;
         }
 
-        return player != null;
+        bool connected = Player.m_localPlayer != null &&
+                         Player.m_localPlayer.GetZDOID() == playerId;
+        if (!connected)
+        {
+            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
+            {
+                if (peer != null && peer.IsReady() && peer.m_characterID == playerId)
+                {
+                    connected = true;
+                    break;
+                }
+            }
+        }
+
+        Character? candidate = connected ? TryFindCharacter(playerId) : null;
+        if (candidate == null || !candidate.IsPlayer() || candidate.IsDead())
+        {
+            return false;
+        }
+
+        player = candidate;
+        return true;
     }
 
     internal static int GetLevelBonus(Character character)
@@ -1275,18 +1727,28 @@ AshLands:
     private static bool TrySummonForPlayer(
         Character player,
         float now,
+        out EnforcerSummonFailure failure,
         bool ignoreCooldown = false,
         bool ignoreChance = false,
         bool ignoreRequiredKarma = false,
         Vector3? regionPosition = null,
-        HashSet<string>? regionZoneKeys = null)
+        HashSet<string>? regionZoneKeys = null,
+        ZDOID excludedCharacterId = default)
     {
+        failure = EnforcerSummonFailure.None;
+        if (player == null || !player.IsPlayer() || player.IsDead())
+        {
+            failure = EnforcerSummonFailure.KillerUnavailable;
+            return false;
+        }
+
         Vector3 playerPosition = player.transform.position;
         Vector3 statePosition = regionPosition ?? playerPosition;
         Heightmap.Biome biome = GetBiome(playerPosition);
         bool dungeonSummon = IsLikelyDungeonPosition(playerPosition);
         if (!TryGetEnforcerBiomeDefinition(biome, out EnforcerBiomeDefinition biomeDefinition))
         {
+            failure = EnforcerSummonFailure.BiomeNotConfigured;
             return false;
         }
 
@@ -1296,19 +1758,32 @@ AshLands:
         List<EnforcerCandidateDefinition> candidates = biomeDefinition.GetCandidates(dungeonSummon, dungeonLocation);
         if (!biomeDefinition.Enabled)
         {
+            failure = EnforcerSummonFailure.BiomeDisabled;
             return false;
         }
 
         if (candidates.Count == 0)
         {
+            failure = EnforcerSummonFailure.NoCandidates;
             return false;
         }
 
         ResolvedEnforcerSettings biomeSettings = ResolvedEnforcerSettings.FromGlobal(Settings.Enforcer);
-        if (ignoreCooldown
-                ? HasEnforcerBlocker(statePosition, regionZoneKeys)
-                : TryRefreshEnforcerCooldownForBlocker(statePosition, now, regionZoneKeys))
+        EnforcerSummonFailure blockerFailure = GetEnforcerBlockerFailure(
+            statePosition,
+            regionZoneKeys,
+            excludedCharacterId);
+        if (blockerFailure != EnforcerSummonFailure.None)
         {
+            if (!ignoreCooldown)
+            {
+                lock (Sync)
+                {
+                    RefreshEnforcerCooldownUnsafe(statePosition, now);
+                }
+            }
+
+            failure = blockerFailure;
             return false;
         }
 
@@ -1321,34 +1796,40 @@ AshLands:
 
             if (!ignoreCooldown && GetRemainingEnforcerCooldownUnsafe(statePosition, now, biomeSettings, regionZoneKeys) > 0f)
             {
+                failure = EnforcerSummonFailure.Cooldown;
                 return false;
             }
         }
 
         if (!ignoreChance && UnityEngine.Random.Range(0f, 100f) >= Mathf.Clamp(biomeSettings.Chance, 0f, 100f))
         {
+            failure = EnforcerSummonFailure.ChanceRollFailed;
             return false;
         }
 
         if (!TrySelectEnforcerCandidate(candidates, biomeSettings, karma, ignoreRequiredKarma, out EnforcerCandidateDefinition candidate, out ResolvedEnforcerSettings resolvedSettings))
         {
+            failure = EnforcerSummonFailure.NoEligibleCandidate;
             return false;
         }
 
         EnforcerSummonSet summon = candidate.Summon;
         if (summon.Boss.Length == 0)
         {
+            failure = EnforcerSummonFailure.InvalidCandidate;
             return false;
         }
 
         if (!TryFindSummonPosition(player, resolvedSettings, out Vector3 spawnPosition))
         {
+            failure = EnforcerSummonFailure.NoSpawnPosition;
             CreatureManagerPlugin.Log.LogDebug($"Karma Enforcer summon skipped: no spawn position near {playerPosition}.");
             return false;
         }
 
         if (!TrySpawnCreature(summon.Boss, spawnPosition, playerPosition, markEnforcer: true, EnforcerNameSuffix, resolvedSettings, candidate.Loot, out Character boss))
         {
+            failure = EnforcerSummonFailure.SpawnFailed;
             return false;
         }
 
@@ -1531,7 +2012,8 @@ AshLands:
         out int activeEnforcers,
         out bool hasNonEnforcerBoss,
         Character? excludedCharacter = null,
-        HashSet<string>? regionZoneKeys = null)
+        HashSet<string>? regionZoneKeys = null,
+        ZDOID excludedCharacterId = default)
     {
         activeEnforcers = 0;
         hasNonEnforcerBoss = false;
@@ -1540,6 +2022,7 @@ AshLands:
         {
             if (character == null ||
                 ReferenceEquals(character, excludedCharacter) ||
+                (excludedCharacterId != ZDOID.None && character.GetZDOID() == excludedCharacterId) ||
                 character.IsDead() ||
                 !IsInEnforcerCheckRegion(character.transform.position, centerZone, regionZoneKeys))
             {
@@ -1574,34 +2057,25 @@ AshLands:
             : IsInKarmaNeighborhood(position, centerZone);
     }
 
-    private static bool TryRefreshEnforcerCooldownForBlocker(
+    private static EnforcerSummonFailure GetEnforcerBlockerFailure(
         Vector3 position,
-        float now,
-        HashSet<string>? regionZoneKeys = null)
-    {
-        if (!HasEnforcerBlocker(position, regionZoneKeys))
-        {
-            return false;
-        }
-
-        lock (Sync)
-        {
-            RefreshEnforcerCooldownUnsafe(position, now);
-        }
-
-        return true;
-    }
-
-    private static bool HasEnforcerBlocker(Vector3 position, HashSet<string>? regionZoneKeys = null)
+        HashSet<string>? regionZoneKeys,
+        ZDOID excludedCharacterId)
     {
         GetEnforcerBlockerState(
             position,
             out int activeEnforcers,
             out bool hasNonEnforcerBoss,
-            regionZoneKeys: regionZoneKeys);
-        bool blockedByCap = activeEnforcers >= GetMaximumEnforcersPerSector();
-        bool blockedByBoss = ShouldBlockEnforcerWhileBossActive() && hasNonEnforcerBoss;
-        return blockedByCap || blockedByBoss;
+            regionZoneKeys: regionZoneKeys,
+            excludedCharacterId: excludedCharacterId);
+        if (activeEnforcers >= GetMaximumEnforcersPerSector())
+        {
+            return EnforcerSummonFailure.ActiveEnforcerCap;
+        }
+
+        return ShouldBlockEnforcerWhileBossActive() && hasNonEnforcerBoss
+            ? EnforcerSummonFailure.ActiveBoss
+            : EnforcerSummonFailure.None;
     }
 
     private static bool TryFindSummonPosition(Character player, ResolvedEnforcerSettings settings, out Vector3 position)
