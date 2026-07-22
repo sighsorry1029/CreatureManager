@@ -8,6 +8,7 @@ riderModule.iml
 ServerSyncModTemplate.sln.DotSettings.user
 environment.props
 artifacts/
+/Thunderstore/*.zip
 modifier-icons-exact-preview.png
 modifier_icons_preview.png
 tools/ModifierIconPreview/bin/

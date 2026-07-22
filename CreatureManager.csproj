@@ -228,8 +228,6 @@
         <PropertyGroup>
             <PackageStagingRoot>$(BaseIntermediateOutputPath)package</PackageStagingRoot>
             <ThunderstoreStagingDir>$(PackageStagingRoot)\thunderstore\$(PackageName)</ThunderstoreStagingDir>
-            <NexusStagingDir>$(PackageStagingRoot)\nexus\$(PackageName)</NexusStagingDir>
-            <PackageOutputRoot>$(ProjectDir)artifacts</PackageOutputRoot>
         </PropertyGroup>
         <Error Text="README.md not found in project directory." Condition="!Exists('$(ProjectDir)README.md')"/>
         <Error Text="CHANGELOG.md not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\CHANGELOG.md')"/>
@@ -255,16 +253,13 @@
         <Error Text="Thunderstore manifest version_number must match assembly version $(PackageVersion)."
                Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(ThunderstoreManifestText)', '&quot;version_number&quot;\s*:\s*&quot;$(PackageVersion)&quot;')) != 'True'"/>
         <RemoveDir Directories="$(PackageStagingRoot)" Condition="Exists('$(PackageStagingRoot)')"/>
-        <MakeDir Directories="$(ThunderstoreStagingDir);$(NexusStagingDir);$(PackageOutputRoot)\Thunderstore;$(PackageOutputRoot)\Nexus"/>
+        <MakeDir Directories="$(ThunderstoreStagingDir);$(ProjectDir)Thunderstore"/>
         <ItemGroup>
             <ThunderstorePackageFiles Include="$(TargetPath);$(ProjectDir)README.md;$(ProjectDir)Thunderstore\CHANGELOG.md;$(ProjectDir)Thunderstore\manifest.json;$(ProjectDir)Thunderstore\icon.png"/>
-            <NexusPackageFiles Include="$(TargetPath)"/>
         </ItemGroup>
         <Copy SourceFiles="@(ThunderstorePackageFiles)" DestinationFolder="$(ThunderstoreStagingDir)"/>
         <Copy SourceFiles="$(ProjectDir)translations\English.yml" DestinationFiles="$(ThunderstoreStagingDir)\$(AssemblyName).English.yml"/>
-        <Copy SourceFiles="@(NexusPackageFiles)" DestinationFolder="$(NexusStagingDir)"/>
-        <ZipDirectory SourceDirectory="$(ThunderstoreStagingDir)" DestinationFile="$(PackageOutputRoot)\Thunderstore\$(PackageName).zip" Overwrite="true"/>
-        <ZipDirectory SourceDirectory="$(NexusStagingDir)" DestinationFile="$(PackageOutputRoot)\Nexus\$(PackageName).zip" Overwrite="true"/>
+        <ZipDirectory SourceDirectory="$(ThunderstoreStagingDir)" DestinationFile="$(ProjectDir)Thunderstore\$(PackageName).zip" Overwrite="true"/>
         <RemoveDir Directories="$(PackageStagingRoot)"/>
     </Target>
 

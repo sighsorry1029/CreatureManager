@@ -2609,6 +2609,11 @@ internal static class CreatureDomainManager
             return null;
         }
 
+        if (ShouldSkipRendererTextureWork())
+        {
+            return null;
+        }
+
         Texture? texture = CreatureTextureRegistry.GetTexture(textureName);
         if (texture == null)
         {
@@ -2687,6 +2692,15 @@ internal static class CreatureDomainManager
         return applied
             ? new RagdollTextureRuntimeState(rendererName, materialIndex, texture)
             : null;
+    }
+
+    private static bool ShouldSkipRendererTextureWork()
+    {
+        // Dedicated servers run in batch mode, while other headless launches expose a null graphics
+        // device. Keep definition validation and managed ragdoll setup, but avoid decoding textures or
+        // touching shader materials when there is no rendered output.
+        return Application.isBatchMode ||
+               SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null;
     }
 
     private static void BeginTextureOverrideApply()
@@ -3029,6 +3043,7 @@ internal static class CreatureDomainManager
     internal static void ApplyConfiguredRagdollTextures(VisEquipment visEquipment)
     {
         if (visEquipment == null ||
+            ShouldSkipRendererTextureWork() ||
             !RagdollTexturesByPrefab.TryGetValue(
                 GetPrefabName(visEquipment.gameObject.name),
                 out RagdollTextureRuntimeState[] textures))
