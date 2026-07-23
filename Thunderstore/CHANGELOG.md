@@ -2,8 +2,8 @@
 
 ## 1.0.4
 
-- Add the server-synchronized `Blink Skips First Attack` option, enabled by default, so a creature's first successful hostile attack does not teleport or use Blink's extended AI range; cooldown still begins only after an actual Blink.
-- Keep Blink activation and first-attack tracking owner-authoritative, and exclude non-enemy utility actions from consuming the protected opening attack.
+- Add the server-synchronized `Blink Alert Grace Period (s)` option (0-10s, default 3s), delaying Blink and its extended attack range after alert while letting the grace period expire even when no attack can start; 0 restores immediate Blink behavior.
+- Track Blink alert transitions owner-authoritatively by network time, reapply the grace period only after a creature calms and becomes alerted again, and prevent repeated alert calls or failed attacks from indefinitely suppressing Blink.
 - Reduce Blink's default maximum range from 24m to 16m across Global, Boss, Enforcer, examples, and the runtime fallback.
 - Improve the 17 px Blink icon with a cyan arrow and violet portal while removing the two decorative sparks, and update the English, Korean, Compendium, and README descriptions.
 

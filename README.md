@@ -82,7 +82,7 @@ Existing creatures can be modified or cloned. For advanced examples, install [Mo
 
 ![Blink modifier teleporting toward a target](https://i.ibb.co/3mVwS3pz/blink.gif)
 
-*Blink teleports the creature near its target to close distance quickly. With `Blink Skips First Attack` enabled (default), its first attack does not trigger Blink.*
+*Blink teleports the creature near its target to close distance quickly. `Blink Alert Grace Period (s)` delays Blink and its extended attack range for 3 seconds after the creature becomes alerted by default; the timer still expires when no attack can start.*
 
 ![Omen modifier triggering an Enforcer check](https://i.ibb.co/G4x2sPfH/omen.gif)
 
@@ -161,7 +161,7 @@ CreatureManager provides 32 modifiers in four groups. Natural rolls select at mo
 | <img src="https://i.ibb.co/xKKMTzcq/attack-Speed.png" width="40" height="40" alt="Attack Speed icon"> | **Attack Speed** (`attackSpeed`) | Increases animation speed by 30%; attack intervals become 76.92% of normal. |
 | <img src="https://i.ibb.co/SXqZd5Pq/vampiric.png" width="40" height="40" alt="Vampiric icon"> | **Vampiric** (`vampiric`) | Heals for 30% of health removed by direct hits; delayed damage over time is excluded. |
 | <img src="https://i.ibb.co/Jw9yV49Z/reaping.png" width="40" height="40" alt="Reaping icon"> | **Reaping** (`reaping`) | Nearby kills heal 5% of base max health (up to 20 activations) and grant +10% max health, +1% damage, and +5% size per kill, capped at +200%, +20%, and +50%. No new size is gained in dungeons. |
-| <img src="https://i.ibb.co/Gfqc089L/blink.png" width="40" height="40" alt="Blink icon"> | **Blink** (`blink`) | Teleports near its player target within 16m every 6s. With `Blink Skips First Attack` enabled (default), its first attack does not trigger Blink. |
+| <img src="https://i.ibb.co/Gfqc089L/blink.png" width="40" height="40" alt="Blink icon"> | **Blink** (`blink`) | Teleports near its player target within 16m every 6s. By default, Blink and its extended attack range unlock 3s after the creature becomes alerted, even if no attack could start during that time. |
 | <img src="https://i.ibb.co/ZpnXrfGq/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** (`omen`) | Has a 50% chance when killed directly by a player or by unambiguously player-attributed poison, fire, or spirit damage over time to force an Enforcer check; cooldown blocking follows the server setting. |
 | <img src="https://i.ibb.co/spF4n7Wg/juggernaut.png" width="40" height="40" alt="Juggernaut icon"> | **Juggernaut** (`juggernaut`) | Player hits have at least 150 push force. An actual push starts a 5s cooldown, and the creature is immune to attack push. |
 | <img src="https://i.ibb.co/TBCgrbkt/blamer.png" width="40" height="40" alt="Blamer icon"> | **Blamer** (`blamer`) | Below 75% health, flees and adds 0.5 Karma per second up to 45 lifetime Karma. When exhausted, the modifier, icon, and flee behavior end. |

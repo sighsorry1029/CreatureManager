@@ -82,7 +82,7 @@ internal static class CreatureModifierManager
     private const string BlinkMaxRangeKey = "CreatureManager_BlinkMaxRange";
     private const string BlinkStartEffectKey = "CreatureManager_BlinkStartEffect";
     private const string BlinkNextTimeKey = "CreatureManager_BlinkNextTime";
-    private const string BlinkFirstAttackCompletedKey = "CreatureManager_BlinkFirstAttackCompleted";
+    private const string BlinkAlertStartTimeKey = "CreatureManager_BlinkAlertStartTime";
     private const string KnockbackPowerKey = "CreatureManager_KnockbackPower";
     private const string KnockbackCooldownKey = "CreatureManager_KnockbackCooldown";
     private const string KnockbackNextReadyTimeKey = "CreatureManager_KnockbackNextReadyTime";
@@ -1703,9 +1703,17 @@ internal static class CreatureModifierManager
             fallback,
             ("range", FormatMeters(maxRange)),
             ("cooldown", FormatSeconds(cooldown)));
-        return CreatureManagerPlugin.BlinkSkipsFirstAttack?.Value == CreatureManagerPlugin.Toggle.On
-            ? $"{description} {CreatureLocalization.Localize("cm_modifier_blink_first_attack_skip", "The first attack does not trigger Blink.")}"
-            : description;
+        float gracePeriod = ResolveBlinkAlertGracePeriod();
+        if (gracePeriod <= 0f)
+        {
+            return description;
+        }
+
+        string graceDescription = CreatureLocalization.Format(
+            "cm_modifier_blink_alert_grace",
+            "Blink and its extended attack range are disabled for {duration} after becoming alerted.",
+            ("duration", FormatSeconds(gracePeriod)));
+        return $"{description} {graceDescription}";
     }
 
     private static string DescribeDeathward(float healthRatio, float cooldown, int maxActivations)
@@ -2167,6 +2175,11 @@ internal static class CreatureModifierManager
             GetPassiveModifierSchedule(character, zdo, Time.time).NextBlamer = Time.time + BlamerTickInterval;
         }
 
+        if (HasModifier(mask, ModifierMask.Blink) && character.GetBaseAI()?.IsAlerted() == true)
+        {
+            zdo.Set(BlinkAlertStartTimeKey, GetNetworkTimeSeconds());
+        }
+
         ApplyRuntimeModifierStats(character, zdo);
     }
 
@@ -2250,7 +2263,7 @@ internal static class CreatureModifierManager
         zdo.RemoveFloat(DeathwardNextReadyTimeKey);
         zdo.RemoveInt(DeathwardActivationCountKey);
         zdo.RemoveFloat(BlinkNextTimeKey);
-        zdo.RemoveInt(BlinkFirstAttackCompletedKey);
+        zdo.RemoveFloat(BlinkAlertStartTimeKey);
         zdo.RemoveFloat(KnockbackNextReadyTimeKey);
         zdo.RemoveFloat(ReapingBaseMaxHealthKey);
         zdo.RemoveInt(ReapingHealActivationCountKey);
@@ -2281,10 +2294,7 @@ internal static class CreatureModifierManager
         if (HasModifier(mask, ModifierMask.Blink))
         {
             CopyNonZeroFloat(source, target, BlinkNextTimeKey);
-            if (source.GetBool(BlinkFirstAttackCompletedKey, false))
-            {
-                target.Set(BlinkFirstAttackCompletedKey, true);
-            }
+            CopyNonZeroFloat(source, target, BlinkAlertStartTimeKey);
         }
 
         if (HasModifier(mask, ModifierMask.Reaping))
@@ -4381,7 +4391,7 @@ internal static class CreatureModifierManager
         Character character = humanoid;
         if (character.IsPlayer() ||
             !TryGetHotPathModifierZdo(character, ModifierMask.Blink, out ZDO zdo) ||
-            ShouldBlockBlinkForFirstAttack(zdo) ||
+            IsBlinkAlertGraceActive(character, zdo) ||
             zdo.GetFloat(BlinkNextTimeKey, 0f) > GetNetworkTimeSeconds())
         {
             return null;
@@ -4442,6 +4452,37 @@ internal static class CreatureModifierManager
         BlinkAttackAiOverridePool.Push(state);
     }
 
+    internal static void HandleBlinkAlertStateChanged(MonsterAI monsterAI, bool wasAlerted)
+    {
+        bool isAlerted = monsterAI.IsAlerted();
+        if (wasAlerted == isAlerted)
+        {
+            return;
+        }
+
+        Character? character = monsterAI.m_character;
+        ZNetView? nview = character?.m_nview;
+        if (character == null ||
+            character.IsPlayer() ||
+            nview == null ||
+            !nview.IsValid() ||
+            !nview.IsOwner() ||
+            !TryGetZdo(character, out ZDO zdo) ||
+            !HasModifier(GetStoredModifierMask(zdo), ModifierMask.Blink))
+        {
+            return;
+        }
+
+        if (isAlerted)
+        {
+            zdo.Set(BlinkAlertStartTimeKey, GetNetworkTimeSeconds());
+        }
+        else
+        {
+            zdo.RemoveFloat(BlinkAlertStartTimeKey);
+        }
+    }
+
     internal static void TryBlinkOnAttackStart(Humanoid humanoid, ItemDrop.ItemData weapon, bool started)
     {
         if (humanoid == null)
@@ -4476,23 +4517,12 @@ internal static class CreatureModifierManager
             return;
         }
 
-        Player? target = null;
-        if (!zdo.GetBool(BlinkFirstAttackCompletedKey, false))
+        if (!CreatureLevelManager.AllowsModifierEffects(character))
         {
-            target = TryGetBlinkTarget(character);
-            if (target == null)
-            {
-                return;
-            }
-
-            zdo.Set(BlinkFirstAttackCompletedKey, true);
-            if (CreatureManagerPlugin.BlinkSkipsFirstAttack?.Value == CreatureManagerPlugin.Toggle.On)
-            {
-                return;
-            }
+            return;
         }
 
-        if (!CreatureLevelManager.AllowsModifierEffects(character))
+        if (IsBlinkAlertGraceActive(character, zdo))
         {
             return;
         }
@@ -4504,7 +4534,7 @@ internal static class CreatureModifierManager
             return;
         }
 
-        target ??= TryGetBlinkTarget(character);
+        Player? target = TryGetBlinkTarget(character);
         if (target == null)
         {
             return;
@@ -4530,10 +4560,41 @@ internal static class CreatureModifierManager
         TeleportCharacter(character, destination, target.transform.position);
     }
 
-    private static bool ShouldBlockBlinkForFirstAttack(ZDO zdo)
+    private static bool IsBlinkAlertGraceActive(Character character, ZDO zdo)
     {
-        return CreatureManagerPlugin.BlinkSkipsFirstAttack?.Value == CreatureManagerPlugin.Toggle.On &&
-               !zdo.GetBool(BlinkFirstAttackCompletedKey, false);
+        float gracePeriod = ResolveBlinkAlertGracePeriod();
+        ZNetView? nview = character.m_nview;
+        bool isOwner = nview != null && nview.IsValid() && nview.IsOwner();
+        BaseAI? baseAI = character.GetBaseAI();
+        float alertStartTime = zdo.GetFloat(BlinkAlertStartTimeKey, 0f);
+        if (baseAI == null || !baseAI.IsAlerted())
+        {
+            if (isOwner && alertStartTime > 0f)
+            {
+                zdo.RemoveFloat(BlinkAlertStartTimeKey);
+            }
+
+            return gracePeriod > 0f;
+        }
+
+        float now = GetNetworkTimeSeconds();
+        if (alertStartTime <= 0f)
+        {
+            if (!isOwner)
+            {
+                return gracePeriod > 0f;
+            }
+
+            alertStartTime = now;
+            zdo.Set(BlinkAlertStartTimeKey, alertStartTime);
+        }
+
+        return gracePeriod > 0f && now - alertStartTime < gracePeriod;
+    }
+
+    private static float ResolveBlinkAlertGracePeriod()
+    {
+        return Mathf.Clamp(CreatureManagerPlugin.BlinkAlertGracePeriod?.Value ?? 0f, 0f, 10f);
     }
 
     private static Player? TryGetBlinkTarget(Character character)

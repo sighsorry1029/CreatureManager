@@ -2989,6 +2989,33 @@ internal static class CreatureManagerMonsterAiBlamerFleePatch
 }
 
 [HarmonyPatch]
+internal static class CreatureManagerMonsterAiBlinkAlertPatch
+{
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        MethodInfo? method = CreatureHarmonyTargetResolver.FindDeclared(
+            typeof(MonsterAI),
+            nameof(MonsterAI.SetAlerted),
+            "Blink alert grace-period tracking",
+            new[] { typeof(bool) });
+        if (method != null)
+        {
+            yield return method;
+        }
+    }
+
+    private static void Prefix(MonsterAI __instance, out bool __state)
+    {
+        __state = __instance.IsAlerted();
+    }
+
+    private static void Postfix(MonsterAI __instance, bool __state)
+    {
+        CreatureModifierManager.HandleBlinkAlertStateChanged(__instance, __state);
+    }
+}
+
+[HarmonyPatch]
 internal static class CreatureManagerMonsterAiBlinkRangePatch
 {
     private static IEnumerable<MethodBase> TargetMethods()
