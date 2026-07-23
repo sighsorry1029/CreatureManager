@@ -321,7 +321,7 @@ Enforcer:
     attackSpeed: 10, 0.3                 # chance%, attackSpeedBonus.
     vampiric: 10, 0.3                    # chance%, actualDirectDamageHealing.
     reaping: 10, 0.05, 20, 0.1, 2, 0.01, 0.2, 0.05, 0.5 # chance%, heal/base, healMaxActivations, maxHealth/base, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap. New scale gains are disabled in dungeons.
-    blink: 10, 6, 24, fx_Adrenaline1    # chance%, cooldown, maxRange, startEffect.
+    blink: 10, 6, 16, fx_Adrenaline1    # chance%, cooldown, maxRange, startEffect.
     omen: 10, 0.5                        # chance%, forcedEnforcerChance.
     juggernaut: 10, 150, 5               # chance%, minimumPushForce, cooldownSeconds.
     blamer: 0, 1, 60, 0.75               # chance%, karmaPerSecond, maxKarmaGain, fleeHealthRatio. 0 cap is unlimited.
@@ -349,7 +349,7 @@ BlackForest:
         lightning: 10, 0.1
         deathward: 20, 0.2, 10, 3
         disruptive: 10, 0.5, 0.5, 0.5, 5
-        blink: 10, 6, 24, fx_Adrenaline1
+        blink: 10, 6, 16, fx_Adrenaline1
   dungeonEnforcers:
     - summon: [Skeleton_Poison, Skeleton:2]
       weight: 2

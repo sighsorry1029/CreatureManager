@@ -3045,7 +3045,7 @@ internal static class CreatureManagerAttackStartSpeedPatch
 
     private static void Postfix(Humanoid character, ItemDrop.ItemData weapon, bool __result)
     {
-        CreatureModifierManager.TryBlinkOnAttackStart(character, __result);
+        CreatureModifierManager.TryBlinkOnAttackStart(character, weapon, __result);
         CreatureModifierManager.ApplyAttackIntervalSpeed(character, weapon, __result);
     }
 }

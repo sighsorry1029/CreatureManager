@@ -3760,7 +3760,7 @@ internal static class CreatureDomainManager
         AppendTemplateLine(builder, 2, "withered: 10, 0.5, 0.5, 5");
         AppendIndented(builder, 2, "# Special: Swift to Blamer");
         AppendTemplateLine(builder, 2, "reaping: 5, 0.15, 20, 0.1, 2, 0.05, 1, 0.02, 0.4");
-        AppendTemplateLine(builder, 2, "blink: 5, 1, 24, fx_Adrenaline1");
+        AppendTemplateLine(builder, 2, "blink: 5, 1, 16, fx_Adrenaline1");
         AppendTemplateLine(builder, 2, "omen: 5, 0.25");
         AppendTemplateLine(builder, 2, "juggernaut: 5, 80, 5");
         AppendTemplateLine(builder, 2, "blamer: 5, 1, 60, 0.75");
@@ -3828,7 +3828,7 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 2, $"attackSpeed: {chance}, 0.3            # chance%, attackSpeedBonus.");
         AppendIndented(builder, 2, $"vampiric: {chance}, 0.3               # chance%, actualDirectDamageHealing.");
         AppendIndented(builder, 2, $"reaping: {chance}, 0.05, 20, 0.1, 2, 0.01, 0.2, 0.05, 0.5 # chance%, heal/base, healMaxActivations, maxHealth/base, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap. New scale gains are disabled in dungeons.");
-        AppendIndented(builder, 2, $"blink: {chance}, 6, 24, fx_Adrenaline1  # chance%, cooldown, maxRange, startEffect.");
+        AppendIndented(builder, 2, $"blink: {chance}, 6, 16, fx_Adrenaline1  # chance%, cooldown, maxRange, startEffect.");
         AppendIndented(builder, 2, $"omen: {chance}, 0.5                  # chance%, forcedEnforcerChance.");
         AppendIndented(builder, 2, $"juggernaut: {chance}, 150, 5           # chance%, minimumPushForce, cooldownSeconds.");
         AppendIndented(builder, 2, $"blamer: {blamerChance}, {blamerKarmaPerSecond}, {blamerMaxKarmaGain}, 0.75           # chance%, karmaPerSecond, maxKarmaGain, fleeHealthRatio. 0 cap is unlimited.");

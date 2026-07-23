@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.0.3";
+    internal const string ModVersion = "1.0.4";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -100,6 +100,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             MultiplayerHealthIncreasePerPlayer = config("4 - Multiplayer Difficulty", "HP Increase Per Player In Multiplayer (%)", 30f, Ordered("Extra creature effective health per nearby player after the first. Vanilla is 30%. This does not increase max health directly; vanilla applies it by reducing damage taken, while floating damage text generally shows the pre-scaling damage.", 100, new AcceptableValueRange<float>(0f, 200f)));
             MultiplayerDamageIncreasePerPlayer = config("4 - Multiplayer Difficulty", "DMG Increase Per Player In Multiplayer (%)", 4f, Ordered("Extra creature damage per nearby player after the first. Vanilla is 4%.", 90, new AcceptableValueRange<float>(0f, 200f)));
             MultiplayerMaximumPlayerCount = config("4 - Multiplayer Difficulty", "Maximum Player Count For Multiplayer Scaling", 5, Ordered("Maximum nearby player count used by vanilla multiplayer difficulty scaling. Vanilla is 5.", 80, new AcceptableValueRange<int>(1, 25)));
+            BlinkSkipsFirstAttack = config("5 - Modifiers", "Blink Skips First Attack", Toggle.On, Ordered("If on, a creature's first successfully started hostile attack against a player does not trigger Blink. A later eligible attack can Blink immediately; cooldown starts only after a successful Blink.", 100));
             EnableLevelSystem.SettingChanged += ReloadLevelConfiguration;
             BiomeLevelPreset.SettingChanged += ReloadLevelConfiguration;
             NormalCreatureNameplateRange.SettingChanged += ApplyRuntimeConfigValues;
@@ -264,6 +265,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     internal static ConfigEntry<float> MultiplayerHealthIncreasePerPlayer = null!;
     internal static ConfigEntry<float> MultiplayerDamageIncreasePerPlayer = null!;
     internal static ConfigEntry<int> MultiplayerMaximumPlayerCount = null!;
+    internal static ConfigEntry<Toggle> BlinkSkipsFirstAttack = null!;
 
     private static ConfigDescription Ordered(string description, int order, AcceptableValueBase? acceptableValues = null)
     {

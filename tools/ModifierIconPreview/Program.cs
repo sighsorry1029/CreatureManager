@@ -100,7 +100,7 @@ IconSpec[] icons =
         FromUnity(0.82f, 0.88f, 0.93f),
         ToneShape: GetReapingTone,
         SecondaryColor: FromUnity(0.48f, 0.28f, 0.13f)),
-    new("blink", IsBlinkPixel, FromUnity(0.58f, 0.36f, 1f)),
+    new("blink", IsBlinkPixel, FromUnity(0.28f, 0.88f, 1f), FromUnity(0.58f, 0.36f, 1f)),
     new("omen", IsEyePixel, FromUnity(0.78f, 0.49f, 1f), FromUnity(1f, 0.188f, 0.157f)),
     new("juggernaut", IsAnchorPixel, FromUnity(0.82f, 0.72f, 0.48f)),
     new(
@@ -1107,7 +1107,7 @@ static IconTone GetCorrosiveTone(int x, int y)
     return IconTone.Primary;
 }
 
-static bool IsBlinkPixel(int x, int y, out bool isBorder)
+static bool IsBlinkPixel(int x, int y, out bool isPortal)
 {
     Vec2 point = new(x + 0.5f, y + 0.5f);
     Vec2 center = new(32f, 32f);
@@ -1120,10 +1120,8 @@ static bool IsBlinkPixel(int x, int y, out bool isBorder)
         new Vec2(30f, 22f),
         new Vec2(30f, 42f)
     });
-    bool spark = Distance(point, new Vec2(52f, 48f)) <= 4f ||
-                 Distance(point, new Vec2(50f, 16f)) <= 3f;
-    isBorder = portal || arrow;
-    return portal || dash || arrow || spark;
+    isPortal = portal;
+    return portal || dash || arrow;
 }
 
 static bool IsUnflinchingPixel(int x, int y, out bool isStar)

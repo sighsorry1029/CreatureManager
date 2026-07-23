@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4
+
+- Add the server-synchronized `Blink Skips First Attack` option, enabled by default, so a creature's first successful hostile attack does not teleport or use Blink's extended AI range; cooldown still begins only after an actual Blink.
+- Keep Blink activation and first-attack tracking owner-authoritative, and exclude non-enemy utility actions from consuming the protected opening attack.
+- Reduce Blink's default maximum range from 24m to 16m across Global, Boss, Enforcer, examples, and the runtime fallback.
+- Improve the 17 px Blink icon with a cyan arrow and violet portal while removing the two decorative sparks, and update the English, Korean, Compendium, and README descriptions.
+
 ## 1.0.3
 
 - Rework normal-creature and boss level HUDs with fixed 17 px stars and modifier icons: keep stars at the health-bar lower left, modifiers at the lower right, allow the blocks to overlap, and align their visible edges optically.

@@ -82,6 +82,7 @@ internal static class CreatureModifierManager
     private const string BlinkMaxRangeKey = "CreatureManager_BlinkMaxRange";
     private const string BlinkStartEffectKey = "CreatureManager_BlinkStartEffect";
     private const string BlinkNextTimeKey = "CreatureManager_BlinkNextTime";
+    private const string BlinkFirstAttackCompletedKey = "CreatureManager_BlinkFirstAttackCompleted";
     private const string KnockbackPowerKey = "CreatureManager_KnockbackPower";
     private const string KnockbackCooldownKey = "CreatureManager_KnockbackCooldown";
     private const string KnockbackNextReadyTimeKey = "CreatureManager_KnockbackNextReadyTime";
@@ -193,7 +194,7 @@ internal static class CreatureModifierManager
     private const float ReapingDefaultScaleCap = 0f;
     private const float BlinkFixedProcChance = 1f;
     private const float BlinkDefaultCooldown = 6f;
-    private const float BlinkDefaultMaxRange = 24f;
+    private const float BlinkDefaultMaxRange = 16f;
     private const string BlinkDefaultStartEffect = "fx_Adrenaline1";
     private const float KnockbackDefaultPower = 150f;
     private const float KnockbackDefaultCooldown = 5f;
@@ -1697,11 +1698,14 @@ internal static class CreatureModifierManager
     private static string DescribeBlink(float cooldown, float maxRange)
     {
         string fallback = $"Can teleport near a player target within {FormatMeters(maxRange)} every {FormatSeconds(cooldown)}.";
-        return LocalizeModifierDescription(
+        string description = LocalizeModifierDescription(
             "blink",
             fallback,
             ("range", FormatMeters(maxRange)),
             ("cooldown", FormatSeconds(cooldown)));
+        return CreatureManagerPlugin.BlinkSkipsFirstAttack?.Value == CreatureManagerPlugin.Toggle.On
+            ? $"{description} {CreatureLocalization.Localize("cm_modifier_blink_first_attack_skip", "The first attack does not trigger Blink.")}"
+            : description;
     }
 
     private static string DescribeDeathward(float healthRatio, float cooldown, int maxActivations)
@@ -2246,6 +2250,7 @@ internal static class CreatureModifierManager
         zdo.RemoveFloat(DeathwardNextReadyTimeKey);
         zdo.RemoveInt(DeathwardActivationCountKey);
         zdo.RemoveFloat(BlinkNextTimeKey);
+        zdo.RemoveInt(BlinkFirstAttackCompletedKey);
         zdo.RemoveFloat(KnockbackNextReadyTimeKey);
         zdo.RemoveFloat(ReapingBaseMaxHealthKey);
         zdo.RemoveInt(ReapingHealActivationCountKey);
@@ -2276,6 +2281,10 @@ internal static class CreatureModifierManager
         if (HasModifier(mask, ModifierMask.Blink))
         {
             CopyNonZeroFloat(source, target, BlinkNextTimeKey);
+            if (source.GetBool(BlinkFirstAttackCompletedKey, false))
+            {
+                target.Set(BlinkFirstAttackCompletedKey, true);
+            }
         }
 
         if (HasModifier(mask, ModifierMask.Reaping))
@@ -4372,6 +4381,7 @@ internal static class CreatureModifierManager
         Character character = humanoid;
         if (character.IsPlayer() ||
             !TryGetHotPathModifierZdo(character, ModifierMask.Blink, out ZDO zdo) ||
+            ShouldBlockBlinkForFirstAttack(zdo) ||
             zdo.GetFloat(BlinkNextTimeKey, 0f) > GetNetworkTimeSeconds())
         {
             return null;
@@ -4432,7 +4442,7 @@ internal static class CreatureModifierManager
         BlinkAttackAiOverridePool.Push(state);
     }
 
-    internal static void TryBlinkOnAttackStart(Humanoid humanoid, bool started)
+    internal static void TryBlinkOnAttackStart(Humanoid humanoid, ItemDrop.ItemData weapon, bool started)
     {
         if (humanoid == null)
         {
@@ -4440,7 +4450,12 @@ internal static class CreatureModifierManager
         }
 
         Character character = humanoid;
-        if (character.IsPlayer() || !TryGetZdo(character, out ZDO zdo))
+        ZNetView? nview = character.m_nview;
+        if (character.IsPlayer() ||
+            nview == null ||
+            !nview.IsValid() ||
+            !nview.IsOwner() ||
+            !TryGetZdo(character, out ZDO zdo))
         {
             return;
         }
@@ -4451,7 +4466,7 @@ internal static class CreatureModifierManager
             return;
         }
 
-        if (!started)
+        if (!started || weapon?.m_shared?.m_aiTargetType != ItemDrop.ItemData.AiTarget.Enemy)
         {
             return;
         }
@@ -4459,6 +4474,22 @@ internal static class CreatureModifierManager
         if (character.IsTamed())
         {
             return;
+        }
+
+        Player? target = null;
+        if (!zdo.GetBool(BlinkFirstAttackCompletedKey, false))
+        {
+            target = TryGetBlinkTarget(character);
+            if (target == null)
+            {
+                return;
+            }
+
+            zdo.Set(BlinkFirstAttackCompletedKey, true);
+            if (CreatureManagerPlugin.BlinkSkipsFirstAttack?.Value == CreatureManagerPlugin.Toggle.On)
+            {
+                return;
+            }
         }
 
         if (!CreatureLevelManager.AllowsModifierEffects(character))
@@ -4473,7 +4504,7 @@ internal static class CreatureModifierManager
             return;
         }
 
-        Player? target = TryGetBlinkTarget(character);
+        target ??= TryGetBlinkTarget(character);
         if (target == null)
         {
             return;
@@ -4497,6 +4528,12 @@ internal static class CreatureModifierManager
         string startEffect = ResolveBlinkStartEffect(zdo.GetString(BlinkStartEffectKey, BlinkDefaultStartEffect));
         PlayBlinkStartEffect(origin, startEffect);
         TeleportCharacter(character, destination, target.transform.position);
+    }
+
+    private static bool ShouldBlockBlinkForFirstAttack(ZDO zdo)
+    {
+        return CreatureManagerPlugin.BlinkSkipsFirstAttack?.Value == CreatureManagerPlugin.Toggle.On &&
+               !zdo.GetBool(BlinkFirstAttackCompletedKey, false);
     }
 
     private static Player? TryGetBlinkTarget(Character character)
@@ -10226,7 +10263,11 @@ internal static class CreatureModifierManager
 
     private static Sprite GetBlinkSprite()
     {
-        BlinkSprite ??= CreateSolidIcon("CreatureManager_BlinkIcon", IsBlinkPixel, new Color(0.58f, 0.36f, 1f, 1f));
+        BlinkSprite ??= CreateTwoToneIcon(
+            "CreatureManager_BlinkIcon",
+            IsBlinkPixel,
+            new Color(0.28f, 0.88f, 1f, 1f),
+            new Color(0.58f, 0.36f, 1f, 1f));
         return BlinkSprite!;
     }
 
@@ -10980,7 +11021,7 @@ internal static class CreatureModifierManager
         return IconTone.Primary;
     }
 
-    private static bool IsBlinkPixel(int x, int y, out bool isBorder)
+    private static bool IsBlinkPixel(int x, int y, out bool isPortal)
     {
         Vector2 point = new(x + 0.5f, y + 0.5f);
         Vector2 center = new(32f, 32f);
@@ -10988,10 +11029,8 @@ internal static class CreatureModifierManager
         bool portal = radius >= 17f && radius <= 23f && point.x >= 14f;
         bool dash = IsThickLine(point, new Vector2(8f, 32f), new Vector2(35f, 32f), 3.5f);
         bool arrow = IsPointInPolygon(point, BlinkArrowPolygon);
-        bool spark = Vector2.Distance(point, new Vector2(52f, 48f)) <= 4f ||
-                     Vector2.Distance(point, new Vector2(50f, 16f)) <= 3f;
-        isBorder = portal || arrow;
-        return portal || dash || arrow || spark;
+        isPortal = portal;
+        return portal || dash || arrow;
     }
 
     private static bool IsThickLine(Vector2 point, Vector2 start, Vector2 end, float width)
