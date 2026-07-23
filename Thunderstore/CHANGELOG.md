@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.5
+
+- Fix dedicated-server `cm:spawn` and `cm:karma` execution for vanilla admins and Server Devcommands permissions by handling commands after authentication and resolving the invoking player from authoritative peer ZDO state.
+- Make periodic Enforcer checks and Omen summons use connected-player ZDO positions, restore boss and Enforcer blocker tracking across headless regions and reloads, and deliver Karma and Enforcer center messages to remote clients.
+- Move Blamer Karma grants to a server-validated routed RPC so client-owned creatures can contribute Karma while fleeing, consuming their Blamer budget only when regional Karma actually increases.
+- Apply biome presets, `levels.yml` prefab/group overrides, health, damage, scale, and additive Karma levels on the creature's owning peer while retrieving the Karma bonus from the server; modifiers now roll only after level processing completes.
+- Harden configuration reload, ownership transfer, delayed RPC, death, and retry paths so synchronized YAML and level state cannot be finalized from stale or incomplete data.
+
 ## 1.0.4
 
 - Add the server-synchronized `Blink Alert Grace Period (s)` option (0-10s, default 3s), delaying Blink and its extended attack range after alert while letting the grace period expire even when no attack can start; 0 restores immediate Blink behavior.

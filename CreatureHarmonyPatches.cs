@@ -104,6 +104,7 @@ internal static class CreatureManagerZNetAwakePatch
 {
     private static void Postfix()
     {
+        CreatureLevelManager.RegisterRpcs();
         CreatureKarmaManager.RegisterRpcs();
     }
 }
@@ -1406,6 +1407,7 @@ internal static class CreatureManagerCharacterLifecycle
 {
     internal static void ApplyLevelAndModifiers(Character character)
     {
+        CreatureKarmaManager.ObservePotentialBlocker(character);
         CreatureLevelManager.TryApplyLevel(character);
         CreatureLevelManager.ApplyRuntimeVisuals(character);
         CreatureModifierManager.TryRollModifiers(character);
@@ -1510,12 +1512,12 @@ internal static class CreatureManagerTerminalUpdateSearchPatch
     }
 }
 
-[HarmonyPatch(typeof(ZNet), nameof(ZNet.RPC_RemoteCommand))]
-internal static class CreatureManagerZNetRemoteCommandPatch
+[HarmonyPatch(typeof(ZNet), "InternalCommand")]
+internal static class CreatureManagerZNetInternalCommandPatch
 {
     private static bool Prefix(ZNet __instance, ZRpc rpc, string command)
     {
-        return !CreatureConsoleCommands.TryHandleRemoteAdminCommand(__instance, rpc, command);
+        return !CreatureConsoleCommands.TryHandleAuthenticatedRemoteAdminCommand(__instance, rpc, command);
     }
 }
 
@@ -1881,6 +1883,7 @@ internal static class CreatureManagerCharacterOnDestroyPatch
     private static void Prefix(Character __instance)
     {
         CreatureManagerSpawnLifecycle.ForgetCharacter(__instance);
+        CreatureLevelManager.ForgetCharacter(__instance);
         CreatureKarmaManager.ForgetCharacter(__instance);
         CreatureModifierManager.ForgetCharacter(__instance);
     }

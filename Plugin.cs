@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.0.4";
+    internal const string ModVersion = "1.0.5";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -118,6 +118,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             SetupWatcher();
 
             Config.Save();
+            CreatureLevelManager.RegisterRpcs();
             CreatureModifierManager.RegisterRpcs();
         }
         finally
@@ -152,8 +153,11 @@ public class CreatureManagerPlugin : BaseUnityPlugin
 
         _nextRuntimeMaintenanceTime = Time.time + RuntimeMaintenanceInterval;
         CreatureManagerFeedLikeGrandmaPokeballReleasePatch.ApplyIfAvailable(_harmony, lateAttempt: true);
+        CreatureLevelManager.RegisterRpcs();
         CreatureKarmaManager.RegisterRpcs();
         CreatureModifierManager.RegisterRpcs();
+        CreatureLevelManager.UpdatePendingApplications();
+        CreatureModifierManager.PruneServerNetworkState();
         CreatureKarmaManager.UpdateSummons();
     }
 

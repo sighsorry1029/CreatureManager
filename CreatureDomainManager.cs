@@ -570,6 +570,14 @@ internal static class CreatureDomainManager
         return GameDataReady || HasGameDataInstances();
     }
 
+    internal static bool IsSynchronizedConfigurationReady()
+    {
+        return (ConfigSync?.IsSourceOfTruth == true && !DiskReloadPending) ||
+               (ConfigSync?.IsSourceOfTruth == false &&
+                RemoteBundleReady &&
+                !SyncedApplyPending);
+    }
+
     private static bool HasGameDataInstances()
     {
         return ZNetScene.instance != null && ObjectDB.instance != null;

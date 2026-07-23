@@ -91,6 +91,10 @@ internal static class CreatureModifierManager
     private const string BlamerFleeHealthRatioKey = "CreatureManager_BlamerFleeHealthRatio";
     private const string BlamerAccumulatedKarmaKey = "CreatureManager_BlamerAccumulatedKarma";
     private const string BlamerActiveKey = "CreatureManager_BlamerActive";
+    private const string KarmaEnforcerKey = "CreatureManager_KarmaEnforcer";
+    private const string KarmaEnforcerSummonedKey = "CreatureManager_KarmaEnforcerSummoned";
+    private const string LevelHealthAppliedKey = "CreatureManager_LevelHealthApplied";
+    private const string LevelHealthMultiplierKey = "CreatureManager_LevelHealthMultiplier";
     private const string ReapingBaseMaxHealthKey = "CreatureManager_ReapingBaseMaxHealth";
     private const string ReapingHealActivationCountKey = "CreatureManager_ReapingHealActivationCount";
     private const string ReapingBonusHealthKey = "CreatureManager_ReapingBonusHealth";
@@ -1869,6 +1873,8 @@ internal static class CreatureModifierManager
         ZRoutedRpc.instance.Register<ZPackage>(BlinkEffectRpc, RPC_BlinkEffect);
         ZRoutedRpc.instance.Register<ZPackage>(DeathwardEffectRpc, RPC_DeathwardEffect);
         ZRoutedRpc.instance.Register<ZPackage>(ReapingFeedbackRpc, RPC_ReapingFeedback);
+        ZRoutedRpc.instance.Register<ZPackage>(BlamerKarmaRequestRpc, RPC_BlamerKarmaRequest);
+        ZRoutedRpc.instance.Register<ZPackage>(BlamerKarmaResponseRpc, RPC_BlamerKarmaResponse);
         EnsureVortexHitTypeEncodingSupported();
         RegisteredRoutedRpc = ZRoutedRpc.instance;
     }
@@ -1907,13 +1913,6 @@ internal static class CreatureModifierManager
         character.m_nview.Register<Vector3>(
             VortexHitEffectRequestRpc,
             (sender, position) => RPC_VortexHitEffectRequest(character, sender, position));
-        character.m_nview.Register<long, ZDOID>(
-            BlamerKarmaRequestRpc,
-            (sender, requestId, targetId) => RPC_BlamerKarmaRequest(character, sender, requestId, targetId));
-        character.m_nview.Register<long, bool, float>(
-            BlamerKarmaResponseRpc,
-            (sender, requestId, accepted, accumulated) =>
-                RPC_BlamerKarmaResponse(character, sender, requestId, accepted, accumulated));
     }
 
     internal static void ForgetCharacter(Character character)
@@ -2024,9 +2023,41 @@ internal static class CreatureModifierManager
         BlockStaggerMultiplier = 0f;
     }
 
+    internal static void PruneServerNetworkState()
+    {
+        if (ZNet.instance == null || !ZNet.instance.IsServer() || ZDOMan.instance == null)
+        {
+            return;
+        }
+
+        foreach (ZDOID characterId in ServerBlamerKarmaStates.Keys
+                     .Concat(NextBlamerRejectionLogTimes.Keys)
+                     .Distinct()
+                     .ToArray())
+        {
+            ZDO zdo = ZDOMan.instance.GetZDO(characterId);
+            float health = zdo != null
+                ? zdo.GetFloat(ZDOVars.s_health, float.PositiveInfinity)
+                : 0f;
+            if (zdo != null &&
+                !zdo.GetBool(ZDOVars.s_dead, false) &&
+                (float.IsInfinity(health) || !float.IsNaN(health) && health > 0f))
+            {
+                continue;
+            }
+
+            ServerBlamerKarmaStates.Remove(characterId);
+            NextBlamerRejectionLogTimes.Remove(characterId);
+        }
+    }
+
     internal static void TryRollModifiers(Character character)
     {
-        if (character == null || character.IsPlayer() || !CreatureLevelManager.IsLevelSystemEnabled())
+        if (character == null ||
+            character.IsPlayer() ||
+            !CreatureDomainManager.IsSynchronizedConfigurationReady() ||
+            !CreatureLevelManager.IsLevelSystemEnabled() ||
+            !CreatureLevelManager.IsReadyForModifierApplication(character))
         {
             return;
         }
@@ -6594,7 +6625,6 @@ internal static class CreatureModifierManager
         if (ZNet.instance.IsServer())
         {
             bool granted = TryGrantServerBlamerKarma(
-                character,
                 zdo,
                 out confirmedAccumulated,
                 out ServerBlamerKarmaState state);
@@ -6643,7 +6673,7 @@ internal static class CreatureModifierManager
                 }
 
                 pending.SentAt = now;
-                return SendBlamerKarmaRequest(nview, pending)
+                return SendBlamerKarmaRequest(zdo.m_uid, pending)
                     ? BlamerKarmaAddResult.Pending
                     : BlamerKarmaAddResult.Failed;
             }
@@ -6662,20 +6692,28 @@ internal static class CreatureModifierManager
             TargetId = targetId
         };
 
-        return SendBlamerKarmaRequest(nview, PendingBlamerKarmaRequests[characterId])
+        return SendBlamerKarmaRequest(zdo.m_uid, PendingBlamerKarmaRequests[characterId])
             ? BlamerKarmaAddResult.Pending
             : BlamerKarmaAddResult.Failed;
     }
 
-    private static bool SendBlamerKarmaRequest(ZNetView nview, PendingBlamerKarmaRequest pending)
+    private static bool SendBlamerKarmaRequest(ZDOID creatureId, PendingBlamerKarmaRequest pending)
     {
+        if (creatureId == ZDOID.None || ZRoutedRpc.instance == null)
+        {
+            return false;
+        }
+
         try
         {
-            nview.InvokeRPC(
+            ZPackage package = new();
+            package.Write(creatureId);
+            package.Write(pending.RequestId);
+            package.Write(pending.TargetId);
+            ZRoutedRpc.instance.InvokeRoutedRPC(
                 ZRoutedRpc.instance.GetServerPeerID(),
                 BlamerKarmaRequestRpc,
-                pending.RequestId,
-                pending.TargetId);
+                package);
             return true;
         }
         catch
@@ -6685,18 +6723,40 @@ internal static class CreatureModifierManager
     }
 
     private static void RPC_BlamerKarmaRequest(
-        Character character,
         long sender,
-        long requestId,
-        ZDOID targetId)
+        ZPackage package)
     {
-        if (requestId <= 0 ||
-            ZNet.instance == null ||
+        if (ZNet.instance == null ||
             !ZNet.instance.IsServer() ||
-            character.m_nview == null ||
-            !character.m_nview.IsValid() ||
-            !TryGetZdo(character, out ZDO zdo))
+            ZDOMan.instance == null ||
+            ZRoutedRpc.instance == null)
         {
+            return;
+        }
+
+        ZDOID creatureId;
+        long requestId;
+        ZDOID targetId;
+        try
+        {
+            creatureId = package.ReadZDOID();
+            requestId = package.ReadLong();
+            targetId = package.ReadZDOID();
+        }
+        catch
+        {
+            return;
+        }
+
+        if (creatureId == ZDOID.None || requestId <= 0)
+        {
+            return;
+        }
+
+        ZDO zdo = ZDOMan.instance.GetZDO(creatureId);
+        if (zdo == null)
+        {
+            SendBlamerKarmaResponse(sender, creatureId, requestId, false, 0f);
             return;
         }
 
@@ -6706,15 +6766,14 @@ internal static class CreatureModifierManager
         if (zdo.GetOwner() != sender)
         {
             LogBlamerRequestRejection(
-                character,
                 zdo,
                 sender,
                 $"ZDO owner {zdo.GetOwner()} does not match the request sender");
-            SendBlamerKarmaResponse(character, sender, requestId, false, Mathf.Max(0f, observed));
+            SendBlamerKarmaResponse(sender, creatureId, requestId, false, Mathf.Max(0f, observed));
             return;
         }
 
-        ServerBlamerKarmaState state = GetServerBlamerKarmaState(character, zdo);
+        ServerBlamerKarmaState state = GetServerBlamerKarmaState(zdo);
         if (state.RequestOwner != sender)
         {
             state.RequestOwner = sender;
@@ -6724,8 +6783,8 @@ internal static class CreatureModifierManager
         if (state.HasCachedResponse && state.LastRequestId == requestId)
         {
             SendBlamerKarmaResponse(
-                character,
                 sender,
+                creatureId,
                 requestId,
                 state.LastAccepted,
                 state.LastResponseAccumulated);
@@ -6734,32 +6793,31 @@ internal static class CreatureModifierManager
 
         if (state.HasCachedResponse && requestId < state.LastRequestId)
         {
-            SendBlamerKarmaResponse(character, sender, requestId, false, state.Accumulated);
+            SendBlamerKarmaResponse(sender, creatureId, requestId, false, state.Accumulated);
             return;
         }
 
-        if (IsServerBlamerRequestValid(character, zdo, targetId, out string rejectionReason))
+        if (IsServerBlamerRequestValid(zdo, targetId, out string rejectionReason))
         {
-            accepted = TryGrantServerBlamerKarma(character, zdo, out _, out state);
+            accepted = TryGrantServerBlamerKarma(zdo, out _, out state);
             if (!accepted && Time.unscaledTime >= state.NextAllowedTime)
             {
-                LogBlamerRequestRejection(character, zdo, sender, "the authoritative Karma grant was unavailable");
+                LogBlamerRequestRejection(zdo, sender, "the authoritative Karma grant was unavailable");
             }
         }
         else
         {
-            LogBlamerRequestRejection(character, zdo, sender, rejectionReason);
+            LogBlamerRequestRejection(zdo, sender, rejectionReason);
         }
 
         state.LastRequestId = requestId;
         state.HasCachedResponse = true;
         state.LastAccepted = accepted;
         state.LastResponseAccumulated = state.Accumulated;
-        SendBlamerKarmaResponse(character, sender, requestId, accepted, state.Accumulated);
+        SendBlamerKarmaResponse(sender, creatureId, requestId, accepted, state.Accumulated);
     }
 
     private static bool IsServerBlamerRequestValid(
-        Character character,
         ZDO zdo,
         ZDOID targetId,
         out string rejectionReason)
@@ -6780,22 +6838,69 @@ internal static class CreatureModifierManager
             return false;
         }
 
-        if (character.IsDead() || character.IsTamed() || character.GetBaseAI() is not MonsterAI)
+        Vector3 creaturePosition = zdo.GetPosition();
+        float creatureHealth = zdo.GetFloat(ZDOVars.s_health, float.NaN);
+        if (!IsFinite(creaturePosition) ||
+            float.IsNaN(creatureHealth) ||
+            float.IsInfinity(creatureHealth) ||
+            creatureHealth <= 0f ||
+            zdo.GetBool(ZDOVars.s_dead, false) ||
+            zdo.GetBool(ZDOVars.s_tamed, false))
         {
-            rejectionReason = "the creature is dead, tamed, or has no MonsterAI";
+            rejectionReason = "the creature ZDO position or living health state is invalid";
             return false;
         }
 
-        if (CreatureKarmaManager.IsKarmaSummonedCreature(character) ||
-            !CreatureLevelManager.AllowsModifierEffects(character))
+        if (ZNetScene.instance == null)
+        {
+            rejectionReason = "the server scene is unavailable";
+            return false;
+        }
+
+        GameObject? creaturePrefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+        Character? prefabCharacter = creaturePrefab != null ? creaturePrefab.GetComponent<Character>() : null;
+        if (creaturePrefab == null ||
+            prefabCharacter == null ||
+            prefabCharacter is Player ||
+            creaturePrefab.GetComponent<MonsterAI>() == null)
+        {
+            rejectionReason = "the creature prefab is missing Character or MonsterAI metadata";
+            return false;
+        }
+
+        bool isEnforcer = zdo.GetBool(KarmaEnforcerKey, false);
+        if (zdo.GetBool(KarmaEnforcerSummonedKey, false) ||
+            !CreatureLevelManager.AllowsModifierEffects(zdo, prefabCharacter.IsBoss(), isEnforcer))
         {
             rejectionReason = "modifier effects are disabled for this creature";
             return false;
         }
 
-        float maxHealth = Mathf.Max(0.01f, character.GetMaxHealth());
-        float syncedHealth = zdo.GetFloat(ZDOVars.s_health, character.GetHealth());
-        float syncedHealthRatio = Mathf.Clamp01(syncedHealth / maxHealth);
+        float maxHealth = zdo.GetFloat(ZDOVars.s_maxHealth, float.NaN);
+        if (float.IsNaN(maxHealth) || float.IsInfinity(maxHealth) || maxHealth <= 0f)
+        {
+            int level = Mathf.Max(1, zdo.GetInt(ZDOVars.s_level, 1));
+            maxHealth = Mathf.Max(0.01f, prefabCharacter.m_health * level);
+            if (zdo.GetBool(LevelHealthAppliedKey, false))
+            {
+                float healthMultiplier = zdo.GetFloat(LevelHealthMultiplierKey, float.NaN);
+                if (float.IsNaN(healthMultiplier) || float.IsInfinity(healthMultiplier) || healthMultiplier <= 0f)
+                {
+                    rejectionReason = "the authoritative maximum-health multiplier is invalid";
+                    return false;
+                }
+
+                maxHealth *= healthMultiplier;
+            }
+        }
+
+        if (float.IsNaN(maxHealth) || float.IsInfinity(maxHealth) || maxHealth <= 0f)
+        {
+            rejectionReason = "the authoritative maximum health is invalid";
+            return false;
+        }
+
+        float syncedHealthRatio = Mathf.Clamp01(creatureHealth / maxHealth);
         if (syncedHealthRatio >= fleeHealthRatio)
         {
             rejectionReason = $"server health {syncedHealthRatio:P0} is not below {fleeHealthRatio:P0}";
@@ -6808,28 +6913,22 @@ internal static class CreatureModifierManager
             return false;
         }
 
-        if (targetId == ZDOID.None || ZNetScene.instance == null)
+        if (!TryGetConnectedPlayerZdo(targetId, out ZDO targetZdo, out rejectionReason))
         {
-            rejectionReason = "the player target id or server scene is unavailable";
             return false;
         }
 
-        GameObject targetObject = ZNetScene.instance.FindInstance(targetId);
-        Player? target = targetObject != null ? targetObject.GetComponent<Player>() : null;
-        if (target == null || target.IsDead())
+        Vector3 targetPosition = targetZdo.GetPosition();
+        if (!IsFinite(targetPosition))
         {
-            rejectionReason = "the player target is missing or dead on the server";
+            rejectionReason = "the player target position is invalid";
             return false;
         }
 
-        if (!IsHostileAttacker(character, target))
-        {
-            rejectionReason = "the target is not hostile to the creature";
-            return false;
-        }
-
-        float distance = Vector3.Distance(zdo.GetPosition(), target.transform.position);
-        if (distance > BlamerServerTargetValidationRange)
+        float distance = Vector3.Distance(creaturePosition, targetPosition);
+        if (float.IsNaN(distance) ||
+            float.IsInfinity(distance) ||
+            distance > BlamerServerTargetValidationRange)
         {
             rejectionReason = $"the player target is {distance:0.#}m away";
             return false;
@@ -6839,8 +6938,67 @@ internal static class CreatureModifierManager
         return true;
     }
 
+    private static bool TryGetConnectedPlayerZdo(
+        ZDOID targetId,
+        out ZDO targetZdo,
+        out string rejectionReason)
+    {
+        targetZdo = null!;
+        rejectionReason = "the player target is not a ready connected peer";
+        if (targetId == ZDOID.None ||
+            ZNet.instance == null ||
+            ZDOMan.instance == null ||
+            ZNetScene.instance == null)
+        {
+            return false;
+        }
+
+        ZNetPeer targetPeer = null!;
+        foreach (ZNetPeer peer in ZNet.instance.GetConnectedPeers())
+        {
+            if (peer != null && peer.IsReady() && peer.m_characterID == targetId)
+            {
+                targetPeer = peer;
+                break;
+            }
+        }
+
+        if (targetPeer == null)
+        {
+            return false;
+        }
+
+        targetZdo = ZDOMan.instance.GetZDO(targetId);
+        if (targetZdo == null || targetZdo.GetOwner() != targetPeer.m_uid)
+        {
+            targetZdo = null!;
+            rejectionReason = "the player target ZDO is missing or is not owned by its connected peer";
+            return false;
+        }
+
+        GameObject playerPrefab = ZNetScene.instance.GetPrefab(targetZdo.GetPrefab());
+        if (playerPrefab == null || playerPrefab.GetComponent<Player>() == null)
+        {
+            targetZdo = null!;
+            rejectionReason = "the connected target ZDO does not identify a player";
+            return false;
+        }
+
+        float health = targetZdo.GetFloat(ZDOVars.s_health, float.NaN);
+        if (targetZdo.GetBool(ZDOVars.s_dead, false) ||
+            float.IsNaN(health) ||
+            float.IsInfinity(health) ||
+            health <= 0f)
+        {
+            targetZdo = null!;
+            rejectionReason = "the connected player target is dead or has invalid health";
+            return false;
+        }
+
+        return true;
+    }
+
     private static void LogBlamerRequestRejection(
-        Character character,
         ZDO zdo,
         long sender,
         string reason)
@@ -6856,14 +7014,16 @@ internal static class CreatureModifierManager
 
         NextBlamerRejectionLogTimes[characterId] = now + BlamerRejectionLogInterval;
         NextBlamerGlobalRejectionLogTime = now + BlamerGlobalRejectionLogInterval;
+        GameObject? prefab = ZNetScene.instance?.GetPrefab(zdo.GetPrefab());
+        string prefabName = prefab != null ? Utils.GetPrefabName(prefab) : zdo.GetPrefab().ToString();
         CreatureManagerPlugin.Log.LogWarning(
-            $"Blamer Karma request rejected for '{Utils.GetPrefabName(character.gameObject)}' " +
+            $"Blamer Karma request rejected for '{prefabName}' " +
             $"({characterId}) from owner {sender}: {reason}.");
     }
 
-    private static ServerBlamerKarmaState GetServerBlamerKarmaState(Character character, ZDO zdo)
+    private static ServerBlamerKarmaState GetServerBlamerKarmaState(ZDO zdo)
     {
-        ZDOID characterId = character.GetZDOID();
+        ZDOID characterId = zdo.m_uid;
         if (!ServerBlamerKarmaStates.TryGetValue(characterId, out ServerBlamerKarmaState state))
         {
             state = new ServerBlamerKarmaState();
@@ -6877,12 +7037,11 @@ internal static class CreatureModifierManager
     }
 
     private static bool TryGrantServerBlamerKarma(
-        Character character,
         ZDO zdo,
         out float accumulated,
         out ServerBlamerKarmaState state)
     {
-        state = GetServerBlamerKarmaState(character, zdo);
+        state = GetServerBlamerKarmaState(zdo);
         accumulated = state.Accumulated;
         float now = Time.unscaledTime;
         if (now < state.NextAllowedTime)
@@ -6928,38 +7087,65 @@ internal static class CreatureModifierManager
     }
 
     private static void SendBlamerKarmaResponse(
-        Character character,
         long target,
+        ZDOID creatureId,
         long requestId,
         bool accepted,
         float accumulated)
     {
-        if (character.m_nview != null && character.m_nview.IsValid())
+        if (ZRoutedRpc.instance == null)
         {
-            try
-            {
-                character.m_nview.InvokeRPC(
-                    target,
-                    BlamerKarmaResponseRpc,
-                    requestId,
-                    accepted,
-                    accumulated);
-            }
-            catch
-            {
-                // The owner retries the same request id and receives the cached response.
-            }
+            return;
+        }
+
+        try
+        {
+            ZPackage response = new();
+            response.Write(creatureId);
+            response.Write(requestId);
+            response.Write(accepted);
+            response.Write(accumulated);
+            ZRoutedRpc.instance.InvokeRoutedRPC(target, BlamerKarmaResponseRpc, response);
+        }
+        catch
+        {
+            // The owner retries the same request id and receives the cached response.
         }
     }
 
     private static void RPC_BlamerKarmaResponse(
-        Character character,
         long sender,
-        long requestId,
-        bool accepted,
-        float accumulated)
+        ZPackage package)
     {
         if (!IsTrustedServerRpc(sender))
+        {
+            return;
+        }
+
+        ZDOID creatureId;
+        long requestId;
+        bool accepted;
+        float accumulated;
+        try
+        {
+            creatureId = package.ReadZDOID();
+            requestId = package.ReadLong();
+            accepted = package.ReadBool();
+            accumulated = package.ReadSingle();
+        }
+        catch
+        {
+            return;
+        }
+
+        if (creatureId == ZDOID.None || ZNetScene.instance == null)
+        {
+            return;
+        }
+
+        GameObject? characterObject = ZNetScene.instance.FindInstance(creatureId);
+        Character? character = characterObject != null ? characterObject.GetComponent<Character>() : null;
+        if (character == null)
         {
             return;
         }
@@ -6977,6 +7163,8 @@ internal static class CreatureModifierManager
             !nview.IsValid() ||
             !nview.IsOwner() ||
             !TryGetZdo(character, out ZDO zdo) ||
+            zdo.m_uid != creatureId ||
+            zdo.GetOwner() != ZRoutedRpc.instance.m_id ||
             !zdo.GetBool(AppliedKey, false) ||
             !HasModifier(GetStoredModifierMask(zdo), ModifierMask.Blamer))
         {
@@ -6987,7 +7175,10 @@ internal static class CreatureModifierManager
                                     !CreatureKarmaManager.IsKarmaSummonedCreature(character) &&
                                     character.GetBaseAI() is MonsterAI monsterAI &&
                                     IsBlamerFleeTargetValid(character, monsterAI, zdo);
-        CommitBlamerKarma(character, zdo, accumulated, conditionsStillValid);
+        if (accepted || accumulated > GetBlamerAccumulatedKarma(zdo))
+        {
+            CommitBlamerKarma(character, zdo, accumulated, conditionsStillValid);
+        }
     }
 
     private static void CommitBlamerKarma(

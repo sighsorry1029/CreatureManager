@@ -9,12 +9,18 @@ namespace CreatureManager;
 internal static class CreatureLevelManager
 {
     private const string AppliedKey = "CreatureManager_LevelApplied";
+    private const string ProcessingCompleteKey = "CreatureManager_LevelProcessingComplete";
     private const string DesiredLevelKey = "CreatureManager_DesiredLevel";
     private const string DesiredLevelSourceKey = "CreatureManager_DesiredLevelSource";
     private const string HealthAppliedKey = "CreatureManager_LevelHealthApplied";
     private const string HealthMultiplierKey = "CreatureManager_LevelHealthMultiplier";
     private const string DamageAppliedKey = "CreatureManager_LevelDamageApplied";
     private const string DamageMultiplierKey = "CreatureManager_LevelDamageMultiplier";
+    private const string KarmaBonusRequestRpc = "CreatureManager_LevelKarmaBonusRequest";
+    private const string KarmaBonusResponseRpc = "CreatureManager_LevelKarmaBonusResponse";
+    private const float KarmaBonusRetryInterval = 0.5f;
+    private const float KarmaBonusRequestTimeout = 10f;
+    private const float KarmaBonusMaximumRetryInterval = 5f;
     private const string HueProperty = "_Hue";
     private const string SaturationProperty = "_Saturation";
     private const string ValueProperty = "_Value";
@@ -27,6 +33,19 @@ internal static class CreatureLevelManager
     private static LevelRuleScope CachedRuleSearchScope;
     private static int CachedRuleSearchFrame = -1;
     private static LevelRuleSearch? CachedRuleSearch;
+    private static ZRoutedRpc? RegisteredRoutedRpc;
+    private static int NextKarmaBonusRequestId;
+    private static readonly Dictionary<int, Character> PendingLevelCharacters = new();
+    private static readonly Dictionary<ZDOID, PendingKarmaBonusRequest> PendingKarmaBonusRequests = new();
+    private static readonly Dictionary<ZDOID, int> ResolvedKarmaBonuses = new();
+
+    private sealed class PendingKarmaBonusRequest
+    {
+        internal int RequestId;
+        internal float StartedAt = -1f;
+        internal float NextSendAt;
+        internal int TimeoutCount;
+    }
 
     private enum LevelRuleScope
     {
@@ -99,7 +118,111 @@ internal static class CreatureLevelManager
     {
         ExplicitLevelContexts.Clear();
         ManagedSetLevelDepth = 0;
+        NextKarmaBonusRequestId = 0;
+        PendingLevelCharacters.Clear();
+        PendingKarmaBonusRequests.Clear();
+        ResolvedKarmaBonuses.Clear();
         InvalidateRuleSearchCache();
+    }
+
+    internal static void RegisterRpcs()
+    {
+        if (ZRoutedRpc.instance == null || ReferenceEquals(RegisteredRoutedRpc, ZRoutedRpc.instance))
+        {
+            return;
+        }
+
+        ZRoutedRpc.instance.Register<ZPackage>(KarmaBonusRequestRpc, RPC_KarmaBonusRequest);
+        ZRoutedRpc.instance.Register<ZPackage>(KarmaBonusResponseRpc, RPC_KarmaBonusResponse);
+        RegisteredRoutedRpc = ZRoutedRpc.instance;
+    }
+
+    internal static void UpdatePendingApplications()
+    {
+        RegisterRpcs();
+        if (!CreatureDomainManager.IsSynchronizedConfigurationReady())
+        {
+            return;
+        }
+
+        PruneTimedOutKarmaBonusRequests();
+        if (!IsLevelSystemEnabled())
+        {
+            PendingLevelCharacters.Clear();
+            PendingKarmaBonusRequests.Clear();
+            ResolvedKarmaBonuses.Clear();
+            return;
+        }
+
+        if (PendingLevelCharacters.Count == 0)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<int, Character> entry in PendingLevelCharacters.ToArray())
+        {
+            Character character = entry.Value;
+            if (character == null || character.IsPlayer())
+            {
+                PendingLevelCharacters.Remove(entry.Key);
+                continue;
+            }
+
+            ZNetView? nview = character.m_nview;
+            if (nview == null || !nview.IsValid())
+            {
+                ForgetPendingLevelCharacter(character, character.GetZDOID());
+                continue;
+            }
+
+            ZDO zdo = nview.GetZDO();
+            if (zdo == null)
+            {
+                continue;
+            }
+
+            if (IsDeadOrWithoutHealth(character, zdo))
+            {
+                ForgetPendingLevelCharacter(character, zdo.m_uid);
+                continue;
+            }
+
+            if (zdo.GetBool(ProcessingCompleteKey, false))
+            {
+                SynchronizeCompletedRuntimeState(character, zdo);
+                if (nview.IsOwner())
+                {
+                    CreatureModifierManager.TryRollModifiers(character);
+                }
+
+                ForgetPendingLevelCharacter(character, zdo.m_uid);
+                continue;
+            }
+
+            if (ShouldKeepExistingRuntime(character))
+            {
+                ForgetPendingLevelCharacter(character, zdo.m_uid);
+                continue;
+            }
+
+            if (nview.IsOwner())
+            {
+                TryApplyLevel(character);
+            }
+            else
+            {
+                PendingKarmaBonusRequests.Remove(zdo.m_uid);
+                ResolvedKarmaBonuses.Remove(zdo.m_uid);
+            }
+        }
+    }
+
+    internal static void ForgetCharacter(Character character)
+    {
+        if (character != null)
+        {
+            ForgetPendingLevelCharacter(character, character.GetZDOID());
+        }
     }
 
     private static void InvalidateRuleSearchCache()
@@ -163,8 +286,20 @@ internal static class CreatureLevelManager
 
     internal static void TryApplyLevel(Character character)
     {
-        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer())
+        if (character == null || character.IsPlayer())
         {
+            return;
+        }
+
+        if (!CreatureDomainManager.IsSynchronizedConfigurationReady())
+        {
+            PendingLevelCharacters[character.GetInstanceID()] = character;
+            return;
+        }
+
+        if (!IsLevelSystemEnabled())
+        {
+            ForgetPendingLevelCharacter(character, character.GetZDOID());
             return;
         }
 
@@ -173,20 +308,35 @@ internal static class CreatureLevelManager
             return;
         }
 
-        if (ZNet.instance != null && !ZNet.instance.IsServer())
+        ZNetView? nview = character.m_nview;
+        if (nview == null || !nview.IsValid())
         {
             return;
         }
 
-        ZNetView? nview = character.m_nview;
-        if (nview == null || !nview.IsValid() || !nview.IsOwner())
+        if (!nview.IsOwner())
         {
+            PendingLevelCharacters[character.GetInstanceID()] = character;
             return;
         }
 
         ZDO zdo = nview.GetZDO();
         if (zdo == null)
         {
+            return;
+        }
+
+        if (IsDeadOrWithoutHealth(character, zdo))
+        {
+            ForgetPendingLevelCharacter(character, zdo.m_uid);
+            return;
+        }
+
+        if (zdo.GetBool(ProcessingCompleteKey, false))
+        {
+            SynchronizeCompletedRuntimeState(character, zdo);
+            CreatureModifierManager.TryRollModifiers(character);
+            ForgetPendingLevelCharacter(character, zdo.m_uid);
             return;
         }
 
@@ -198,10 +348,15 @@ internal static class CreatureLevelManager
             }
             else if (ShouldRollLevel(character))
             {
+                if (!TryResolveKarmaBonus(character, zdo, out int karmaBonus))
+                {
+                    PendingLevelCharacters[character.GetInstanceID()] = character;
+                    return;
+                }
+
                 int level = 1;
                 bool hasLevelRule = TrySelectLevelWeights(character, out List<float> weights) &&
                                     TrySelectLevel(weights, GetPrefabName(character.gameObject), out level);
-                int karmaBonus = CreatureKarmaManager.GetLevelBonus(character);
                 if (hasLevelRule || karmaBonus > 0)
                 {
                     int finalLevel = Math.Max(1, (hasLevelRule ? level : 1) + karmaBonus);
@@ -227,7 +382,260 @@ internal static class CreatureLevelManager
             zdo.Set(DamageAppliedKey, true);
         }
 
+        ApplyRuntimeVisuals(character);
+        zdo.Set(ProcessingCompleteKey, true);
         CreatureModifierManager.TryRollModifiers(character);
+        ForgetPendingLevelCharacter(character, zdo.m_uid);
+    }
+
+    private static bool TryResolveKarmaBonus(Character character, ZDO zdo, out int bonus)
+    {
+        bonus = 0;
+        if (!CreatureKarmaManager.RequiresAuthoritativeLevelBonus(zdo, character.IsBoss()))
+        {
+            return true;
+        }
+
+        if (ZNet.instance == null || ZNet.instance.IsServer())
+        {
+            bonus = CreatureKarmaManager.GetLevelBonus(character);
+            return true;
+        }
+
+        if (ResolvedKarmaBonuses.TryGetValue(zdo.m_uid, out bonus))
+        {
+            ResolvedKarmaBonuses.Remove(zdo.m_uid);
+            bonus = Math.Max(0, bonus);
+            return true;
+        }
+
+        QueueKarmaBonusRequest(zdo);
+        return false;
+    }
+
+    private static void QueueKarmaBonusRequest(ZDO zdo)
+    {
+        ZDOID characterId = zdo.m_uid;
+        if (characterId == ZDOID.None)
+        {
+            return;
+        }
+
+        if (!PendingKarmaBonusRequests.TryGetValue(characterId, out PendingKarmaBonusRequest request))
+        {
+            int requestId = unchecked(++NextKarmaBonusRequestId);
+            if (requestId <= 0)
+            {
+                requestId = NextKarmaBonusRequestId = 1;
+            }
+
+            request = new PendingKarmaBonusRequest
+            {
+                RequestId = requestId
+            };
+            PendingKarmaBonusRequests[characterId] = request;
+        }
+
+        float now = Time.unscaledTime;
+        if (now < request.NextSendAt)
+        {
+            return;
+        }
+
+        RegisterRpcs();
+        if (ZRoutedRpc.instance == null)
+        {
+            return;
+        }
+
+        ZPackage package = new();
+        package.Write(request.RequestId);
+        package.Write(characterId);
+        ZRoutedRpc.instance.InvokeRoutedRPC(
+            ZRoutedRpc.instance.GetServerPeerID(),
+            KarmaBonusRequestRpc,
+            package);
+        if (request.StartedAt < 0f)
+        {
+            request.StartedAt = now;
+        }
+
+        float retryInterval = Mathf.Min(
+            KarmaBonusMaximumRetryInterval,
+            KarmaBonusRetryInterval * Math.Max(1, request.TimeoutCount + 1));
+        request.NextSendAt = now + retryInterval;
+    }
+
+    private static void PruneTimedOutKarmaBonusRequests()
+    {
+        float now = Time.unscaledTime;
+        foreach (KeyValuePair<ZDOID, PendingKarmaBonusRequest> entry in PendingKarmaBonusRequests.ToArray())
+        {
+            PendingKarmaBonusRequest request = entry.Value;
+            if (request.StartedAt < 0f || now - request.StartedAt < KarmaBonusRequestTimeout)
+            {
+                continue;
+            }
+
+            request.StartedAt = now;
+            request.NextSendAt = now;
+            request.TimeoutCount++;
+            if (request.TimeoutCount == 1 || request.TimeoutCount % 6 == 0)
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"Still waiting for the server Karma level bonus for creature {entry.Key}; " +
+                    "keeping level application pending and retrying at a reduced rate.");
+            }
+        }
+    }
+
+    private static void RPC_KarmaBonusRequest(long sender, ZPackage package)
+    {
+        if (ZNet.instance == null ||
+            !ZNet.instance.IsServer() ||
+            ZRoutedRpc.instance == null)
+        {
+            return;
+        }
+
+        try
+        {
+            int requestId = package.ReadInt();
+            ZDOID characterId = package.ReadZDOID();
+            bool ready = false;
+            int bonus = 0;
+            ZNetPeer peer = ZNet.instance.GetPeer(sender);
+            if (requestId > 0 &&
+                characterId != ZDOID.None &&
+                peer != null &&
+                peer.IsReady() &&
+                ZDOMan.instance != null &&
+                ZNetScene.instance != null)
+            {
+                ZDO zdo = ZDOMan.instance.GetZDO(characterId);
+                GameObject? prefab = zdo != null ? ZNetScene.instance.GetPrefab(zdo.GetPrefab()) : null;
+                if (zdo != null &&
+                    zdo.GetOwner() == sender &&
+                    prefab != null &&
+                    prefab.GetComponent<Character>() is Character prefabCharacter &&
+                    prefab.GetComponent<Player>() == null)
+                {
+                    CreatureKarmaManager.TrackPotentialBlockerZdo(zdo, prefabCharacter.IsBoss());
+                    bonus = CreatureKarmaManager.GetAuthoritativeLevelBonus(zdo);
+                    ready = true;
+                }
+            }
+
+            ZPackage response = new();
+            response.Write(requestId);
+            response.Write(characterId);
+            response.Write(ready);
+            response.Write(Math.Max(0, bonus));
+            ZRoutedRpc.instance.InvokeRoutedRPC(sender, KarmaBonusResponseRpc, response);
+        }
+        catch (Exception ex)
+        {
+            CreatureManagerPlugin.Log.LogWarning($"Failed to process a Karma level bonus request: {ex.Message}");
+        }
+    }
+
+    private static void RPC_KarmaBonusResponse(long sender, ZPackage package)
+    {
+        if (ZRoutedRpc.instance == null || sender != ZRoutedRpc.instance.GetServerPeerID())
+        {
+            return;
+        }
+
+        try
+        {
+            int requestId = package.ReadInt();
+            ZDOID characterId = package.ReadZDOID();
+            bool ready = package.ReadBool();
+            int bonus = Math.Max(0, package.ReadInt());
+            if (!PendingKarmaBonusRequests.TryGetValue(characterId, out PendingKarmaBonusRequest request) ||
+                request.RequestId != requestId)
+            {
+                return;
+            }
+
+            if (!TryFindPendingLevelCharacter(characterId, out Character character) ||
+                character.m_nview == null ||
+                !character.m_nview.IsValid() ||
+                !character.m_nview.IsOwner() ||
+                character.m_nview.GetZDO()?.GetOwner() != ZRoutedRpc.instance.m_id)
+            {
+                PendingKarmaBonusRequests.Remove(characterId);
+                ResolvedKarmaBonuses.Remove(characterId);
+                return;
+            }
+
+            if (!ready)
+            {
+                return;
+            }
+
+            PendingKarmaBonusRequests.Remove(characterId);
+            ResolvedKarmaBonuses[characterId] = bonus;
+            TryApplyLevel(character);
+        }
+        catch (Exception ex)
+        {
+            CreatureManagerPlugin.Log.LogWarning($"Failed to process a Karma level bonus response: {ex.Message}");
+        }
+    }
+
+    private static bool TryFindPendingLevelCharacter(ZDOID characterId, out Character character)
+    {
+        foreach (Character candidate in PendingLevelCharacters.Values)
+        {
+            if (candidate != null && candidate.GetZDOID() == characterId)
+            {
+                character = candidate;
+                return true;
+            }
+        }
+
+        character = null!;
+        return false;
+    }
+
+    private static void ForgetPendingLevelCharacter(Character character, ZDOID characterId)
+    {
+        if (character != null)
+        {
+            PendingLevelCharacters.Remove(character.GetInstanceID());
+        }
+
+        if (characterId != ZDOID.None)
+        {
+            PendingKarmaBonusRequests.Remove(characterId);
+            ResolvedKarmaBonuses.Remove(characterId);
+        }
+    }
+
+    private static void SynchronizeCompletedRuntimeState(Character character, ZDO zdo)
+    {
+        int level = zdo.GetInt(
+            DesiredLevelKey,
+            zdo.GetInt(ZDOVars.s_level, Math.Max(1, character.GetLevel())));
+        level = Math.Max(1, level);
+        if (character.GetLevel() != level)
+        {
+            character.m_level = level;
+        }
+
+        ApplyRuntimeVisuals(character);
+    }
+
+    private static bool IsDeadOrWithoutHealth(Character character, ZDO zdo)
+    {
+        if (character.IsDead() || zdo.GetBool(ZDOVars.s_dead, false))
+        {
+            return true;
+        }
+
+        float health = zdo.GetFloat(ZDOVars.s_health, float.PositiveInfinity);
+        return !float.IsNaN(health) && !float.IsInfinity(health) && health <= 0f;
     }
 
     internal static bool HasManagedLevel(Character character)
@@ -245,6 +653,30 @@ internal static class CreatureLevelManager
 
         ZDO zdo = nview.GetZDO();
         return zdo != null && zdo.GetBool(AppliedKey, false);
+    }
+
+    internal static bool IsReadyForModifierApplication(Character character)
+    {
+        if (character == null ||
+            character.IsPlayer() ||
+            !CreatureDomainManager.IsSynchronizedConfigurationReady())
+        {
+            return false;
+        }
+
+        if (ShouldKeepExistingRuntime(character))
+        {
+            return true;
+        }
+
+        ZNetView? nview = character.m_nview;
+        if (nview == null || !nview.IsValid())
+        {
+            return false;
+        }
+
+        ZDO zdo = nview.GetZDO();
+        return zdo != null && zdo.GetBool(ProcessingCompleteKey, false);
     }
 
     internal static bool TryApplyForcedLevel(Character character, int level, out string error)
@@ -330,11 +762,6 @@ internal static class CreatureLevelManager
             return;
         }
 
-        if (ZNet.instance != null && !ZNet.instance.IsServer())
-        {
-            return;
-        }
-
         ZNetView? nview = character.m_nview;
         if (nview == null || !nview.IsValid() || !nview.IsOwner())
         {
@@ -382,11 +809,6 @@ internal static class CreatureLevelManager
         }
 
         if (!IsLevelSystemEnabled() || character == null || character.IsPlayer())
-        {
-            return false;
-        }
-
-        if (ZNet.instance != null && !ZNet.instance.IsServer())
         {
             return false;
         }
@@ -459,10 +881,18 @@ internal static class CreatureLevelManager
 
     private static void SetManagedLevel(Character character, int level)
     {
+        float previousMaxHealth = character.GetMaxHealth();
+        float previousHealth = character.GetHealth();
+        float missingHealth = Mathf.Max(0f, previousMaxHealth - previousHealth);
         ManagedSetLevelDepth++;
         try
         {
             character.SetLevel(level);
+            float updatedMaxHealth = character.GetMaxHealth();
+            if (previousHealth > 0f && previousMaxHealth > 0f && updatedMaxHealth > 0f)
+            {
+                character.SetHealth(Mathf.Max(1f, updatedMaxHealth - missingHealth));
+            }
         }
         finally
         {
@@ -544,7 +974,10 @@ internal static class CreatureLevelManager
 
     internal static void ApplyRuntimeVisuals(Character character)
     {
-        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer())
+        if (!IsLevelSystemEnabled() ||
+            character == null ||
+            character.IsPlayer() ||
+            !CreatureDomainManager.IsSynchronizedConfigurationReady())
         {
             return;
         }

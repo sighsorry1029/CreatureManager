@@ -333,15 +333,14 @@ internal static class CreatureConsoleCommands
             return;
         }
 
-        ExecuteKarma(args, player, message => args.Context?.AddString(message));
+        ExecuteKarma(args, player.transform.position, message => args.Context?.AddString(message));
     }
 
-    private static void ExecuteKarma(Terminal.ConsoleEventArgs args, Player player, Action<string> reply)
+    private static void ExecuteKarma(Terminal.ConsoleEventArgs args, Vector3 playerPosition, Action<string> reply)
     {
-        Vector3 position = player.transform.position;
         if (args.Length == 1)
         {
-            reply(CreatureKarmaManager.GetDebugLine(position));
+            reply(CreatureKarmaManager.GetDebugLine(playerPosition));
             return;
         }
 
@@ -355,8 +354,8 @@ internal static class CreatureConsoleCommands
             return;
         }
 
-        CreatureKarmaManager.SetDebugKarma(position, value);
-        reply(CreatureKarmaManager.GetDebugLine(position));
+        CreatureKarmaManager.SetDebugKarma(playerPosition, value);
+        reply(CreatureKarmaManager.GetDebugLine(playerPosition));
     }
 
     private static void Spawn(Terminal.ConsoleEventArgs args)
@@ -379,10 +378,18 @@ internal static class CreatureConsoleCommands
             return;
         }
 
-        ExecuteSpawn(args, player, message => args.Context?.AddString(message));
+        ExecuteSpawn(
+            args,
+            player.transform.position,
+            player.transform.rotation,
+            message => args.Context?.AddString(message));
     }
 
-    private static void ExecuteSpawn(Terminal.ConsoleEventArgs args, Player player, Action<string> reply)
+    private static void ExecuteSpawn(
+        Terminal.ConsoleEventArgs args,
+        Vector3 playerPosition,
+        Quaternion playerRotation,
+        Action<string> reply)
     {
         if (!TryParseSpawnArguments(args, out string prefabName, out int level, out List<string> modifiers, out string error))
         {
@@ -403,8 +410,8 @@ internal static class CreatureConsoleCommands
             return;
         }
 
-        Vector3 position = GetCommandSpawnPosition(player);
-        Quaternion rotation = Quaternion.Euler(0f, player.transform.eulerAngles.y, 0f);
+        Vector3 position = GetCommandSpawnPosition(playerPosition, playerRotation * Vector3.forward);
+        Quaternion rotation = Quaternion.Euler(0f, playerRotation.eulerAngles.y, 0f);
         GameObject? spawned = null;
         CreatureManagerSpawnLifecycle.BeginSourceContext(CreatureSpawnSourceKind.Managed);
         try
@@ -441,7 +448,7 @@ internal static class CreatureConsoleCommands
         reply($"Spawned {prefab.name} at level {level} with modifiers: {modifierText}.");
     }
 
-    internal static bool TryHandleRemoteAdminCommand(ZNet znet, ZRpc rpc, string command)
+    internal static bool TryHandleAuthenticatedRemoteAdminCommand(ZNet znet, ZRpc rpc, string command)
     {
         string commandName = GetRemoteCommandName(command);
         if (!string.Equals(commandName, SpawnCommandName, StringComparison.OrdinalIgnoreCase) &&
@@ -450,26 +457,29 @@ internal static class CreatureConsoleCommands
             return false;
         }
 
-        Action<string> reply = message => znet.RemotePrint(rpc, message);
+        if (!znet.IsServer() || rpc == null)
+        {
+            return false;
+        }
+
+        Action<string> reply = message =>
+        {
+            try
+            {
+                znet.RemotePrint(rpc, message);
+            }
+            catch
+            {
+                // The authenticated peer may disconnect while the server is executing
+                // the command. Command handling must not escape through the Harmony prefix.
+            }
+        };
         try
         {
-            string hostName = rpc.GetSocket()?.GetHostName() ?? "";
-            if (hostName.Length == 0 || !znet.IsAdmin(hostName))
-            {
-                reply("You are not admin");
-                return true;
-            }
-
-            ZNetPeer? peer = null;
-            foreach (ZNetPeer candidate in znet.GetPeers())
-            {
-                if (candidate != null && ReferenceEquals(candidate.m_rpc, rpc))
-                {
-                    peer = candidate;
-                    break;
-                }
-            }
-
+            // ZNet.InternalCommand is reached only after vanilla or ServerDevcommands has
+            // authorized the RPC. Rechecking the vanilla admin list here would reject
+            // permissions granted by ServerDevcommands.
+            ZNetPeer? peer = znet.GetPeer(rpc);
             if (peer == null ||
                 !peer.IsReady() ||
                 peer.m_characterID.IsNone() ||
@@ -493,12 +503,17 @@ internal static class CreatureConsoleCommands
                 return true;
             }
 
-            GameObject playerObject = ZNetScene.instance.FindInstance(peer.m_characterID);
-            Player? player = playerObject != null ? playerObject.GetComponent<Player>() : null;
-            if (player == null || player.GetZDOID() != peer.m_characterID)
+            Vector3 playerPosition = playerZdo.GetPosition();
+            Quaternion playerRotation = playerZdo.GetRotation();
+            if (!IsFinite(playerPosition))
             {
-                reply("Could not resolve the remote admin's active player.");
+                reply("Could not validate the remote admin's player position.");
                 return true;
+            }
+
+            if (!IsFinite(playerRotation))
+            {
+                playerRotation = Quaternion.identity;
             }
 
             Terminal.ConsoleEventArgs args = new(command, Console.instance);
@@ -510,13 +525,14 @@ internal static class CreatureConsoleCommands
                     return true;
                 }
 
-                ExecuteSpawn(args, player, reply);
+                ExecuteSpawn(args, playerPosition, playerRotation, reply);
             }
             else
             {
-                ExecuteKarma(args, player, reply);
+                ExecuteKarma(args, playerPosition, reply);
             }
 
+            string hostName = rpc.GetSocket()?.GetHostName() ?? "";
             CreatureManagerPlugin.Log.LogInfo(
                 $"Remote admin '{hostName}' executed CreatureManager command '{commandName}'.");
         }
@@ -606,9 +622,9 @@ internal static class CreatureConsoleCommands
         return true;
     }
 
-    private static Vector3 GetCommandSpawnPosition(Player player)
+    private static Vector3 GetCommandSpawnPosition(Vector3 playerPosition, Vector3 playerForward)
     {
-        Vector3 forward = player.transform.forward;
+        Vector3 forward = playerForward;
         forward.y = 0f;
         if (forward.sqrMagnitude < 0.01f)
         {
@@ -616,7 +632,7 @@ internal static class CreatureConsoleCommands
         }
 
         forward.Normalize();
-        Vector3 position = player.transform.position + forward * 3f;
+        Vector3 position = playerPosition + forward * 3f;
         if (position.y >= 4000f)
         {
             return position + Vector3.up * 0.5f;
@@ -636,6 +652,21 @@ internal static class CreatureConsoleCommands
         }
 
         return position;
+    }
+
+    private static bool IsFinite(Vector3 value)
+    {
+        return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+    }
+
+    private static bool IsFinite(Quaternion value)
+    {
+        return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z) && IsFinite(value.w);
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
     private static string GetScope(Terminal.ConsoleEventArgs args)
