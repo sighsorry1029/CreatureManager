@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using HarmonyLib;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -13,7 +14,10 @@ internal static class CreatureTextureRegistry
 {
     private static readonly Dictionary<string, FileTextureEntry> FileTextureCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, Texture2D> ResourceTextureCache = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly MethodInfo? LoadImageMethod = ResolveLoadImageMethod();
+    private static readonly MethodInfo? LoadImageMethod = AccessTools.Method(
+        typeof(ImageConversion),
+        nameof(ImageConversion.LoadImage),
+        new[] { typeof(Texture2D), typeof(byte[]) });
 
     private sealed class FileTextureEntry
     {
@@ -165,24 +169,6 @@ internal static class CreatureTextureRegistry
         }
 
         return LoadImageMethod.Invoke(null, new object[] { texture, bytes }) is true;
-    }
-
-    private static MethodInfo? ResolveLoadImageMethod()
-    {
-        Type? type = Type.GetType("UnityEngine.ImageConversion, UnityEngine.ImageConversionModule");
-        if (type == null)
-        {
-            try
-            {
-                type = Assembly.Load("UnityEngine.ImageConversionModule").GetType("UnityEngine.ImageConversion");
-            }
-            catch
-            {
-                type = null;
-            }
-        }
-
-        return type?.GetMethod("LoadImage", new[] { typeof(Texture2D), typeof(byte[]) });
     }
 
     private static void CacheResourceTexturesIfNeeded()

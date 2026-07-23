@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.6
+
+- Remove runtime assembly loading for `UnityEngine.ImageConversionModule`; PNG decoding now resolves `ImageConversion.LoadImage` through reflection from Unity's existing compile-time type reference.
+- Restrict optional compatibility type discovery to assemblies already loaded by the game and keep `UnityEngine.ImageConversionModule.dll` out of the release package.
+
 ## 1.0.5
 
 - Fix dedicated-server `cm:spawn` and `cm:karma` execution for vanilla admins and Server Devcommands permissions by handling commands after authentication and resolving the invoking player from authoritative peer ZDO state.

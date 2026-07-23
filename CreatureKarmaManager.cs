@@ -2943,12 +2943,6 @@ AshLands:
 
     private static Type? FindLoadedType(string typeName, string assemblyName)
     {
-        Type? direct = Type.GetType($"{typeName}, {assemblyName}");
-        if (direct != null)
-        {
-            return direct;
-        }
-
         foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
             AssemblyName name;
