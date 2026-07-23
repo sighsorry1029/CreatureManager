@@ -239,14 +239,32 @@ internal static class CreatureKarmaMinimapHud
 
     internal static void Create(Minimap minimap)
     {
-        if (minimap == null || KarmaText != null || minimap.m_mapImageSmall == null)
+        if (minimap == null || KarmaText != null)
+        {
+            return;
+        }
+
+        Transform? parent = null;
+        if (minimap.m_smallRoot != null)
+        {
+            parent = minimap.m_smallRoot.transform;
+        }
+        else if (minimap.m_mapSmall != null && minimap.m_mapSmall.transform.parent != null)
+        {
+            parent = minimap.m_mapSmall.transform.parent;
+        }
+        else if (minimap.m_mapImageSmall != null)
+        {
+            parent = minimap.m_mapImageSmall.transform;
+        }
+
+        if (parent == null)
         {
             return;
         }
 
         try
         {
-            Transform parent = minimap.m_mapImageSmall.transform;
             GameObject textObject = new("CreatureManager_KarmaMinimapText", typeof(RectTransform), typeof(Text), typeof(Outline))
             {
                 layer = LayerMask.NameToLayer("UI")
@@ -259,6 +277,9 @@ internal static class CreatureKarmaMinimapHud
             rect.pivot = new Vector2(1f, 0f);
             rect.sizeDelta = new Vector2(220f, 36f);
             rect.anchoredPosition = new Vector2(-8f, 8f);
+            rect.localRotation = Quaternion.identity;
+            rect.localScale = Vector3.one;
+            rect.SetAsLastSibling();
 
             Text text = textObject.GetComponent<Text>();
             text.font = Resources.FindObjectsOfTypeAll<Font>()

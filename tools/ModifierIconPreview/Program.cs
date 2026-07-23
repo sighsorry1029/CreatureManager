@@ -37,10 +37,10 @@ IconSpec[] icons =
         FromUnity(1f, 0.95f, 0.28f),
         ToneShape: GetStaggeringTone,
         SecondaryColor: FromUnity(1f, 0.86f, 0.12f)),
-    new("undodgeable", IsUndodgeablePixel, FromUnity(1f, 0.96f, 0.9f)),
+    new("undodgeable", IsUndodgeablePixel, FromUnity(1f, 0.96f, 0.9f), FromUnity(1f, 0.12f, 0.08f)),
 
     // Defense
-    new("armored", IsCuirassPixel, FromUnity(0.08f, 0.28f, 0.68f), FromUnity(0.32f, 0.72f, 1f)),
+    new("armored", IsCuirassPixel, FromUnity(0.08f, 0.28f, 0.68f)),
     new(
         "deathward",
         IsDeathwardPixel,
@@ -58,7 +58,7 @@ IconSpec[] icons =
         SecondaryColor: FromUnity(0.32f, 0.68f, 1f)),
     new("vortex", IsSpiralPixel, FromUnity(0.58f, 0.72f, 0.82f), FromUnity(0.36f, 0.55f, 0.68f)),
     new("adaptive", IsAdaptivePixel, FromUnity(0.7f, 1f, 0.28f), FromUnity(0.92f, 1f, 0.58f)),
-    new("unflinching", IsUnflinchingPixel, FromUnity(0.82f, 0.72f, 0.48f)),
+    new("unflinching", IsUnflinchingPixel, FromUnity(0.92f, 0.82f, 0.55f), FromUnity(1f, 0.62f, 0.11f)),
     new("chameleon", IsChameleonPixel, FromUnity(0.1f, 0.78f, 0.62f), FromUnity(0.82f, 1f, 0.18f)),
 
     // Affliction
@@ -101,7 +101,7 @@ IconSpec[] icons =
         ToneShape: GetReapingTone,
         SecondaryColor: FromUnity(0.48f, 0.28f, 0.13f)),
     new("blink", IsBlinkPixel, FromUnity(0.58f, 0.36f, 1f)),
-    new("omen", IsEyePixel, FromUnity(0.95f, 0.18f, 1f)),
+    new("omen", IsEyePixel, FromUnity(0.78f, 0.49f, 1f), FromUnity(1f, 0.188f, 0.157f)),
     new("juggernaut", IsAnchorPixel, FromUnity(0.82f, 0.72f, 0.48f)),
     new(
         "blamer",
@@ -137,7 +137,7 @@ static Bitmap RenderPreview(IReadOnlyList<IconSpec> icons)
 {
     const int cols = 5;
     const int sourceZoom = 2;
-    const int hudSize = 18;
+    const int hudSize = 16;
     const int hudZoom = 4;
     const int cellW = 245;
     const int cellH = 190;
@@ -158,7 +158,7 @@ static Bitmap RenderPreview(IReadOnlyList<IconSpec> icons)
     using SolidBrush mutedBrush = new(Color.FromArgb(170, 190, 200, 210));
     using Pen borderPen = new(Color.FromArgb(85, 105, 115, 125));
 
-    g.DrawString("CreatureManager modifier sprites - exact 64x64 pixel masks + 18px HUD sample", titleFont, textBrush, 18, 15);
+    g.DrawString($"CreatureManager modifier sprites - exact 64x64 pixel masks + {hudSize}px HUD sample", titleFont, textBrush, 18, 15);
 
     for (int i = 0; i < icons.Count; i++)
     {
@@ -182,7 +182,7 @@ static Bitmap RenderPreview(IReadOnlyList<IconSpec> icons)
 
         g.DrawString(icon.Name, labelFont, textBrush, cellX + 12, cellY + 145);
         g.DrawString("64px source", smallFont, mutedBrush, cellX + 12, cellY + 163);
-        g.DrawString("18px HUD", smallFont, mutedBrush, cellX + 160, cellY + 106);
+        g.DrawString($"{hudSize}px HUD", smallFont, mutedBrush, cellX + 160, cellY + 106);
     }
 
     return result;
@@ -287,17 +287,7 @@ static bool IsCuirassPixel(int x, int y, out bool isAccent)
     bool neck = Distance(point, new Vec2(32f, 62f)) <= 10.5f;
     bool leftArmhole = Distance(point, new Vec2(4f, 49f)) <= 11.5f;
     bool rightArmhole = Distance(point, new Vec2(60f, 49f)) <= 11.5f;
-    bool body = outer && !neck && !leftArmhole && !rightArmhole;
-    if (!body)
-    {
-        return false;
-    }
-
-    bool centerRidge = IsThickLine(point, new Vec2(32f, 49f), new Vec2(32f, 11f), 2.2f);
-    bool lowerPlate = IsThickLine(point, new Vec2(17f, 18f), new Vec2(32f, 11f), 1.8f) ||
-                      IsThickLine(point, new Vec2(32f, 11f), new Vec2(47f, 18f), 1.8f);
-    isAccent = centerRidge || lowerPlate;
-    return true;
+    return outer && !neck && !leftArmhole && !rightArmhole;
 }
 
 static bool IsSwordPixel(int x, int y, out bool isBorder)
@@ -655,16 +645,17 @@ static bool IsAdaptiveArrowHead(Vec2 point, Vec2 center, float angleDegrees)
     return MathF.Abs(Dot(relative, radial)) <= halfWidth;
 }
 
-static bool IsEyePixel(int x, int y, out bool isBorder)
+static bool IsEyePixel(int x, int y, out bool isPupil)
 {
     Vec2 point = new(x + 0.5f, y + 0.5f);
     Vec2 center = new(31.5f, 31.5f);
     float dx = MathF.Abs(point.X - center.X);
     float dy = MathF.Abs(point.Y - center.Y);
-    bool eye = dx / 26f + dy / 15f <= 1f;
-    bool pupil = Distance(point, center) <= 7f;
-    isBorder = eye && (dx / 24f + dy / 13f >= 1f || pupil);
-    return eye && (isBorder || pupil);
+    bool eye = dx / 27f + dy / 18f <= 1f;
+    bool pupil = Distance(point, center) <= 8.5f;
+    bool border = eye && dx / 20f + dy / 11f >= 1f;
+    isPupil = pupil;
+    return border || pupil;
 }
 
 static bool IsReapingPixel(int x, int y, out bool isAccent)
@@ -748,11 +739,6 @@ static IconTone GetSpiritTone(int x, int y)
     bool cross = MathF.Abs(point.Y - 31f) <= 3.5f && point.X >= 17f && point.X <= 47f;
     bool ankh = loop || stem || cross;
     bool jewel = Distance(point, new Vec2(32f, 31f)) <= 3.2f;
-    bool rays = IsThickLine(point, new Vec2(32f, 59f), new Vec2(32f, 63f), 1.8f) ||
-                IsThickLine(point, new Vec2(17f, 55f), new Vec2(12f, 60f), 1.8f) ||
-                IsThickLine(point, new Vec2(47f, 55f), new Vec2(52f, 60f), 1.8f) ||
-                IsThickLine(point, new Vec2(10f, 43f), new Vec2(15f, 43f), 1.8f) ||
-                IsThickLine(point, new Vec2(49f, 43f), new Vec2(54f, 43f), 1.8f);
 
     if (jewel)
     {
@@ -764,7 +750,7 @@ static IconTone GetSpiritTone(int x, int y)
         return IconTone.Primary;
     }
 
-    return rays ? IconTone.Secondary : IconTone.Clear;
+    return IconTone.Clear;
 }
 
 static bool IsBrokenShieldPixel(int x, int y, out bool isRightHalf)
@@ -870,7 +856,7 @@ static IconTone GetArmorPiercingTone(int x, int y)
     return IconTone.Clear;
 }
 
-static bool IsUndodgeablePixel(int x, int y, out bool isBorder)
+static bool IsUndodgeablePixel(int x, int y, out bool isMiddleDiamond)
 {
     Vec2 point = new(x + 0.5f, y + 0.5f);
     bool corners =
@@ -898,7 +884,7 @@ static bool IsUndodgeablePixel(int x, int y, out bool isBorder)
     });
     bool diamond = outer && !inner;
     bool center = Distance(point, new Vec2(32f, 32f)) <= 3.5f;
-    isBorder = corners || diamond;
+    isMiddleDiamond = diamond;
     return corners || diamond || center;
 }
 
@@ -1140,18 +1126,18 @@ static bool IsBlinkPixel(int x, int y, out bool isBorder)
     return portal || dash || arrow || spark;
 }
 
-static bool IsUnflinchingPixel(int x, int y, out bool isSlash)
+static bool IsUnflinchingPixel(int x, int y, out bool isStar)
 {
-    isSlash = false;
     Vec2 point = new(x + 0.5f, y + 0.5f);
     Vec2 center = new(31.5f, 32f);
     Vec2 ellipsePoint = new(point.X - center.X, (point.Y - center.Y) * 1.5f);
     float ellipseRadius = MathF.Sqrt(ellipsePoint.X * ellipsePoint.X + ellipsePoint.Y * ellipsePoint.Y);
     float angle = MathF.Atan2(ellipsePoint.Y, ellipsePoint.X) * 180f / MathF.PI;
-    bool upperArc = ellipseRadius is >= 23f and <= 26.5f && angle is >= 18f and <= 162f;
-    bool lowerArc = ellipseRadius is >= 23f and <= 26.5f && angle is >= -162f and <= -18f;
+    bool upperArc = ellipseRadius is >= 20.5f and <= 27.5f && angle is >= 18f and <= 162f;
+    bool lowerArc = ellipseRadius is >= 20.5f and <= 27.5f && angle is >= -162f and <= -18f;
     bool stars = IsFivePointStarPixel(point, new Vec2(18f, 21f), 10f, 4.5f) ||
-                 IsFivePointStarPixel(point, new Vec2(45f, 46f), 7f, 3.2f);
+                 IsFivePointStarPixel(point, new Vec2(45f, 46f), 9f, 4f);
+    isStar = stars;
     return upperArc || lowerArc || stars;
 }
 

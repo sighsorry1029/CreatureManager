@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.0.2";
+    internal const string ModVersion = "1.0.3";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -81,10 +81,10 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, Ordered("If on, the configuration is locked and can be changed by server admins only.", 100));
             NormalCreatureNameplateRange = config("1 - General", "Normal Creature Nameplate Range", 30f, Ordered("Distance in meters for normal creature nameplates and health bars. Vanilla is 10. Boss HUD range is not changed by this option.", 90, new AcceptableValueRange<float>(10f, 50f)), synchronizedSetting: false);
             ShowSneakHoverResistances = config("1 - General", "Show Sneak Hover Resistances", Toggle.On, Ordered("If on, sneaking while hovering a non-tamed creature shows non-Normal and non-Ignore damage modifiers under its nameplate. Uses Normal Creature Nameplate Range.", 80), synchronizedSetting: false);
-            ModifierHudIconLayout = config("1 - General", "Modifier HUD Icon Layout", ModifierIconLayout.FixedCategorySlots, Ordered("FixedCategorySlots keeps Offense, Defense, Affliction, and Special icons in their category slots. RightPacked removes empty category gaps and packs visible icons against the right edge of creature and boss HUDs.", 70), synchronizedSetting: false);
+            ModifierHudIconLayout = config("1 - General", "Modifier HUD Icon Layout", ModifierIconLayout.FixedCategorySlots, Ordered("FixedCategorySlots keeps the first Offense, Defense, Affliction, and Special icon in its category slot; forced same-category extras fill unused slots so none are hidden. RightPacked removes category gaps and packs every visible icon against the right edge of creature and boss HUDs.", 70), synchronizedSetting: false);
             GenerateSampleTextures = config("1 - General", "Generate Sample Textures", Toggle.On, Ordered("If on, bundled sample PNGs are created in CreatureManager/textures when missing. Existing files are never overwritten or deleted; Off stops automatic creation but does not disable existing textures.", 60), synchronizedSetting: false);
             EnableLevelSystem = config("2 - Levels", "Enable Level System", Toggle.On, Ordered("Master switch for CreatureManager level rules, level damage/health scaling, distance scaling, modifiers, and level visuals.", 100));
-            BiomeLevelPreset = config("2 - Levels", "Biome Level Preset", LevelBiomePreset.Easy, Ordered("Built-in level weights for vanilla biome names when Enable Level System is On. Explicit biome, group, and prefab rules override this preset; Global remains the fallback for non-boss creatures and Enforcers.", 90));
+            BiomeLevelPreset = config("2 - Levels", "Biome Level Preset", LevelBiomePreset.Easy, Ordered("Built-in level weights for vanilla biome names when Enable Level System is On. levels.yml lists the biome distributions for every preset; copy or uncomment the desired preset's biome blocks to tune its difficulty as explicit overrides. Explicit biome, group, and prefab rules override this preset; Global remains the fallback for non-boss creatures and Enforcers.", 90));
             BossesFollowBiomeLevelPreset = config("2 - Levels", "Bosses Follow Biome Level Preset", Toggle.On, Ordered("If on, regular bosses can use the built-in Biome Level Preset as a level fallback when no Boss, group, or prefab level rule applies. Other omitted boss fields never fall back to Global.", 85));
             ApplyLevelScaleToSaddleableCreatures = config("2 - Levels", "Apply Level Scale To Saddle-able Creatures", Toggle.On, Ordered("If off, levels.yml scalePerLevel is not applied to creatures that can use a saddle.", 70));
             EnableGlobalModifiers = config("2 - Levels", "Global Modifiers", Toggle.On, Ordered("Master switch for modifier rolls and effects on non-boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 69));

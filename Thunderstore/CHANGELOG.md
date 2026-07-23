@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3
+
+- Rework normal-creature and boss level HUDs with fixed 17 px stars and modifier icons: keep stars at the health-bar lower left, modifiers at the lower right, allow the blocks to overlap, and align their visible edges optically.
+- Preserve individual one- and two-star displays, compact higher levels to a star plus count, and add a fallback star when a HUD has no usable vanilla star artwork.
+- Show every forced modifier icon up to the four-modifier limit, including multiple modifiers from the same category, in both `FixedCategorySlots` and `RightPacked` layouts.
+- Improve 17 px readability of the Armored, Omen, Spirit, Undodgeable, and Unflinching artwork, and keep hover resistance text below the expanded HUD content.
+- Keep the Karma minimap label upright with rotating ZenCompass configurations by attaching it to a stable small-map root.
+- Reduce steady-state modifier HUD allocations and redundant layout work.
+- Clarify in the Biome Level Preset setting that `levels.yml` contains copyable preset biome distributions.
+
 ## 1.0.2
 
 - Add dedicated-server remote-admin support for `cm:spawn` and `cm:karma`, using the invoking admin's active player and returning results to their console.

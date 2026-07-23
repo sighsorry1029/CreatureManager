@@ -116,7 +116,6 @@ internal static class CreatureModifierManager
     private const string StarGroupName = "CreatureManager_StarGroup";
     private const string StarSlotNamePrefix = "CreatureManager_StarSlot";
     private const string StarNumberName = "CreatureManager_StarNumber";
-    private const string HudSpacerName = "CreatureManager_HudSpacer";
     private const string IconContainerName = "CreatureManager_ModifierIcons";
     private const string OffenseIconSlotName = "CreatureManager_ModifierSlot_Offense";
     private const string DefenseIconSlotName = "CreatureManager_ModifierSlot_Defense";
@@ -230,14 +229,17 @@ internal static class CreatureModifierManager
     private const float EffectPlaybackRange = 100f;
     private const float VortexEffectRequestValidationRange = 64f;
     private const int MaxActiveModifiers = 4;
-    private const float IconSize = 14f;
-    private const float BlamerActiveIconSize = IconSize * 2f;
+    private const int ModifierIconSize = 17;
+    private const float BlamerActiveIconScale = 2f;
     private const float BlamerActiveIconGap = 2f;
     private const float IconSpacing = 1f;
     private const float LevelContentWidth = 104f;
     private const float LevelContentHeight = 20f;
-    private const float StarIconSize = 16f;
-    private const float StarNumberWidth = 20f;
+    private const int StarIconSize = 17;
+    private const int StarLayerBaseSize = 16;
+    private const float StarNumberBaseFontSize = 15f;
+    private const float StarNumberBaseWidth = 20f;
+    private const float HudEdgeOpticalBleedRatio = 0.125f;
     private const float StarLayerTolerance = 5f;
     private const float LevelContentBelowHealthGap = 2f;
     private const float ResistanceTextGap = 2f;
@@ -245,7 +247,6 @@ internal static class CreatureModifierManager
     private const float ResistanceTextMinWidth = 150f;
     private const float BossContentWidth = 220f;
     private const float BossContentBelowHealthGap = 2f;
-    private const float ModifierIconWidth = IconSize * MaxActiveModifiers + IconSpacing * (MaxActiveModifiers - 1);
     private static readonly string[] SneakMethodNames = { "IsCrouching", "IsCrouch", "IsSneaking", "InSneak", "IsStealth" };
     private static readonly string[] SneakFieldNames = { "m_crouching", "m_crouch", "m_crouchToggled", "m_isCrouching", "m_isCrouch", "m_sneaking" };
     private static Sprite? ArmoredSprite;
@@ -280,6 +281,7 @@ internal static class CreatureModifierManager
     private static Sprite? BlinkSprite;
     private static Sprite? KnockbackSprite;
     private static Sprite? BlamerSprite;
+    private static Sprite? FallbackStarSprite;
     private static readonly ModifierSpec[] ModifierSpecs =
     {
         new(ModifierGroup.Offense, "enraged", "Enraged", ModifierMask.Enraged, EnragedBonusKey, EnragedDefaultPower, GetEnragedSprite, value => value.Enraged, (value, chance) => value.Enraged = chance, value => value.Enraged, (value, power) => value.Enraged = power, power => $"Increases outgoing damage by {FormatPercent(power)}."),
@@ -399,7 +401,6 @@ internal static class CreatureModifierManager
     };
     private static ConditionalWeakTable<RectTransform, HudIconState> HudIconStates = new();
     private static ConditionalWeakTable<RectTransform, BlamerAlertIconState> BlamerAlertIconStates = new();
-    private static ConditionalWeakTable<RectTransform, VanillaStarState> VanillaStarStates = new();
     private static ConditionalWeakTable<RectTransform, HudContentState> HudContentStates = new();
     private static int CachedHoverFrame = -1;
     private static float CachedHoverRange;
@@ -753,20 +754,6 @@ internal static class CreatureModifierManager
     private sealed class BlamerAlertIconState
     {
         internal Image? Icon;
-        internal bool VisibilityInitialized;
-        internal bool Visible;
-    }
-
-    private sealed class VanillaStarState
-    {
-        internal VanillaStarState(RectTransform block)
-        {
-            Images = block.GetComponentsInChildren<Image>(true)
-                .Where(image => image != null && image.gameObject.name.StartsWith("star", StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-        }
-
-        internal Image[] Images { get; }
         internal bool VisibilityInitialized;
         internal bool Visible;
     }
@@ -1987,7 +1974,6 @@ internal static class CreatureModifierManager
         BlinkAttackAiOverridePool.Clear();
         HudIconStates = new ConditionalWeakTable<RectTransform, HudIconState>();
         BlamerAlertIconStates = new ConditionalWeakTable<RectTransform, BlamerAlertIconState>();
-        VanillaStarStates = new ConditionalWeakTable<RectTransform, VanillaStarState>();
         HudContentStates = new ConditionalWeakTable<RectTransform, HudContentState>();
         // Registration follows the ZRoutedRpc instance lifetime. It has no unregister API and Register uses Dictionary.Add.
         CachedHoveredCharacter = null;
@@ -8013,28 +7999,26 @@ internal static class CreatureModifierManager
         int stars = Math.Max(0, character.GetLevel() - 1);
         if (character.IsBoss() || CreatureKarmaManager.IsBossHudOnly(character))
         {
-            UpdateBossHud(character, hud, stars, hasModifiers, armoredReduction, enragedBonus, visibleModifiers);
+            UpdateBossHud(hud, stars, hasModifiers, armoredReduction, enragedBonus, visibleModifiers);
             return;
         }
 
-        RectTransform? levelBlock = GetLevelBlock(hud.m_level2, hud.m_level3, stars);
-        if (levelBlock == null)
+        SetBossContentActive(hud, false);
+        HideVanillaLevelBlocks(hud);
+        if (stars <= 0 && !hasModifiers)
+        {
+            SetLevelContentActive(hud, false);
+            return;
+        }
+
+        RectTransform? content = EnsureLevelContent(hud, stars > 0);
+        if (content == null)
         {
             return;
         }
 
-        bool compactStars = stars >= 3;
-        bool showVanillaStars = stars > 0 && !compactStars;
-        SetVanillaLevelBlockVisibility(hud, levelBlock, showVanillaStars);
-        if (!compactStars && !hasModifiers)
-        {
-            SetLevelContentActive(levelBlock, false);
-            return;
-        }
-
-        RectTransform content = EnsureLevelContent(levelBlock, hud.m_healthFast, hud.m_name);
         content.gameObject.SetActive(true);
-        UpdateStarBadge(content, hud.m_level2, hud.m_level3, hud.m_name, compactStars ? stars : 0);
+        UpdateStarBadge(content, hud.m_level2, hud.m_level3, hud.m_name, stars, showIndividualStars: stars <= 2);
         RectTransform iconContainer = EnsureIconContainer(content);
         UpdateModifierIcons(iconContainer, visibleModifiers, armoredReduction, enragedBonus);
     }
@@ -8080,7 +8064,6 @@ internal static class CreatureModifierManager
             rect.anchorMax = new Vector2(0.5f, 1f);
             rect.pivot = new Vector2(0.5f, 0f);
             rect.anchoredPosition = new Vector2(0f, BlamerActiveIconGap);
-            rect.sizeDelta = new Vector2(BlamerActiveIconSize, BlamerActiveIconSize);
             rect.localScale = Vector3.one;
             icon.sprite = GetBlamerSprite();
             icon.color = Color.white;
@@ -8089,6 +8072,14 @@ internal static class CreatureModifierManager
             icon.enabled = true;
             state.Icon = icon;
             state.VisibilityInitialized = false;
+        }
+
+        float iconSize = ModifierIconSize * BlamerActiveIconScale;
+        Vector2 desiredSize = new(iconSize, iconSize);
+        RectTransform activeIconRect = state.Icon.rectTransform;
+        if (activeIconRect.sizeDelta != desiredSize)
+        {
+            activeIconRect.sizeDelta = desiredSize;
         }
 
         if (state.VisibilityInitialized && state.Visible == visible)
@@ -8101,30 +8092,20 @@ internal static class CreatureModifierManager
         state.Visible = visible;
     }
 
-    private static void SetVanillaLevelBlockVisibility(
-        EnemyHud.HudData hud,
-        RectTransform? levelBlock,
-        bool visible)
+    private static void HideVanillaLevelBlocks(EnemyHud.HudData hud)
     {
-        if (hud.m_level2 != null && hud.m_level2 != levelBlock)
+        if (hud.m_level2 != null)
         {
             hud.m_level2.gameObject.SetActive(false);
         }
 
-        if (hud.m_level3 != null && hud.m_level3 != levelBlock)
+        if (hud.m_level3 != null)
         {
             hud.m_level3.gameObject.SetActive(false);
-        }
-
-        if (levelBlock != null)
-        {
-            levelBlock.gameObject.SetActive(visible);
-            SetVanillaStarChildrenVisible(levelBlock, visible);
         }
     }
 
     private static void UpdateBossHud(
-        Character character,
         EnemyHud.HudData hud,
         int stars,
         bool hasModifiers,
@@ -8132,27 +8113,15 @@ internal static class CreatureModifierManager
         float enragedBonus,
         ModifierMask visibleModifiers)
     {
-        RectTransform? levelBlock = GetLevelBlock(hud.m_level2, hud.m_level3, stars);
-        bool compactStars = stars >= 3;
-        bool showVanillaStars = stars > 0 && !compactStars && levelBlock != null;
-
-        SetVanillaLevelBlockVisibility(hud, levelBlock, showVanillaStars);
-        if (levelBlock != null)
-        {
-            if (showVanillaStars)
-            {
-                PositionBossVanillaLevelBlock(levelBlock, hud.m_healthFast, stars);
-            }
-        }
-
-        bool showCustomStars = stars > 0 && (compactStars || !showVanillaStars);
-        if (!showCustomStars && !hasModifiers)
+        SetLevelContentActive(hud, false);
+        HideVanillaLevelBlocks(hud);
+        if (stars <= 0 && !hasModifiers)
         {
             SetBossContentActive(hud, false);
             return;
         }
 
-        RectTransform? content = EnsureBossLevelContent(hud);
+        RectTransform? content = EnsureBossLevelContent(hud, stars > 0);
         if (content == null)
         {
             return;
@@ -8164,24 +8133,15 @@ internal static class CreatureModifierManager
             hud.m_level2,
             hud.m_level3,
             hud.m_name,
-            showCustomStars ? stars : 0,
-            showCustomStars && !compactStars);
+            stars,
+            showIndividualStars: stars <= 2);
         RectTransform iconContainer = EnsureIconContainer(content);
         UpdateModifierIcons(iconContainer, visibleModifiers, armoredReduction, enragedBonus);
     }
 
     private static void HideManagedHudContent(EnemyHud.HudData hud)
     {
-        if (hud.m_level2 != null)
-        {
-            SetLevelContentActive(hud.m_level2, false);
-        }
-
-        if (hud.m_level3 != null)
-        {
-            SetLevelContentActive(hud.m_level3, false);
-        }
-
+        SetLevelContentActive(hud, false);
         SetBossContentActive(hud, false);
     }
 
@@ -8488,30 +8448,20 @@ internal static class CreatureModifierManager
 
     private static RectTransform? GetResistanceHudParent(EnemyHud.HudData hud)
     {
-        if (hud.m_gui != null && hud.m_gui.transform is RectTransform guiRect)
-        {
-            return guiRect;
-        }
-
-        RectTransform? healthRoot = GetHealthRoot(hud.m_healthFast);
-        if (healthRoot != null)
-        {
-            return healthRoot;
-        }
-
-        return hud.m_name != null && hud.m_name.rectTransform.parent is RectTransform nameParent
-            ? nameParent
-            : null;
+        return GetHudContentParent(hud);
     }
 
     private static void PositionResistanceText(RectTransform rect, EnemyHud.HudData hud, int lineCount)
     {
         RectTransform? parent = rect.parent as RectTransform;
         float height = Mathf.Max(ResistanceLineHeight, ResistanceLineHeight * Mathf.Max(1, lineCount));
+        float contentHeight = GetActiveLevelContentHeight(parent);
         RectTransform? healthRect = GetHealthRoot(hud.m_healthFast);
         if (parent != null && healthRect != null && healthRect.parent == parent)
         {
-            float width = Mathf.Max(ResistanceTextMinWidth, healthRect.rect.width, healthRect.sizeDelta.x);
+            float width = Mathf.Max(ResistanceTextMinWidth, Mathf.Max(healthRect.rect.width, healthRect.sizeDelta.x));
+            float healthHeight = Mathf.Max(1f, Mathf.Max(healthRect.rect.height, healthRect.sizeDelta.y));
+            float healthBottom = healthRect.anchoredPosition.y - healthRect.pivot.y * healthHeight;
             ApplyRectLayout(
                 rect,
                 healthRect.anchorMin,
@@ -8519,7 +8469,7 @@ internal static class CreatureModifierManager
                 new Vector2(0.5f, 1f),
                 new Vector2(
                     healthRect.anchoredPosition.x,
-                    healthRect.anchoredPosition.y - healthRect.rect.height * 0.5f - LevelContentBelowHealthGap - LevelContentHeight - ResistanceTextGap),
+                    healthBottom - LevelContentBelowHealthGap - contentHeight - ResistanceTextGap),
                 new Vector2(width, height));
             return;
         }
@@ -8527,6 +8477,8 @@ internal static class CreatureModifierManager
         RectTransform? nameRect = hud.m_name != null ? hud.m_name.rectTransform : null;
         if (parent != null && nameRect != null && nameRect.parent == parent)
         {
+            float nameHeight = Mathf.Max(1f, Mathf.Max(nameRect.rect.height, nameRect.sizeDelta.y));
+            float nameBottom = nameRect.anchoredPosition.y - nameRect.pivot.y * nameHeight;
             ApplyRectLayout(
                 rect,
                 nameRect.anchorMin,
@@ -8534,8 +8486,8 @@ internal static class CreatureModifierManager
                 new Vector2(0.5f, 1f),
                 new Vector2(
                     nameRect.anchoredPosition.x,
-                    nameRect.anchoredPosition.y - nameRect.rect.height * 0.5f - LevelContentHeight - ResistanceTextGap),
-                new Vector2(Mathf.Max(ResistanceTextMinWidth, nameRect.rect.width, nameRect.sizeDelta.x), height));
+                    nameBottom - contentHeight - ResistanceTextGap),
+                new Vector2(Mathf.Max(ResistanceTextMinWidth, Mathf.Max(nameRect.rect.width, nameRect.sizeDelta.x)), height));
             return;
         }
 
@@ -8544,8 +8496,45 @@ internal static class CreatureModifierManager
             new Vector2(0.5f, 0.5f),
             new Vector2(0.5f, 0.5f),
             new Vector2(0.5f, 1f),
-            new Vector2(0f, -LevelContentHeight - ResistanceTextGap),
+            new Vector2(0f, -contentHeight - ResistanceTextGap),
             new Vector2(ResistanceTextMinWidth, height));
+    }
+
+    private static float GetActiveLevelContentHeight(RectTransform? parent)
+    {
+        if (parent == null)
+        {
+            return LevelContentHeight;
+        }
+
+        Transform? content = parent.Find(LevelContentName);
+        if (content == null || !content.gameObject.activeSelf)
+        {
+            content = parent.Find(BossLevelContentName);
+        }
+
+        if (content == null || !content.gameObject.activeSelf)
+        {
+            return LevelContentHeight;
+        }
+
+        RectTransform contentRect = (RectTransform)content;
+        float height = Mathf.Max(LevelContentHeight, Mathf.Max(contentRect.rect.height, contentRect.sizeDelta.y));
+        RectTransform? starGroup = content.Find(StarGroupName) as RectTransform;
+        if (starGroup != null && starGroup.gameObject.activeSelf)
+        {
+            height = Mathf.Max(height, Mathf.Max(starGroup.rect.height, starGroup.sizeDelta.y));
+        }
+
+        RectTransform? iconContainer = content.Find(IconContainerName) as RectTransform;
+        if (iconContainer != null &&
+            HudIconStates.TryGetValue(iconContainer, out HudIconState iconState) &&
+            iconState.Visible != ModifierMask.None)
+        {
+            height = Mathf.Max(height, Mathf.Max(iconContainer.rect.height, iconContainer.sizeDelta.y));
+        }
+
+        return height;
     }
 
     private static void SetResistanceTextActive(EnemyHud.HudData hud, bool active)
@@ -8572,7 +8561,7 @@ internal static class CreatureModifierManager
 
     private static void SetBossContentActive(EnemyHud.HudData hud, bool active)
     {
-        RectTransform? parent = GetBossHudParent(hud);
+        RectTransform? parent = GetHudContentParent(hud);
         if (parent == null)
         {
             return;
@@ -8591,9 +8580,25 @@ internal static class CreatureModifierManager
         }
     }
 
-    private static RectTransform? GetLevelBlock(RectTransform? level2, RectTransform? level3, int stars)
+    private static void SetLevelContentActive(EnemyHud.HudData hud, bool active)
     {
-        return stars >= 2 && level3 != null ? level3 : level2 != null ? level2 : level3;
+        RectTransform? parent = GetHudContentParent(hud);
+        if (parent == null)
+        {
+            return;
+        }
+
+        HudContentState state = HudContentStates.GetValue(parent, _ => new HudContentState());
+        if (!state.LevelContentSearched)
+        {
+            state.LevelContentSearched = true;
+            state.LevelContent = parent.Find(LevelContentName) as RectTransform;
+        }
+
+        if (state.LevelContent != null && state.LevelContent.gameObject.activeSelf != active)
+        {
+            state.LevelContent.gameObject.SetActive(active);
+        }
     }
 
     private static bool TryFindVanillaStarSlot(RectTransform? block, ref RectTransform? sourceBlock, ref Vector2 sourceCenter, ref float bestScore)
@@ -8635,45 +8640,14 @@ internal static class CreatureModifierManager
         return color.a * (brightest + brightest - darkest + yellowBias);
     }
 
-    private static void SetVanillaStarChildrenVisible(RectTransform block, bool visible)
+    private static RectTransform? EnsureLevelContent(EnemyHud.HudData hud, bool showStars)
     {
-        VanillaStarState state = VanillaStarStates.GetValue(block, value => new VanillaStarState(value));
-        if (state.VisibilityInitialized && state.Visible == visible)
+        RectTransform? parent = GetHudContentParent(hud);
+        if (parent == null)
         {
-            return;
+            return null;
         }
 
-        state.VisibilityInitialized = true;
-        state.Visible = visible;
-        foreach (Image image in state.Images)
-        {
-            if (image != null && image.gameObject.activeSelf != visible)
-            {
-                image.gameObject.SetActive(visible);
-            }
-        }
-    }
-
-    private static void SetLevelContentActive(RectTransform levelBlock, bool active)
-    {
-        RectTransform parent = levelBlock.parent as RectTransform ?? levelBlock;
-        HudContentState state = HudContentStates.GetValue(parent, _ => new HudContentState());
-        if (!state.LevelContentSearched)
-        {
-            state.LevelContentSearched = true;
-            state.LevelContent = parent.Find(LevelContentName) as RectTransform;
-        }
-
-        if (state.LevelContent != null && state.LevelContent.gameObject.activeSelf != active)
-        {
-            state.LevelContent.gameObject.SetActive(active);
-        }
-    }
-
-    private static RectTransform EnsureLevelContent(RectTransform levelBlock, GuiBar? healthFast, TextMeshProUGUI? nameText)
-    {
-        RectTransform parent = levelBlock.parent as RectTransform ?? levelBlock;
-        RectTransform? healthRect = GetHealthReferenceRect(levelBlock, healthFast);
         HudContentState state = HudContentStates.GetValue(parent, _ => new HudContentState());
         if (!state.LevelContentSearched)
         {
@@ -8683,7 +8657,7 @@ internal static class CreatureModifierManager
 
         if (state.LevelContent != null)
         {
-            PositionLevelContent(state.LevelContent, levelBlock, healthRect);
+            PositionLevelContent(state.LevelContent, hud, showStars);
             return state.LevelContent;
         }
 
@@ -8691,28 +8665,19 @@ internal static class CreatureModifierManager
         RectTransform content = (RectTransform)contentObject.transform;
         content.SetParent(parent, false);
         content.SetAsLastSibling();
-        PositionLevelContent(content, levelBlock, healthRect);
-
-        HorizontalLayoutGroup layout = contentObject.GetComponent<HorizontalLayoutGroup>();
-        layout.childAlignment = TextAnchor.MiddleLeft;
-        layout.spacing = 0f;
-        layout.childControlWidth = true;
-        layout.childControlHeight = false;
-        layout.childForceExpandWidth = false;
-        layout.childForceExpandHeight = false;
-        layout.padding = new RectOffset(0, 0, 0, 0);
+        PositionLevelContent(content, hud, showStars);
+        ConfigureContentLayout(content);
 
         EnsureStarGroup(content);
-        EnsureStarNumber(content, nameText);
-        EnsureSpacer(content);
+        EnsureStarNumber(content, hud.m_name);
         EnsureIconContainer(content);
         state.LevelContent = content;
         return content;
     }
 
-    private static RectTransform? EnsureBossLevelContent(EnemyHud.HudData hud)
+    private static RectTransform? EnsureBossLevelContent(EnemyHud.HudData hud, bool showStars)
     {
-        RectTransform? parent = GetBossHudParent(hud);
+        RectTransform? parent = GetHudContentParent(hud);
         if (parent == null)
         {
             return null;
@@ -8727,7 +8692,7 @@ internal static class CreatureModifierManager
 
         if (state.BossContent != null)
         {
-            PositionBossContent(state.BossContent, hud.m_healthFast, hud.m_name);
+            PositionBossContent(state.BossContent, hud, showStars);
             return state.BossContent;
         }
 
@@ -8735,9 +8700,9 @@ internal static class CreatureModifierManager
         RectTransform content = (RectTransform)contentObject.transform;
         content.SetParent(parent, false);
         content.SetAsLastSibling();
-        PositionBossContent(content, hud.m_healthFast, hud.m_name);
+        PositionBossContent(content, hud, showStars);
 
-        ConfigureBossContentLayout(content);
+        ConfigureContentLayout(content);
 
         EnsureStarGroup(content);
         EnsureStarNumber(content, hud.m_name);
@@ -8746,7 +8711,7 @@ internal static class CreatureModifierManager
         return content;
     }
 
-    private static void ConfigureBossContentLayout(RectTransform content)
+    private static void ConfigureContentLayout(RectTransform content)
     {
         HorizontalLayoutGroup layout = content.GetComponent<HorizontalLayoutGroup>();
         if (layout == null)
@@ -8760,42 +8725,43 @@ internal static class CreatureModifierManager
         layout.childControlHeight = false;
         layout.childForceExpandWidth = false;
         layout.childForceExpandHeight = false;
-        layout.padding = new RectOffset(0, 0, 0, 0);
+        int leftPadding = -Mathf.RoundToInt(StarIconSize * HudEdgeOpticalBleedRatio);
+        if (layout.padding.left != leftPadding ||
+            layout.padding.right != 0 ||
+            layout.padding.top != 0 ||
+            layout.padding.bottom != 0)
+        {
+            // Procedural and vanilla stars retain transparent sprite padding, so bleed the block outward optically.
+            layout.padding = new RectOffset(leftPadding, 0, 0, 0);
+        }
     }
 
-    private static RectTransform? GetBossHudParent(EnemyHud.HudData hud)
+    private static RectTransform? GetHudContentParent(EnemyHud.HudData hud)
     {
-        if (hud.m_gui != null && hud.m_gui.transform is RectTransform guiRect)
-        {
-            return guiRect;
-        }
-
         RectTransform? healthRoot = GetHealthRoot(hud.m_healthFast);
-        if (healthRoot != null)
+        if (healthRoot != null && healthRoot.parent is RectTransform healthParent)
         {
-            return healthRoot;
+            return healthParent;
         }
 
-        return hud.m_name != null && hud.m_name.rectTransform.parent is RectTransform nameParent
-            ? nameParent
+        if (hud.m_level2 != null && hud.m_level2.parent is RectTransform level2Parent)
+        {
+            return level2Parent;
+        }
+
+        if (hud.m_level3 != null && hud.m_level3.parent is RectTransform level3Parent)
+        {
+            return level3Parent;
+        }
+
+        if (hud.m_name != null && hud.m_name.rectTransform.parent is RectTransform nameParent)
+        {
+            return nameParent;
+        }
+
+        return hud.m_gui != null && hud.m_gui.transform is RectTransform guiRect
+            ? guiRect
             : null;
-    }
-
-    private static RectTransform? GetHealthReferenceRect(RectTransform levelBlock, GuiBar? healthFast)
-    {
-        RectTransform? healthRoot = GetHealthRoot(healthFast);
-        if (healthRoot != null && healthRoot.parent == levelBlock.parent)
-        {
-            return healthRoot;
-        }
-
-        RectTransform? healthBar = healthFast != null ? healthFast.transform as RectTransform : null;
-        if (healthBar != null && healthBar.parent == levelBlock.parent)
-        {
-            return healthBar;
-        }
-
-        return null;
     }
 
     private static RectTransform? GetHealthRoot(GuiBar? healthFast)
@@ -8809,89 +8775,56 @@ internal static class CreatureModifierManager
         return healthBar != null ? healthBar.parent as RectTransform : null;
     }
 
-    private static void PositionLevelContent(RectTransform content, RectTransform levelBlock, RectTransform? healthRect)
+    private static void PositionLevelContent(RectTransform content, EnemyHud.HudData hud, bool showStars)
+    {
+        PositionHudContent(content, hud, LevelContentWidth, LevelContentBelowHealthGap, GetLevelContentHeight(showStars));
+    }
+
+    private static void PositionBossContent(RectTransform content, EnemyHud.HudData hud, bool showStars)
+    {
+        PositionHudContent(content, hud, BossContentWidth, BossContentBelowHealthGap, GetLevelContentHeight(showStars));
+    }
+
+    private static void PositionHudContent(
+        RectTransform content,
+        EnemyHud.HudData hud,
+        float fallbackWidth,
+        float belowReferenceGap,
+        float contentHeight)
     {
         RectTransform? parent = content.parent as RectTransform;
-        RectTransform? reference = healthRect != null && healthRect.parent == parent
-            ? healthRect
-            : levelBlock.parent == parent ? levelBlock : null;
-
-        if (reference == null)
-        {
-            ApplyRectLayout(
-                content,
-                new Vector2(0.5f, 0.5f),
-                new Vector2(0.5f, 0.5f),
-                new Vector2(0.5f, 0.5f),
-                Vector2.zero,
-                new Vector2(LevelContentWidth, LevelContentHeight));
-            return;
-        }
-
-        if (healthRect != null && healthRect.parent == parent)
-        {
-            PositionBelowHealth(content, parent, healthRect);
-            return;
-        }
-
-        Vector2 position = reference.anchoredPosition;
-        float width = Mathf.Max(LevelContentWidth, reference.rect.width, reference.sizeDelta.x);
-        ApplyRectLayout(content, reference.anchorMin, reference.anchorMax, reference.pivot, position, new Vector2(width, LevelContentHeight));
-    }
-
-    private static void PositionBelowHealth(RectTransform content, RectTransform parent, RectTransform healthRect)
-    {
-        float width = Mathf.Max(1f, healthRect.rect.width, healthRect.sizeDelta.x);
-
-        ApplyRectLayout(
-            content,
-            healthRect.anchorMin,
-            healthRect.anchorMax,
-            healthRect.pivot,
-            new Vector2(
-                healthRect.anchoredPosition.x,
-                healthRect.anchoredPosition.y - healthRect.rect.height * 0.5f - LevelContentBelowHealthGap - LevelContentHeight * 0.5f),
-            new Vector2(width, LevelContentHeight));
-    }
-
-    private static void PositionBossVanillaLevelBlock(RectTransform levelBlock, GuiBar? healthFast, int stars)
-    {
-        RectTransform? parent = levelBlock.parent as RectTransform;
-        RectTransform? healthRect = GetHealthRoot(healthFast);
-        if (parent == null || healthRect == null || healthRect.parent != parent)
-        {
-            return;
-        }
-
-        float healthWidth = Mathf.Max(healthRect.rect.width, healthRect.sizeDelta.x);
-        float levelWidth = Mathf.Max(levelBlock.rect.width, levelBlock.sizeDelta.x, StarIconSize * Mathf.Clamp(stars, 1, 2) + 2f);
-        SetRectValue(levelBlock, healthRect.anchorMin, healthRect.anchorMax, new Vector2(0.5f, 0.5f), new Vector2(
-            healthRect.anchoredPosition.x - healthWidth * 0.5f + levelWidth * 0.5f,
-            healthRect.anchoredPosition.y - healthRect.rect.height * 0.5f - BossContentBelowHealthGap - LevelContentHeight * 0.5f));
-    }
-
-    private static void PositionBossContent(RectTransform content, GuiBar? healthFast, TextMeshProUGUI? nameText)
-    {
-        RectTransform? parent = content.parent as RectTransform;
-        RectTransform? healthRect = GetHealthRoot(healthFast);
+        RectTransform? healthRect = GetHealthRoot(hud.m_healthFast);
         if (parent != null && healthRect != null && healthRect.parent == parent)
         {
-            PositionBelowBossHealth(content, healthRect);
+            PositionBelowReference(
+                content,
+                healthRect,
+                belowReferenceGap,
+                minimumWidth: 1f,
+                contentHeight: contentHeight);
             return;
         }
 
-        RectTransform? nameRect = nameText != null ? nameText.rectTransform : null;
-        if (parent != null && nameRect != null && nameRect.parent == parent)
+        RectTransform? levelReference = hud.m_level2 != null && hud.m_level2.parent == parent
+            ? hud.m_level2
+            : hud.m_level3 != null && hud.m_level3.parent == parent ? hud.m_level3 : null;
+        if (levelReference != null)
         {
+            float width = Mathf.Max(fallbackWidth, Mathf.Max(levelReference.rect.width, levelReference.sizeDelta.x));
             ApplyRectLayout(
                 content,
-                nameRect.anchorMin,
-                nameRect.anchorMax,
-                new Vector2(0.5f, 0.5f),
-                new Vector2(
-                    nameRect.anchoredPosition.x,
-                    nameRect.anchoredPosition.y - nameRect.rect.height * 0.5f - BossContentBelowHealthGap - LevelContentHeight * 0.5f),
-                new Vector2(BossContentWidth, LevelContentHeight));
+                levelReference.anchorMin,
+                levelReference.anchorMax,
+                levelReference.pivot,
+                levelReference.anchoredPosition,
+                new Vector2(width, contentHeight));
+            return;
+        }
+
+        RectTransform? nameRect = hud.m_name != null ? hud.m_name.rectTransform : null;
+        if (parent != null && nameRect != null && nameRect.parent == parent)
+        {
+            PositionBelowReference(content, nameRect, belowReferenceGap, fallbackWidth, contentHeight);
             return;
         }
 
@@ -8901,22 +8834,29 @@ internal static class CreatureModifierManager
             new Vector2(0.5f, 0.5f),
             new Vector2(0.5f, 0.5f),
             Vector2.zero,
-            new Vector2(BossContentWidth, LevelContentHeight));
+            new Vector2(fallbackWidth, contentHeight));
     }
 
-    private static void PositionBelowBossHealth(RectTransform content, RectTransform healthRect)
+    private static void PositionBelowReference(
+        RectTransform content,
+        RectTransform reference,
+        float gap,
+        float minimumWidth,
+        float contentHeight)
     {
-        float width = Mathf.Max(BossContentWidth, healthRect.rect.width, healthRect.sizeDelta.x);
+        float referenceWidth = Mathf.Max(1f, Mathf.Max(reference.rect.width, reference.sizeDelta.x));
+        float referenceHeight = Mathf.Max(1f, Mathf.Max(reference.rect.height, reference.sizeDelta.y));
+        float width = Mathf.Max(minimumWidth, referenceWidth);
+        float referenceBottom = reference.anchoredPosition.y - reference.pivot.y * referenceHeight;
+        float contentY = referenceBottom - gap - (1f - reference.pivot.y) * contentHeight;
 
         ApplyRectLayout(
             content,
-            healthRect.anchorMin,
-            healthRect.anchorMax,
-            healthRect.pivot,
-            new Vector2(
-                healthRect.anchoredPosition.x,
-                healthRect.anchoredPosition.y - healthRect.rect.height * 0.5f - BossContentBelowHealthGap - LevelContentHeight * 0.5f),
-            new Vector2(width, LevelContentHeight));
+            reference.anchorMin,
+            reference.anchorMax,
+            reference.pivot,
+            new Vector2(reference.anchoredPosition.x, contentY),
+            new Vector2(width, contentHeight));
     }
 
     private static void ApplyRectLayout(RectTransform rect, Vector2 anchorMin, Vector2 anchorMax, Vector2 pivot, Vector2 anchoredPosition, Vector2 sizeDelta)
@@ -8949,13 +8889,21 @@ internal static class CreatureModifierManager
         int iconCount = showIndividualStars ? Mathf.Clamp(stars, 1, 2) : 1;
         bool visible = stars > 0 && EnsureVanillaStarLayers(starGroup, level2, level3, iconCount);
         starGroup.gameObject.SetActive(visible);
-        number.gameObject.SetActive(visible && !showIndividualStars);
-        if (!visible)
+        bool showNumber = visible && !showIndividualStars;
+        number.gameObject.SetActive(showNumber);
+        if (!showNumber)
         {
             return;
         }
 
-        number.text = stars.ToString();
+        if (int.TryParse(number.text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int displayedStars) &&
+            displayedStars == stars)
+        {
+            return;
+        }
+
+        number.text = stars.ToString(CultureInfo.InvariantCulture);
+        ConfigureStarNumber(number);
     }
 
     private static RectTransform EnsureStarGroup(RectTransform content)
@@ -8969,13 +8917,14 @@ internal static class CreatureModifierManager
         GameObject starObject = new(StarGroupName, typeof(RectTransform), typeof(LayoutElement));
         RectTransform rect = (RectTransform)starObject.transform;
         rect.SetParent(content, false);
-        rect.sizeDelta = new Vector2(StarIconSize, StarIconSize);
+        float starSize = StarIconSize;
+        rect.sizeDelta = new Vector2(starSize, starSize);
 
         LayoutElement layout = starObject.GetComponent<LayoutElement>();
-        layout.minWidth = StarIconSize;
-        layout.preferredWidth = StarIconSize;
-        layout.minHeight = StarIconSize;
-        layout.preferredHeight = StarIconSize;
+        layout.minWidth = starSize;
+        layout.preferredWidth = starSize;
+        layout.minHeight = starSize;
+        layout.preferredHeight = starSize;
         return rect;
     }
 
@@ -8995,30 +8944,27 @@ internal static class CreatureModifierManager
             TryFindVanillaStarSlot(level2, ref sourceBlock, ref sourceCenter, ref score);
             TryFindVanillaStarSlot(level3, ref sourceBlock, ref sourceCenter, ref score);
             TryFindTemplateVanillaStarSlot(ref sourceBlock, ref sourceCenter, ref score);
-            if (sourceBlock == null)
-            {
-                return false;
-            }
-
             firstSlot = CreateStarSlot(starGroup, 1);
-            foreach (Image image in sourceBlock.GetComponentsInChildren<Image>(true))
+            if (sourceBlock != null)
             {
-                if (!image.gameObject.name.StartsWith("star", StringComparison.OrdinalIgnoreCase) || image.sprite == null)
+                foreach (Image image in sourceBlock.GetComponentsInChildren<Image>(true))
                 {
-                    continue;
-                }
+                    if (!image.gameObject.name.StartsWith("star", StringComparison.OrdinalIgnoreCase) || image.sprite == null)
+                    {
+                        continue;
+                    }
 
-                Vector2 center = GetRelativeCenter(sourceBlock, image.rectTransform);
-                if (Vector2.Distance(center, sourceCenter) <= StarLayerTolerance)
-                {
-                    CopyStarLayer(firstSlot, sourceBlock, sourceCenter, image);
+                    Vector2 center = GetRelativeCenter(sourceBlock, image.rectTransform);
+                    if (Vector2.Distance(center, sourceCenter) <= StarLayerTolerance)
+                    {
+                        CopyStarLayer(firstSlot, sourceBlock, sourceCenter, image);
+                    }
                 }
             }
 
             if (firstSlot.childCount == 0)
             {
-                UnityEngine.Object.Destroy(firstSlot.gameObject);
-                return false;
+                CreateFallbackStarLayer(firstSlot);
             }
         }
 
@@ -9042,8 +8988,26 @@ internal static class CreatureModifierManager
         slot.anchorMin = new Vector2(0.5f, 0.5f);
         slot.anchorMax = new Vector2(0.5f, 0.5f);
         slot.pivot = new Vector2(0.5f, 0.5f);
-        slot.sizeDelta = new Vector2(StarIconSize, StarIconSize);
+        slot.sizeDelta = new Vector2(StarLayerBaseSize, StarLayerBaseSize);
         return slot;
+    }
+
+    private static void CreateFallbackStarLayer(RectTransform slot)
+    {
+        GameObject layerObject = new("CreatureManager_FallbackStar", typeof(RectTransform), typeof(Image));
+        RectTransform rect = (RectTransform)layerObject.transform;
+        rect.SetParent(slot, false);
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = Vector2.zero;
+        rect.sizeDelta = new Vector2(StarLayerBaseSize, StarLayerBaseSize);
+
+        Image image = layerObject.GetComponent<Image>();
+        image.sprite = GetFallbackStarSprite();
+        image.color = Color.white;
+        image.preserveAspect = true;
+        image.raycastTarget = false;
     }
 
     private static void ConfigureStarSlots(
@@ -9052,29 +9016,77 @@ internal static class CreatureModifierManager
         RectTransform? secondSlot,
         int iconCount)
     {
-        float width = StarIconSize * iconCount;
-        if (starGroup.sizeDelta != new Vector2(width, StarIconSize))
+        float starSize = StarIconSize;
+        float starScale = starSize / StarLayerBaseSize;
+        float width = starSize * iconCount;
+        bool geometryChanged = false;
+        Vector2 groupSize = new(width, starSize);
+        if (starGroup.sizeDelta != groupSize)
         {
-            starGroup.sizeDelta = new Vector2(width, StarIconSize);
+            starGroup.sizeDelta = groupSize;
+            geometryChanged = true;
         }
 
         LayoutElement? layout = starGroup.GetComponent<LayoutElement>();
-        if (layout != null)
+        if (layout != null &&
+            (!Mathf.Approximately(layout.minWidth, width) ||
+             !Mathf.Approximately(layout.preferredWidth, width) ||
+             !Mathf.Approximately(layout.minHeight, starSize) ||
+             !Mathf.Approximately(layout.preferredHeight, starSize)))
         {
             layout.minWidth = width;
             layout.preferredWidth = width;
+            layout.minHeight = starSize;
+            layout.preferredHeight = starSize;
+            geometryChanged = true;
         }
 
         firstSlot.gameObject.SetActive(true);
-        firstSlot.anchoredPosition = iconCount == 2
-            ? new Vector2(-StarIconSize * 0.5f, 0f)
-            : Vector2.zero;
+        geometryChanged |= ConfigureStarSlot(
+            firstSlot,
+            iconCount == 2 ? new Vector2(-starSize * 0.5f, 0f) : Vector2.zero,
+            starScale);
 
         if (secondSlot != null)
         {
             secondSlot.gameObject.SetActive(iconCount == 2);
-            secondSlot.anchoredPosition = new Vector2(StarIconSize * 0.5f, 0f);
+            geometryChanged |= ConfigureStarSlot(secondSlot, new Vector2(starSize * 0.5f, 0f), starScale);
         }
+
+        if (geometryChanged)
+        {
+            LayoutRebuilder.MarkLayoutForRebuild(starGroup);
+            if (starGroup.parent is RectTransform content)
+            {
+                LayoutRebuilder.MarkLayoutForRebuild(content);
+            }
+        }
+    }
+
+    private static bool ConfigureStarSlot(RectTransform slot, Vector2 position, float scale)
+    {
+        bool changed = false;
+        Vector2 baseSize = new(StarLayerBaseSize, StarLayerBaseSize);
+        if (slot.sizeDelta != baseSize)
+        {
+            slot.sizeDelta = baseSize;
+            changed = true;
+        }
+
+        if (slot.anchoredPosition != position)
+        {
+            slot.anchoredPosition = position;
+            changed = true;
+        }
+
+        Vector3 desiredScale = new(scale, scale, 1f);
+        if (slot.localScale != desiredScale)
+        {
+            slot.localScale = desiredScale;
+            changed = true;
+        }
+
+        return changed;
     }
 
     private static void TryFindTemplateVanillaStarSlot(ref RectTransform? sourceBlock, ref Vector2 sourceCenter, ref float score)
@@ -9140,29 +9152,76 @@ internal static class CreatureModifierManager
         numberObject.SetActive(false);
         RectTransform rect = (RectTransform)numberObject.transform;
         rect.SetParent(content, false);
-        rect.sizeDelta = new Vector2(StarNumberWidth, LevelContentHeight);
 
         TextMeshProUGUI number = numberObject.AddComponent<TextMeshProUGUI>();
         ApplyHudFont(number, nameText);
 
         number.raycastTarget = false;
         number.enableAutoSizing = false;
-        number.fontSize = 15f;
         number.alignment = TextAlignmentOptions.MidlineLeft;
         number.color = new Color(1f, 0.74f, 0.24f, 1f);
+        number.textWrappingMode = TextWrappingModes.NoWrap;
+        number.overflowMode = TextOverflowModes.Overflow;
 
-        LayoutElement layout = numberObject.GetComponent<LayoutElement>();
-        layout.minWidth = StarNumberWidth;
-        layout.preferredWidth = StarNumberWidth;
-        layout.minHeight = LevelContentHeight;
-        layout.preferredHeight = LevelContentHeight;
+        ConfigureStarNumber(number);
         numberObject.SetActive(true);
         return number;
     }
 
+    private static void ConfigureStarNumber(TextMeshProUGUI number)
+    {
+        float starSize = StarIconSize;
+        float scale = starSize / StarLayerBaseSize;
+        float fontSize = StarNumberBaseFontSize * scale;
+        if (!Mathf.Approximately(number.fontSize, fontSize))
+        {
+            number.fontSize = fontSize;
+        }
+
+        int characterCount = Mathf.Max(1, number.text?.Length ?? 0);
+        float estimatedTextWidth = characterCount * fontSize * 0.65f;
+        float width = Mathf.Max(StarNumberBaseWidth * scale, estimatedTextWidth + 2f * scale);
+        float height = Mathf.Max(LevelContentHeight, starSize);
+        Vector2 desiredSize = new(width, height);
+        RectTransform rect = number.rectTransform;
+        bool geometryChanged = false;
+        if (rect.sizeDelta != desiredSize)
+        {
+            rect.sizeDelta = desiredSize;
+            geometryChanged = true;
+        }
+
+        LayoutElement layout = number.GetComponent<LayoutElement>();
+        if (!Mathf.Approximately(layout.minWidth, width) ||
+            !Mathf.Approximately(layout.preferredWidth, width) ||
+            !Mathf.Approximately(layout.minHeight, height) ||
+            !Mathf.Approximately(layout.preferredHeight, height))
+        {
+            layout.minWidth = width;
+            layout.preferredWidth = width;
+            layout.minHeight = height;
+            layout.preferredHeight = height;
+            geometryChanged = true;
+        }
+
+        if (geometryChanged && rect.parent is RectTransform content)
+        {
+            LayoutRebuilder.MarkLayoutForRebuild(content);
+        }
+    }
+
+    private static float GetLevelContentHeight(bool showStars)
+    {
+        return showStars ? Mathf.Max(LevelContentHeight, StarIconSize) : LevelContentHeight;
+    }
+
+    private static int GetModifierIconContainerWidth()
+    {
+        return Mathf.CeilToInt(ModifierIconSize * MaxActiveModifiers + IconSpacing * (MaxActiveModifiers - 1));
+    }
+
     private static RectTransform EnsureIconContainer(RectTransform row)
     {
-        EnsureSpacer(row);
         Transform existing = row.Find(IconContainerName);
         if (existing != null)
         {
@@ -9174,44 +9233,60 @@ internal static class CreatureModifierManager
         GameObject containerObject = new(IconContainerName, typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
         RectTransform container = (RectTransform)containerObject.transform;
         container.SetParent(row, false);
-        container.sizeDelta = new Vector2(ModifierIconWidth, LevelContentHeight);
+        container.SetAsLastSibling();
 
-        ConfigureIconContainer(container, TextAnchor.MiddleRight);
+        ConfigureIconContainer(container);
         EnsureModifierSlots(container);
         return container;
     }
 
-    private static void ConfigureIconContainer(RectTransform container, TextAnchor alignment)
+    private static void ConfigureIconContainer(RectTransform container)
     {
-        HorizontalLayoutGroup layout = container.GetComponent<HorizontalLayoutGroup>();
-        layout.childAlignment = alignment;
-        layout.spacing = IconSpacing;
-        layout.childControlWidth = false;
-        layout.childControlHeight = false;
-        layout.childForceExpandWidth = false;
-        layout.childForceExpandHeight = false;
-        layout.padding = new RectOffset(0, 0, 0, 0);
+        int width = GetModifierIconContainerWidth();
+        int height = ModifierIconSize;
+        float rightBleed = height * HudEdgeOpticalBleedRatio;
+        SetRectValue(container, Vector2.one, Vector2.one, Vector2.one, new Vector2(rightBleed, 0f));
 
         LayoutElement layoutElement = container.GetComponent<LayoutElement>();
-        layoutElement.minWidth = ModifierIconWidth;
-        layoutElement.preferredWidth = ModifierIconWidth;
-        layoutElement.minHeight = LevelContentHeight;
-        layoutElement.preferredHeight = LevelContentHeight;
-    }
+        // Keep the right-aligned modifier block independent so it may overlap without moving the left star block.
+        layoutElement.ignoreLayout = true;
 
-    private static void EnsureSpacer(RectTransform row)
-    {
-        if (row.Find(HudSpacerName) != null)
+        Vector2 desiredSize = new(width, height);
+        bool geometryChanged = false;
+        if (container.sizeDelta != desiredSize)
         {
-            return;
+            container.sizeDelta = desiredSize;
+            geometryChanged = true;
         }
 
-        GameObject spacer = new(HudSpacerName, typeof(RectTransform), typeof(LayoutElement));
-        spacer.transform.SetParent(row, false);
-        LayoutElement layout = spacer.GetComponent<LayoutElement>();
-        layout.minWidth = 0f;
-        layout.preferredWidth = 0f;
-        layout.flexibleWidth = 1f;
+        HorizontalLayoutGroup layout = container.GetComponent<HorizontalLayoutGroup>();
+        if (layout.childAlignment != TextAnchor.MiddleRight) layout.childAlignment = TextAnchor.MiddleRight;
+        if (!Mathf.Approximately(layout.spacing, IconSpacing)) layout.spacing = IconSpacing;
+        if (layout.childControlWidth) layout.childControlWidth = false;
+        if (layout.childControlHeight) layout.childControlHeight = false;
+        if (layout.childForceExpandWidth) layout.childForceExpandWidth = false;
+        if (layout.childForceExpandHeight) layout.childForceExpandHeight = false;
+        if (layout.padding.left != 0 || layout.padding.right != 0 || layout.padding.top != 0 || layout.padding.bottom != 0)
+        {
+            layout.padding = new RectOffset(0, 0, 0, 0);
+        }
+
+        if (!Mathf.Approximately(layoutElement.minWidth, width) ||
+            !Mathf.Approximately(layoutElement.preferredWidth, width) ||
+            !Mathf.Approximately(layoutElement.minHeight, height) ||
+            !Mathf.Approximately(layoutElement.preferredHeight, height))
+        {
+            layoutElement.minWidth = width;
+            layoutElement.preferredWidth = width;
+            layoutElement.minHeight = height;
+            layoutElement.preferredHeight = height;
+            geometryChanged = true;
+        }
+
+        if (geometryChanged)
+        {
+            LayoutRebuilder.MarkLayoutForRebuild(container);
+        }
     }
 
     internal static void UpdateEnemyHuds(EnemyHud enemyHud)
@@ -9667,16 +9742,32 @@ internal static class CreatureModifierManager
     private static void EnsureModifierSlots(RectTransform row)
     {
         HudIconState state = GetHudIconState(row);
-        if (state.SlotsInitialized && state.Slots.All(image => image != null))
+        bool slotsReady = state.SlotsInitialized;
+        if (slotsReady)
+        {
+            for (int index = 0; index < state.Slots.Length; index++)
+            {
+                if (state.Slots[index] != null)
+                {
+                    continue;
+                }
+
+                slotsReady = false;
+                break;
+            }
+        }
+
+        if (slotsReady)
         {
             return;
         }
 
         for (int index = 0; index < ModifierGroupOrder.Length; index++)
         {
-            state.Slots[index] = EnsureModifierSlot(row, ModifierGroupOrder[index], index);
+            state.Slots[index] = EnsureModifierSlot(row, ModifierGroupOrder[index], index, ModifierIconSize);
         }
 
+        state.Initialized = false;
         state.SlotsInitialized = true;
     }
 
@@ -9692,33 +9783,13 @@ internal static class CreatureModifierManager
             return;
         }
 
+        ModifierSpec?[] slots = BuildHudModifierSlots(visible, armoredReduction, enragedBonus, layout);
         state.Set(visible, armoredKey, enragedKey, layout);
         bool layoutChanged = false;
-        foreach (ModifierGroup group in ModifierGroupOrder)
+        bool packEmptySlots = layout == CreatureManagerPlugin.ModifierIconLayout.RightPacked;
+        for (int slotIndex = 0; slotIndex < slots.Length; slotIndex++)
         {
-            ModifierSpec? visibleSpec = null;
-            foreach (ModifierSpec spec in ModifierSpecs)
-            {
-                if (spec.Group != group || !HasModifier(visible, spec.Mask))
-                {
-                    continue;
-                }
-
-                if (spec.Mask == ModifierMask.Armored && armoredReduction <= 0f)
-                {
-                    continue;
-                }
-
-                if (spec.Mask == ModifierMask.Enraged && enragedBonus <= 0f)
-                {
-                    continue;
-                }
-
-                visibleSpec = spec;
-                break;
-            }
-
-            layoutChanged |= UpdateModifierSlot(row, group, visibleSpec, layout);
+            layoutChanged |= UpdateModifierSlot(row, slotIndex, slots[slotIndex], packEmptySlots);
         }
 
         if (layoutChanged)
@@ -9732,7 +9803,7 @@ internal static class CreatureModifierManager
         return HudIconStates.GetValue(row, _ => new HudIconState());
     }
 
-    private static Image EnsureModifierSlot(RectTransform row, ModifierGroup group, int siblingIndex)
+    private static Image EnsureModifierSlot(RectTransform row, ModifierGroup group, int siblingIndex, int iconSize)
     {
         string name = GetModifierSlotName(group);
         Transform existing = row.Find(name);
@@ -9740,38 +9811,134 @@ internal static class CreatureModifierManager
         {
             existing.SetSiblingIndex(siblingIndex);
             existing.gameObject.SetActive(true);
-            return existing.GetComponent<Image>();
+            Image existingImage = existing.GetComponent<Image>();
+            ConfigureModifierSlot(existingImage, iconSize);
+            return existingImage;
         }
 
         GameObject icon = new(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement));
         RectTransform rect = (RectTransform)icon.transform;
         rect.SetParent(row, false);
-        rect.sizeDelta = new Vector2(IconSize, IconSize);
-
-        LayoutElement layout = icon.GetComponent<LayoutElement>();
-        layout.preferredWidth = IconSize;
-        layout.preferredHeight = IconSize;
-        layout.minWidth = IconSize;
-        layout.minHeight = IconSize;
 
         Image image = icon.GetComponent<Image>();
         image.raycastTarget = false;
         image.preserveAspect = true;
         image.enabled = false;
         rect.SetSiblingIndex(siblingIndex);
+        ConfigureModifierSlot(image, iconSize);
         return image;
+    }
+
+    private static void ConfigureModifierSlot(Image image, int size)
+    {
+        Vector2 desiredSize = new(size, size);
+        RectTransform rect = image.rectTransform;
+        bool geometryChanged = false;
+        if (rect.sizeDelta != desiredSize)
+        {
+            rect.sizeDelta = desiredSize;
+            geometryChanged = true;
+        }
+
+        LayoutElement layout = image.GetComponent<LayoutElement>();
+        if (!Mathf.Approximately(layout.preferredWidth, size) ||
+            !Mathf.Approximately(layout.preferredHeight, size) ||
+            !Mathf.Approximately(layout.minWidth, size) ||
+            !Mathf.Approximately(layout.minHeight, size))
+        {
+            layout.preferredWidth = size;
+            layout.preferredHeight = size;
+            layout.minWidth = size;
+            layout.minHeight = size;
+            geometryChanged = true;
+        }
+
+        if (geometryChanged && rect.parent is RectTransform container)
+        {
+            LayoutRebuilder.MarkLayoutForRebuild(container);
+        }
+    }
+
+    private static ModifierSpec?[] BuildHudModifierSlots(
+        ModifierMask visible,
+        float armoredReduction,
+        float enragedBonus,
+        CreatureManagerPlugin.ModifierIconLayout layout)
+    {
+        ModifierSpec?[] slots = new ModifierSpec?[MaxActiveModifiers];
+        if (layout == CreatureManagerPlugin.ModifierIconLayout.RightPacked)
+        {
+            int nextSlot = 0;
+            foreach (ModifierSpec spec in ModifierSpecs)
+            {
+                if (!IsModifierIconVisible(spec, visible, armoredReduction, enragedBonus))
+                {
+                    continue;
+                }
+
+                slots[nextSlot++] = spec;
+                if (nextSlot >= slots.Length)
+                {
+                    break;
+                }
+            }
+
+            return slots;
+        }
+
+        ModifierSpec?[] extras = new ModifierSpec?[MaxActiveModifiers];
+        int extraCount = 0;
+        foreach (ModifierSpec spec in ModifierSpecs)
+        {
+            if (!IsModifierIconVisible(spec, visible, armoredReduction, enragedBonus))
+            {
+                continue;
+            }
+
+            int categorySlot = (int)spec.Group;
+            if (slots[categorySlot] == null)
+            {
+                slots[categorySlot] = spec;
+            }
+            else if (extraCount < extras.Length)
+            {
+                // Forced modifier sets may contain several entries from one category.
+                extras[extraCount++] = spec;
+            }
+        }
+
+        int extraIndex = 0;
+        for (int slotIndex = 0; slotIndex < slots.Length && extraIndex < extraCount; slotIndex++)
+        {
+            if (slots[slotIndex] == null)
+            {
+                slots[slotIndex] = extras[extraIndex++];
+            }
+        }
+
+        return slots;
+    }
+
+    private static bool IsModifierIconVisible(
+        ModifierSpec spec,
+        ModifierMask visible,
+        float armoredReduction,
+        float enragedBonus)
+    {
+        return HasModifier(visible, spec.Mask) &&
+               (spec.Mask != ModifierMask.Armored || armoredReduction > 0f) &&
+               (spec.Mask != ModifierMask.Enraged || enragedBonus > 0f);
     }
 
     private static bool UpdateModifierSlot(
         RectTransform row,
-        ModifierGroup group,
+        int slotIndex,
         ModifierSpec? spec,
-        CreatureManagerPlugin.ModifierIconLayout layout)
+        bool packEmptySlots)
     {
-        EnsureModifierSlots(row);
         HudIconState state = GetHudIconState(row);
-        int slotIndex = (int)group;
-        Image image = state.Slots[slotIndex] ?? EnsureModifierSlot(row, group, slotIndex);
+        ModifierGroup slotGroup = ModifierGroupOrder[slotIndex];
+        Image image = state.Slots[slotIndex] ?? EnsureModifierSlot(row, slotGroup, slotIndex, ModifierIconSize);
         if (!image.gameObject.activeSelf)
         {
             image.gameObject.SetActive(true);
@@ -9781,7 +9948,7 @@ internal static class CreatureModifierManager
         image.sprite = spec?.Sprite();
         image.color = Color.white;
         LayoutElement? layoutElement = image.GetComponent<LayoutElement>();
-        bool ignoreLayout = layout == CreatureManagerPlugin.ModifierIconLayout.RightPacked && spec == null;
+        bool ignoreLayout = packEmptySlots && spec == null;
         if (layoutElement == null || layoutElement.ignoreLayout == ignoreLayout)
         {
             return false;
@@ -9805,11 +9972,10 @@ internal static class CreatureModifierManager
 
     private static Sprite GetArmoredSprite()
     {
-        ArmoredSprite ??= CreateTwoToneIcon(
+        ArmoredSprite ??= CreateSolidIcon(
             "CreatureManager_ArmoredIcon",
             IsCuirassPixel,
-            new Color(0.08f, 0.28f, 0.68f, 1f),
-            new Color(0.32f, 0.72f, 1f, 1f));
+            new Color(0.08f, 0.28f, 0.68f, 1f));
         return ArmoredSprite!;
     }
 
@@ -9916,7 +10082,11 @@ internal static class CreatureModifierManager
 
     private static Sprite GetUndodgeableSprite()
     {
-        UndodgeableSprite ??= CreateSolidIcon("CreatureManager_UndodgeableIcon", IsUndodgeablePixel, new Color(1f, 0.96f, 0.9f, 1f));
+        UndodgeableSprite ??= CreateTwoToneIcon(
+            "CreatureManager_UndodgeableIcon",
+            IsUndodgeablePixel,
+            new Color(1f, 0.96f, 0.9f, 1f),
+            new Color(1f, 0.12f, 0.08f, 1f));
         return UndodgeableSprite!;
     }
 
@@ -10015,7 +10185,11 @@ internal static class CreatureModifierManager
 
     private static Sprite GetUnflinchingSprite()
     {
-        UnflinchingSprite ??= CreateSolidIcon("CreatureManager_UnflinchingIcon", IsUnflinchingPixel, new Color(0.82f, 0.72f, 0.48f, 1f));
+        UnflinchingSprite ??= CreateTwoToneIcon(
+            "CreatureManager_UnflinchingIcon",
+            IsUnflinchingPixel,
+            new Color(0.92f, 0.82f, 0.55f, 1f),
+            new Color(1f, 0.62f, 0.11f, 1f));
         return UnflinchingSprite!;
     }
 
@@ -10031,7 +10205,11 @@ internal static class CreatureModifierManager
 
     private static Sprite GetOmenSprite()
     {
-        OmenSprite ??= CreateSolidIcon("CreatureManager_OmenIcon", IsEyePixel, new Color(0.95f, 0.18f, 1f, 1f));
+        OmenSprite ??= CreateTwoToneIcon(
+            "CreatureManager_OmenIcon",
+            IsEyePixel,
+            new Color(0.78f, 0.49f, 1f, 1f),
+            new Color(1f, 0.188f, 0.157f, 1f));
         return OmenSprite!;
     }
 
@@ -10067,6 +10245,15 @@ internal static class CreatureModifierManager
             new Color(0.34f, 0.22f, 0.07f, 1f),
             new Color(1f, 0.78f, 0.22f, 1f));
         return BlamerSprite!;
+    }
+
+    private static Sprite GetFallbackStarSprite()
+    {
+        FallbackStarSprite ??= CreateSolidIcon(
+            "CreatureManager_FallbackStarSprite",
+            IsFallbackStarPixel,
+            new Color(1f, 0.78f, 0.22f, 1f));
+        return FallbackStarSprite!;
     }
 
     private static Sprite CreateSolidIcon(string name, IconShape shape, Color filled)
@@ -10309,17 +10496,7 @@ internal static class CreatureModifierManager
         bool neck = Vector2.Distance(point, new Vector2(32f, 62f)) <= 10.5f;
         bool leftArmhole = Vector2.Distance(point, new Vector2(4f, 49f)) <= 11.5f;
         bool rightArmhole = Vector2.Distance(point, new Vector2(60f, 49f)) <= 11.5f;
-        bool body = outer && !neck && !leftArmhole && !rightArmhole;
-        if (!body)
-        {
-            return false;
-        }
-
-        bool centerRidge = IsThickLine(point, new Vector2(32f, 49f), new Vector2(32f, 11f), 2.2f);
-        bool lowerPlate = IsThickLine(point, new Vector2(17f, 18f), new Vector2(32f, 11f), 1.8f) ||
-                          IsThickLine(point, new Vector2(32f, 11f), new Vector2(47f, 18f), 1.8f);
-        isAccent = centerRidge || lowerPlate;
-        return true;
+        return outer && !neck && !leftArmhole && !rightArmhole;
     }
 
     private static bool IsSwordPixel(int x, int y, out bool isBorder)
@@ -10554,16 +10731,17 @@ internal static class CreatureModifierManager
         return Mathf.Abs(Vector2.Dot(relative, radial)) <= halfWidth;
     }
 
-    private static bool IsEyePixel(int x, int y, out bool isBorder)
+    private static bool IsEyePixel(int x, int y, out bool isPupil)
     {
         Vector2 point = new(x + 0.5f, y + 0.5f);
         Vector2 center = new(31.5f, 31.5f);
         float dx = Mathf.Abs(point.x - center.x);
         float dy = Mathf.Abs(point.y - center.y);
-        bool eye = dx / 26f + dy / 15f <= 1f;
-        bool pupil = Vector2.Distance(point, center) <= 7f;
-        isBorder = eye && (dx / 24f + dy / 13f >= 1f || pupil);
-        return eye && (isBorder || pupil);
+        bool eye = dx / 27f + dy / 18f <= 1f;
+        bool pupil = Vector2.Distance(point, center) <= 8.5f;
+        bool border = eye && dx / 20f + dy / 11f >= 1f;
+        isPupil = pupil;
+        return border || pupil;
     }
 
     private static IconTone GetReapingTone(int x, int y)
@@ -10603,11 +10781,6 @@ internal static class CreatureModifierManager
         bool cross = Mathf.Abs(point.y - 31f) <= 3.5f && point.x >= 17f && point.x <= 47f;
         bool ankh = loop || stem || cross;
         bool jewel = Vector2.Distance(point, new Vector2(32f, 31f)) <= 3.2f;
-        bool rays = IsThickLine(point, new Vector2(32f, 59f), new Vector2(32f, 63f), 1.8f) ||
-                    IsThickLine(point, new Vector2(17f, 55f), new Vector2(12f, 60f), 1.8f) ||
-                    IsThickLine(point, new Vector2(47f, 55f), new Vector2(52f, 60f), 1.8f) ||
-                    IsThickLine(point, new Vector2(10f, 43f), new Vector2(15f, 43f), 1.8f) ||
-                    IsThickLine(point, new Vector2(49f, 43f), new Vector2(54f, 43f), 1.8f);
 
         if (jewel)
         {
@@ -10619,7 +10792,7 @@ internal static class CreatureModifierManager
             return IconTone.Primary;
         }
 
-        return rays ? IconTone.Secondary : IconTone.Clear;
+        return IconTone.Clear;
     }
 
     private static bool IsBrokenShieldPixel(int x, int y, out bool isRightHalf)
@@ -10669,7 +10842,7 @@ internal static class CreatureModifierManager
         return IconTone.Clear;
     }
 
-    private static bool IsUndodgeablePixel(int x, int y, out bool isBorder)
+    private static bool IsUndodgeablePixel(int x, int y, out bool isMiddleDiamond)
     {
         Vector2 point = new(x + 0.5f, y + 0.5f);
         bool corners =
@@ -10685,7 +10858,7 @@ internal static class CreatureModifierManager
         bool inner = IsPointInPolygon(point, UndodgeableInnerPolygon);
         bool diamond = outer && !inner;
         bool center = Vector2.Distance(point, new Vector2(32f, 32f)) <= 3.5f;
-        isBorder = corners || diamond;
+        isMiddleDiamond = diamond;
         return corners || diamond || center;
     }
 
@@ -10842,18 +11015,18 @@ internal static class CreatureModifierManager
         return distance <= width;
     }
 
-    private static bool IsUnflinchingPixel(int x, int y, out bool isSlash)
+    private static bool IsUnflinchingPixel(int x, int y, out bool isStar)
     {
-        isSlash = false;
         Vector2 point = new(x + 0.5f, y + 0.5f);
         Vector2 center = new(31.5f, 32f);
         Vector2 ellipsePoint = new(point.x - center.x, (point.y - center.y) * 1.5f);
         float ellipseRadius = ellipsePoint.magnitude;
         float angle = Mathf.Atan2(ellipsePoint.y, ellipsePoint.x) * Mathf.Rad2Deg;
-        bool upperArc = ellipseRadius is >= 23f and <= 26.5f && angle is >= 18f and <= 162f;
-        bool lowerArc = ellipseRadius is >= 23f and <= 26.5f && angle is >= -162f and <= -18f;
+        bool upperArc = ellipseRadius is >= 20.5f and <= 27.5f && angle is >= 18f and <= 162f;
+        bool lowerArc = ellipseRadius is >= 20.5f and <= 27.5f && angle is >= -162f and <= -18f;
         bool stars = IsFivePointStarPixel(point, new Vector2(18f, 21f), 10f, 4.5f) ||
-                     IsFivePointStarPixel(point, new Vector2(45f, 46f), 7f, 3.2f);
+                     IsFivePointStarPixel(point, new Vector2(45f, 46f), 9f, 4f);
+        isStar = stars;
         return upperArc || lowerArc || stars;
     }
 
@@ -10875,6 +11048,12 @@ internal static class CreatureModifierManager
         }
 
         return inside;
+    }
+
+    private static bool IsFallbackStarPixel(int x, int y, out bool isAccent)
+    {
+        isAccent = false;
+        return IsFivePointStarPixel(new Vector2(x + 0.5f, y + 0.5f), new Vector2(32f, 32f), 27f, 12f);
     }
 
     private static Vector2 GetFivePointStarVertex(
