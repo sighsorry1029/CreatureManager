@@ -57,6 +57,7 @@ internal static class CreatureYaml
 
         try
         {
+            ValidateDefinitionDocument(yaml, source);
             definitions = Deserializer.Deserialize<List<T>>(yaml) ?? new List<T>();
             return ValidateDefinitions(definitions, source);
         }
@@ -667,6 +668,37 @@ internal static class CreatureYaml
         }
     }
 
+    internal static void ValidateUniqueMappingKeysInDocument(string yaml, string source)
+    {
+        YamlNode root = LoadSingleDocumentRoot(yaml, source);
+        ValidateUniqueMappingKeys(root, source, "root");
+    }
+
+    private static void ValidateDefinitionDocument(string yaml, string source)
+    {
+        YamlNode root = LoadSingleDocumentRoot(yaml, source);
+        if (root is not YamlSequenceNode)
+        {
+            throw new FormatException(
+                $"YAML from {source} must have a sequence root. Use [] for an intentionally empty definition file.");
+        }
+
+        ValidateUniqueMappingKeys(root, source, "root");
+    }
+
+    private static YamlNode LoadSingleDocumentRoot(string yaml, string source)
+    {
+        YamlStream stream = new();
+        using StringReader reader = new(yaml);
+        stream.Load(reader);
+        if (stream.Documents.Count != 1)
+        {
+            throw new FormatException($"YAML from {source} must contain exactly one YAML document.");
+        }
+
+        return stream.Documents[0].RootNode;
+    }
+
     private static LevelDefinition ReadLevelDefinition(
         YamlMappingNode node,
         string source,
@@ -810,7 +842,7 @@ internal static class CreatureYaml
                 return false;
             }
 
-            if (!CreatureModifierManager.IsKnownModifier(modifier))
+            if (!CreatureModifierCatalog.IsKnown(modifier))
             {
                 CreatureManagerPlugin.Log.LogError($"{blockPath} has unknown modifier '{modifier}'.");
                 return false;
@@ -1241,7 +1273,7 @@ internal static class CreatureYaml
         {
             foreach (KeyValuePair<string, ModifierDefinition> entry in rule.Modifiers)
             {
-                if (string.IsNullOrWhiteSpace(entry.Key) || !CreatureModifierManager.IsKnownModifier(entry.Key))
+                if (!CreatureModifierCatalog.IsKnown(entry.Key))
                 {
                     return Invalid(path, $"modifiers has unknown modifier '{entry.Key}'.");
                 }

@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.0.6";
+    internal const string ModVersion = "1.0.7";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -39,7 +39,18 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     private DateTime _lastConfigReloadTime;
     private const long ReloadDelayTicks = TimeSpan.TicksPerSecond;
     private const float RuntimeMaintenanceInterval = 0.5f;
+    private const float ConfigWatcherRetryInterval = 5f;
     private float _nextRuntimeMaintenanceTime;
+    private float _nextConfigWatcherRetryTime;
+    private bool _configWatcherRetryPending;
+    private bool _localizerLoadStarted;
+    private bool _configHandlersSubscribed;
+    private bool _harmonyTouched;
+    private bool _feedPatchStarted;
+    private bool _serverLocalizationInitializationStarted;
+    private bool _domainInitializationStarted;
+    private bool _runtimeCleanupPending;
+    private bool _awakeCompleted;
 
     public enum Toggle
     {
@@ -72,10 +83,13 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     public void Awake()
     {
         Log = Logger;
+        _runtimeCleanupPending = true;
         bool saveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
         try
         {
+            _localizerLoadStarted = true;
+            _harmonyTouched = true;
             LocalizationManager.Localizer.Load(_harmony);
 
             _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, Ordered("If on, the configuration is locked and can be changed by server admins only.", 100));
@@ -101,6 +115,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             MultiplayerDamageIncreasePerPlayer = config("4 - Multiplayer Difficulty", "DMG Increase Per Player In Multiplayer (%)", 4f, Ordered("Extra creature damage per nearby player after the first. Vanilla is 4%.", 90, new AcceptableValueRange<float>(0f, 200f)));
             MultiplayerMaximumPlayerCount = config("4 - Multiplayer Difficulty", "Maximum Player Count For Multiplayer Scaling", 5, Ordered("Maximum nearby player count used by vanilla multiplayer difficulty scaling. Vanilla is 5.", 80, new AcceptableValueRange<int>(1, 25)));
             BlinkAlertGracePeriod = config("5 - Modifiers", "Blink Alert Grace Period (s)", 3f, Ordered("Seconds after a creature becomes alerted during which Blink and its extended attack range are disabled. The timer expires even when no attack can start. Set to 0 for immediate Blink behavior.", 100, new AcceptableValueRange<float>(0f, 10f)));
+            _configHandlersSubscribed = true;
             EnableLevelSystem.SettingChanged += ReloadLevelConfiguration;
             BiomeLevelPreset.SettingChanged += ReloadLevelConfiguration;
             NormalCreatureNameplateRange.SettingChanged += ApplyRuntimeConfigValues;
@@ -112,14 +127,23 @@ public class CreatureManagerPlugin : BaseUnityPlugin
 
             Assembly assembly = Assembly.GetExecutingAssembly();
             _harmony.PatchAll(assembly);
+            _feedPatchStarted = true;
             CreatureManagerFeedLikeGrandmaPokeballReleasePatch.ApplyIfAvailable(_harmony);
+            _serverLocalizationInitializationStarted = true;
             CreatureServerLocalization.Initialize(ConfigSync);
+            _domainInitializationStarted = true;
             CreatureDomainManager.Initialize(ConfigSync);
             SetupWatcher();
 
             Config.Save();
             CreatureLevelManager.RegisterRpcs();
             CreatureModifierManager.RegisterRpcs();
+            _awakeCompleted = true;
+        }
+        catch
+        {
+            CleanupRuntime(saveConfig: false);
+            throw;
         }
         finally
         {
@@ -146,6 +170,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     {
         CreatureServerLocalization.Update();
         CreatureDomainManager.Update();
+        TryRecoverConfigWatcher();
         if (Time.time < _nextRuntimeMaintenanceTime)
         {
             return;
@@ -163,6 +188,75 @@ public class CreatureManagerPlugin : BaseUnityPlugin
 
     private void OnDestroy()
     {
+        CleanupRuntime(saveConfig: _awakeCompleted);
+        _awakeCompleted = false;
+    }
+
+    private void CleanupRuntime(bool saveConfig)
+    {
+        if (_configHandlersSubscribed)
+        {
+            _configHandlersSubscribed = false;
+            TryCleanup("unsubscribe configuration handlers", UnsubscribeConfigHandlers);
+        }
+
+        FileSystemWatcher? watcher = _watcher;
+        _watcher = null;
+        _configWatcherRetryPending = false;
+        _nextConfigWatcherRetryTime = 0f;
+        if (watcher != null)
+        {
+            TryCleanup("dispose the configuration watcher", watcher.Dispose);
+        }
+
+        if (saveConfig)
+        {
+            TryCleanup("save the configuration", () => SaveWithRespectToConfigSet());
+        }
+
+        if (_domainInitializationStarted)
+        {
+            _domainInitializationStarted = false;
+            TryCleanup("dispose the YAML domain manager", CreatureDomainManager.Dispose);
+        }
+
+        if (_serverLocalizationInitializationStarted)
+        {
+            _serverLocalizationInitializationStarted = false;
+            TryCleanup("dispose server localization", CreatureServerLocalization.Dispose);
+        }
+
+        if (_runtimeCleanupPending)
+        {
+            _runtimeCleanupPending = false;
+            TryCleanup("remove the Karma minimap HUD", CreatureKarmaMinimapHud.Clear);
+            TryCleanup("reset spawn lifecycle state", CreatureManagerSpawnLifecycle.ResetRuntimeState);
+            TryCleanup("reset Karma runtime state", CreatureKarmaManager.ResetRuntimeState);
+            TryCleanup("reset modifier runtime state", CreatureModifierManager.ResetRuntimeState);
+            TryCleanup("reset level runtime state", CreatureLevelManager.ResetRuntimeState);
+        }
+
+        if (_feedPatchStarted)
+        {
+            _feedPatchStarted = false;
+            TryCleanup("reset FeedLikeGrandma compatibility state", CreatureManagerFeedLikeGrandmaPokeballReleasePatch.Reset);
+        }
+
+        if (_harmonyTouched)
+        {
+            _harmonyTouched = false;
+            TryCleanup("remove Harmony patches", _harmony.UnpatchSelf);
+        }
+
+        if (_localizerLoadStarted)
+        {
+            _localizerLoadStarted = false;
+            TryCleanup("unload localization", LocalizationManager.Localizer.Unload);
+        }
+    }
+
+    private static void UnsubscribeConfigHandlers()
+    {
         if (EnableLevelSystem != null) EnableLevelSystem.SettingChanged -= ReloadLevelConfiguration;
         if (BiomeLevelPreset != null) BiomeLevelPreset.SettingChanged -= ReloadLevelConfiguration;
         if (NormalCreatureNameplateRange != null) NormalCreatureNameplateRange.SettingChanged -= ApplyRuntimeConfigValues;
@@ -170,36 +264,108 @@ public class CreatureManagerPlugin : BaseUnityPlugin
         if (MultiplayerHealthIncreasePerPlayer != null) MultiplayerHealthIncreasePerPlayer.SettingChanged -= ApplyRuntimeConfigValues;
         if (MultiplayerDamageIncreasePerPlayer != null) MultiplayerDamageIncreasePerPlayer.SettingChanged -= ApplyRuntimeConfigValues;
         if (MultiplayerMaximumPlayerCount != null) MultiplayerMaximumPlayerCount.SettingChanged -= ApplyRuntimeConfigValues;
-        SaveWithRespectToConfigSet();
-        CreatureServerLocalization.Dispose();
-        CreatureDomainManager.Dispose();
-        CreatureManagerSpawnLifecycle.ResetRuntimeState();
-        CreatureKarmaManager.ResetRuntimeState();
-        CreatureModifierManager.ResetRuntimeState();
-        CreatureLevelManager.ResetRuntimeState();
-        _watcher?.Dispose();
-        _watcher = null;
-        _harmony.UnpatchSelf();
-        CreatureManagerFeedLikeGrandmaPokeballReleasePatch.Reset();
-        LocalizationManager.Localizer.Unload();
+    }
+
+    private void TryCleanup(string operation, Action cleanup)
+    {
+        try
+        {
+            cleanup();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Failed to {operation} during CreatureManager shutdown: {ex}");
+        }
     }
 
     private void SetupWatcher()
     {
-        _watcher = new FileSystemWatcher(Paths.ConfigPath, ConfigFileName);
-        _watcher.Changed += ReadConfigValues;
-        _watcher.Created += ReadConfigValues;
-        _watcher.Renamed += ReadConfigValues;
-        _watcher.IncludeSubdirectories = true;
-        _watcher.SynchronizingObject = ThreadingHelper.SynchronizingObject;
-        _watcher.EnableRaisingEvents = true;
+        FileSystemWatcher? replacement = null;
+        try
+        {
+            replacement = new FileSystemWatcher(Paths.ConfigPath, ConfigFileName)
+            {
+                IncludeSubdirectories = true,
+                SynchronizingObject = ThreadingHelper.SynchronizingObject
+            };
+            replacement.Changed += ReadConfigValues;
+            replacement.Created += ReadConfigValues;
+            replacement.Renamed += ReadConfigValues;
+            replacement.Error += OnConfigWatcherError;
+            replacement.EnableRaisingEvents = true;
+
+            FileSystemWatcher? previous = _watcher;
+            _watcher = replacement;
+            replacement = null;
+            previous?.Dispose();
+            _configWatcherRetryPending = false;
+            _nextConfigWatcherRetryTime = 0f;
+        }
+        catch (Exception ex)
+        {
+            replacement?.Dispose();
+            _configWatcherRetryPending = true;
+            _nextConfigWatcherRetryTime = Time.unscaledTime + ConfigWatcherRetryInterval;
+            Log.LogError($"Failed to create the configuration watcher; retrying in {ConfigWatcherRetryInterval:0} seconds: {ex.Message}");
+        }
+    }
+
+    private void OnConfigWatcherError(object sender, ErrorEventArgs args)
+    {
+        if (!_runtimeCleanupPending || !ReferenceEquals(sender, _watcher))
+        {
+            return;
+        }
+
+        Log.LogWarning(
+            $"Configuration watcher lost file events and will be rebuilt: {args.GetException().Message}");
+        FileSystemWatcher? broken = _watcher;
+        _watcher = null;
+        try
+        {
+            broken?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Failed to dispose the broken configuration watcher: {ex.Message}");
+        }
+
+        SetupWatcher();
+        if (_watcher != null)
+        {
+            ReloadConfigValues(force: true);
+        }
+    }
+
+    private void TryRecoverConfigWatcher()
+    {
+        if (!_configWatcherRetryPending || _watcher != null || Time.unscaledTime < _nextConfigWatcherRetryTime)
+        {
+            return;
+        }
+
+        SetupWatcher();
+        if (_watcher != null)
+        {
+            ReloadConfigValues(force: true);
+        }
     }
 
     private void ReadConfigValues(object sender, FileSystemEventArgs e)
     {
+        if (!_runtimeCleanupPending || !ReferenceEquals(sender, _watcher))
+        {
+            return;
+        }
+
+        ReloadConfigValues(force: false);
+    }
+
+    private void ReloadConfigValues(bool force)
+    {
         DateTime now = DateTime.Now;
         long time = now.Ticks - _lastConfigReloadTime.Ticks;
-        if (time < ReloadDelayTicks)
+        if (!force && time < ReloadDelayTicks)
         {
             return;
         }

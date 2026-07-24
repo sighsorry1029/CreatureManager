@@ -54,14 +54,11 @@ internal static class CreatureDomainManager
     private static bool DiskReloadPending;
     private static bool SyncedApplyPending;
     private static bool TextureRefreshPending;
+    private static bool GameDataRefreshPending;
     private static bool SuppressSyncedApply;
     private static bool RemoteBundleReady;
-    private static List<FactionDefinition> ActiveFactionDefinitions = new();
-    private static List<LevelDefinition> ActiveLevelDefinitions = new();
-    private static List<AiDefinition> ActiveAiDefinitions = new();
-    private static List<AttackDefinition> ActiveAttackDefinitions = new();
-    private static List<ProjectileDefinition> ActiveProjectileDefinitions = new();
-    private static List<CreatureDefinition> ActiveDefinitions = new();
+    private static bool WatcherResetPending;
+    private static DefinitionSnapshot ActiveSnapshot = new();
     private static readonly Dictionary<string, Vector3> EquipmentVisualScales = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, GameObject[]> RandomHairPrefabsByCreature = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, CreatureAppearanceRuntimeState> AppearanceByCreature = new(StringComparer.OrdinalIgnoreCase);
@@ -75,9 +72,15 @@ internal static class CreatureDomainManager
     private static readonly Dictionary<string, RagdollTextureRuntimeState[]> RagdollTexturesByPrefab = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, RagdollTextureRuntimeState[]> InheritedRagdollTextures = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<int> AppliedRagdollTextureVisuals = new();
+    private static readonly HashSet<string> SuccessfullyAppliedDefinitionTargets = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<(int RendererId, int MaterialIndex), TextureMaterialOverride> TextureMaterialOverrides = new();
     private static readonly MaterialPropertyBlock RagdollTexturePropertyBlock = new();
     private static bool GameDataReady;
+    private static bool ActiveDefinitionsApplied;
+    private static bool LoadedHumanoidsRefreshedForCurrentGameData;
+    private static bool ReferenceCaptureAttemptedForCurrentGameData;
+    private static ReferenceFileSnapshot? CapturedReferenceFiles;
+    private static int PendingGameDataRefreshFrame = int.MaxValue;
 
     private sealed class TextureMaterialOverride
     {
@@ -192,7 +195,9 @@ internal static class CreatureDomainManager
     internal static void Initialize(ConfigSync configSync)
     {
         ConfigSync = configSync;
+        ActiveDefinitionsApplied = false;
         RemoteBundleReady = false;
+        LoadedHumanoidsRefreshedForCurrentGameData = false;
         SyncedYamlBundle = new CustomSyncedValue<string>(configSync, "YamlBundle", "", 100);
         SyncedYamlBundle.ValueChanged += RequestSyncedYamlApply;
         configSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
@@ -229,21 +234,21 @@ internal static class CreatureDomainManager
         DiskReloadPending = false;
         SyncedApplyPending = false;
         TextureRefreshPending = false;
+        GameDataRefreshPending = false;
         PendingDiskReloadTime = DateTime.MaxValue;
         PendingSyncedApplyTime = DateTime.MaxValue;
         PendingTextureRefreshTime = DateTime.MaxValue;
+        PendingGameDataRefreshFrame = int.MaxValue;
         SuppressSyncedApply = false;
         RemoteBundleReady = false;
+        WatcherResetPending = false;
+        ReferenceCaptureAttemptedForCurrentGameData = false;
+        CapturedReferenceFiles = null;
         Watcher?.Dispose();
         Watcher = null;
         lock (Sync)
         {
-            ActiveFactionDefinitions = new List<FactionDefinition>();
-            ActiveLevelDefinitions = new List<LevelDefinition>();
-            ActiveAiDefinitions = new List<AiDefinition>();
-            ActiveAttackDefinitions = new List<AttackDefinition>();
-            ActiveProjectileDefinitions = new List<ProjectileDefinition>();
-            ActiveDefinitions = new List<CreatureDefinition>();
+            ActiveSnapshot = new DefinitionSnapshot();
         }
 
         CreatureTextureRegistry.Dispose();
@@ -262,9 +267,14 @@ internal static class CreatureDomainManager
 
     internal static void Update()
     {
-        if (!DiskReloadPending && !SyncedApplyPending && !TextureRefreshPending)
+        if (!DiskReloadPending && !SyncedApplyPending && !TextureRefreshPending && !GameDataRefreshPending)
         {
             return;
+        }
+
+        if (GameDataRefreshPending && Time.frameCount >= PendingGameDataRefreshFrame)
+        {
+            CompletePendingGameDataRefresh();
         }
 
         DateTime now = DateTime.UtcNow;
@@ -277,6 +287,11 @@ internal static class CreatureDomainManager
             if (ConfigSync?.IsSourceOfTruth != false)
             {
                 LoadDefinitionsFromDisk(assignSyncedValue: true);
+                if (WatcherResetPending)
+                {
+                    WatcherResetPending = false;
+                    SetupWatcher();
+                }
             }
         }
 
@@ -287,6 +302,11 @@ internal static class CreatureDomainManager
             TextureRefreshPending = false;
             PendingTextureRefreshTime = DateTime.MaxValue;
             ApplySyncedYaml();
+            if (WatcherResetPending)
+            {
+                WatcherResetPending = false;
+                SetupWatcher();
+            }
         }
 
         if (TextureRefreshPending && !DiskReloadPending && !SyncedApplyPending && now >= PendingTextureRefreshTime)
@@ -294,10 +314,15 @@ internal static class CreatureDomainManager
             TextureRefreshPending = false;
             PendingTextureRefreshTime = DateTime.MaxValue;
             ApplyDefinitionsToGameData();
+            if (WatcherResetPending)
+            {
+                WatcherResetPending = false;
+                SetupWatcher();
+            }
         }
     }
 
-    internal static void NotifyGameDataAvailable()
+    internal static void NotifyGameDataAvailable(bool objectDbFinalized = false)
     {
         if (!HasGameDataInstances())
         {
@@ -307,7 +332,43 @@ internal static class CreatureDomainManager
         GameDataReady = true;
         CreatureConsoleCommands.InvalidateSpawnAutocompleteOptions();
         CreatureAssetOwnerCatalog.InvalidateMappings();
-        RefreshReferenceConfigurationFilesIfNeeded();
+        GameDataRefreshPending = true;
+        PendingGameDataRefreshFrame = objectDbFinalized
+            ? Time.frameCount
+            : Math.Min(PendingGameDataRefreshFrame, Time.frameCount + 1);
+        if (objectDbFinalized)
+        {
+            CompletePendingGameDataRefresh();
+        }
+    }
+
+    private sealed class DefinitionApplyCheckpoint
+    {
+        internal readonly Dictionary<string, CreatureAppearanceRuntimeState> InheritedAppearances =
+            new(InheritedAppearanceByClone, StringComparer.OrdinalIgnoreCase);
+        internal readonly Dictionary<string, GameObject> RagdollSources =
+            new(RagdollCloneSources, StringComparer.OrdinalIgnoreCase);
+        internal readonly Dictionary<string, Vector3> OriginalRagdollScaleValues =
+            new(OriginalRagdollScales, StringComparer.OrdinalIgnoreCase);
+        internal readonly Dictionary<string, RagdollScaleRuntimeState> InheritedRagdollScaleValues =
+            new(InheritedRagdollScales, StringComparer.OrdinalIgnoreCase);
+        internal readonly Dictionary<string, RagdollTextureRuntimeState[]> InheritedRagdollTextureValues =
+            new(InheritedRagdollTextures, StringComparer.OrdinalIgnoreCase);
+        internal readonly Dictionary<(int RendererId, int MaterialIndex), TextureMaterialOverride> TextureOverrides =
+            new(TextureMaterialOverrides);
+    }
+
+    private static void CompletePendingGameDataRefresh()
+    {
+        if (!GameDataRefreshPending || !HasGameDataInstances())
+        {
+            return;
+        }
+
+        GameDataRefreshPending = false;
+        PendingGameDataRefreshFrame = int.MaxValue;
+        CaptureReferenceConfigurationFilesIfNeeded();
+        WriteCapturedReferenceConfigurationFilesIfNeeded();
         if (ConfigSync?.IsSourceOfTruth == false && !RemoteBundleReady)
         {
             RequestSyncedYamlApply();
@@ -333,19 +394,32 @@ internal static class CreatureDomainManager
         RagdollTexturesByPrefab.Clear();
         InheritedRagdollTextures.Clear();
         AppliedRagdollTextureVisuals.Clear();
+        SuccessfullyAppliedDefinitionTargets.Clear();
+        ActiveDefinitionsApplied = false;
         CreaturePrefabRegistry.ResetOwnedClones();
         CreatureConsoleCommands.InvalidateSpawnAutocompleteOptions();
         CreatureAssetOwnerCatalog.InvalidateMappings();
         GameDataReady = false;
+        LoadedHumanoidsRefreshedForCurrentGameData = false;
+        ReferenceCaptureAttemptedForCurrentGameData = false;
+        CapturedReferenceFiles = null;
         RemoteBundleReady = false;
         SyncedApplyPending = false;
+        GameDataRefreshPending = false;
         PendingSyncedApplyTime = DateTime.MaxValue;
+        PendingGameDataRefreshFrame = int.MaxValue;
         TextureRefreshPending = false;
         PendingTextureRefreshTime = DateTime.MaxValue;
     }
 
     internal static void LoadDefinitionsFromDisk(bool assignSyncedValue)
     {
+        if (GameDataRefreshPending)
+        {
+            RequestConfigurationReload();
+            return;
+        }
+
         EnsureDirectoriesAndDefaultFiles();
         if (!TryBuildDiskSnapshot(out DefinitionSnapshot snapshot) ||
             !CreatureKarmaManager.TryParseYaml(snapshot.KarmaYaml, KarmaConfigurationPath, out CreatureKarmaManager.ParsedConfiguration karma))
@@ -371,198 +445,265 @@ internal static class CreatureDomainManager
             }
         }
 
-        if (serializedBundle != null)
+        if (!TryBeginDefinitionClonePreparation(
+                snapshot,
+                "local YAML bundle",
+                out bool clonePreparationStarted))
         {
-            SuppressSyncedApply = true;
-            try
-            {
-                if (SyncedYamlBundle == null)
-                {
-                    CreatureManagerPlugin.Log.LogError("Cannot publish the synchronized YAML bundle because ServerSync is not initialized.");
-                    return;
-                }
-
-                SyncedYamlBundle.AssignLocalValue(serializedBundle);
-            }
-            catch (Exception ex)
-            {
-                CreatureManagerPlugin.Log.LogError($"Failed to publish the synchronized YAML bundle; keeping the complete last-known-good configuration: {ex.Message}");
-                return;
-            }
-            finally
-            {
-                SuppressSyncedApply = false;
-            }
-
-            SyncedApplyPending = false;
-            PendingSyncedApplyTime = DateTime.MaxValue;
+            CreatureManagerPlugin.Log.LogWarning(
+                "Keeping the complete last-known-good CreatureManager configuration because its clones could not be prepared.");
+            return;
         }
 
-        CreatureKarmaManager.CommitParsedConfiguration(karma);
-        SetActiveDefinitions(snapshot.Factions, snapshot.Levels, snapshot.Ai, snapshot.Attacks, snapshot.Projectiles, snapshot.Creatures, "local YAML bundle");
+        bool keepPreparedClones = false;
+        string? previousSyncedBundle = null;
+        bool synchronizedBundlePublished = false;
+        try
+        {
+            if (serializedBundle != null)
+            {
+                SuppressSyncedApply = true;
+                try
+                {
+                    if (SyncedYamlBundle == null)
+                    {
+                        CreatureManagerPlugin.Log.LogError("Cannot publish the synchronized YAML bundle because ServerSync is not initialized.");
+                        return;
+                    }
+
+                    previousSyncedBundle = SyncedYamlBundle.Value;
+                    SyncedYamlBundle.AssignLocalValue(serializedBundle);
+                    synchronizedBundlePublished = true;
+                }
+                catch (Exception ex)
+                {
+                    CreatureManagerPlugin.Log.LogError($"Failed to publish the synchronized YAML bundle; keeping the complete last-known-good configuration: {ex.Message}");
+                    return;
+                }
+                finally
+                {
+                    SuppressSyncedApply = false;
+                }
+
+                SyncedApplyPending = false;
+                PendingSyncedApplyTime = DateTime.MaxValue;
+            }
+
+            if (!TrySetActiveDefinitions(snapshot, "local YAML bundle", clonePreparationStarted))
+            {
+                if (synchronizedBundlePublished && SyncedYamlBundle != null && previousSyncedBundle != null)
+                {
+                    SuppressSyncedApply = true;
+                    try
+                    {
+                        SyncedYamlBundle.AssignLocalValue(previousSyncedBundle);
+                    }
+                    catch (Exception ex)
+                    {
+                        CreatureManagerPlugin.Log.LogError(
+                            $"Failed to restore the previous synchronized YAML bundle after the local definition transaction was rejected: {ex.Message}");
+                    }
+                    finally
+                    {
+                        SuppressSyncedApply = false;
+                    }
+                }
+
+                return;
+            }
+
+            CreatureKarmaManager.CommitParsedConfiguration(karma);
+            keepPreparedClones = true;
+        }
+        finally
+        {
+            EndDefinitionClonePreparation(clonePreparationStarted, keepPreparedClones);
+        }
     }
 
     internal static bool TryWriteReferenceConfigurationFile(out string path, out string error)
     {
         path = ReferenceConfigurationPath;
-        error = "";
-
-        if (!IsGameDataReady())
-        {
-            error = "Creature game data is not ready yet.";
-            return false;
-        }
-
-        File.WriteAllText(path, CreatureReferenceWriter.BuildReferenceYaml());
-        CreatureManagerPlugin.Log.LogInfo($"Wrote creature reference YAML to {path}.");
-        return true;
+        return TryWriteGeneratedFile(path, CreatureReferenceWriter.BuildReferenceYaml, "creature reference YAML", out error);
     }
 
     internal static bool TryWriteFullScaffoldConfigurationFile(out string path, out string error)
     {
         path = FullScaffoldConfigurationPath;
-        error = "";
-
-        if (!IsGameDataReady())
-        {
-            error = "Creature game data is not ready yet.";
-            return false;
-        }
-
-        File.WriteAllText(path, CreatureReferenceWriter.BuildFullScaffoldYaml());
-        CreatureManagerPlugin.Log.LogInfo($"Wrote creature full scaffold YAML to {path}.");
-        return true;
+        return TryWriteGeneratedFile(path, CreatureReferenceWriter.BuildFullScaffoldYaml, "creature full scaffold YAML", out error);
     }
 
     internal static bool TryWriteAttackReferenceConfigurationFile(out string path, out string error)
     {
         path = AttackReferenceConfigurationPath;
-        error = "";
-
-        if (!IsGameDataReady())
-        {
-            error = "Creature game data is not ready yet.";
-            return false;
-        }
-
-        File.WriteAllText(path, CreatureReferenceWriter.BuildAttackReferenceYaml());
-        CreatureManagerPlugin.Log.LogInfo($"Wrote attack reference YAML to {path}.");
-        return true;
+        return TryWriteGeneratedFile(path, CreatureReferenceWriter.BuildAttackReferenceYaml, "attack reference YAML", out error);
     }
 
     internal static bool TryWriteAiReferenceConfigurationFile(out string path, out string error)
     {
         path = AiReferenceConfigurationPath;
-        error = "";
-
-        if (!IsGameDataReady())
-        {
-            error = "Creature game data is not ready yet.";
-            return false;
-        }
-
-        File.WriteAllText(path, CreatureReferenceWriter.BuildAiReferenceYaml());
-        CreatureManagerPlugin.Log.LogInfo($"Wrote AI reference YAML to {path}.");
-        return true;
+        return TryWriteGeneratedFile(path, CreatureReferenceWriter.BuildAiReferenceYaml, "AI reference YAML", out error);
     }
 
     internal static bool TryWriteTextureReferenceConfigurationFile(out string path, out string error)
     {
         path = TextureReferenceConfigurationPath;
-        error = "";
-
-        if (!IsGameDataReady())
-        {
-            error = "Creature game data is not ready yet.";
-            return false;
-        }
-
-        File.WriteAllText(path, CreatureTextureRegistry.BuildTextureReferenceText());
-        CreatureManagerPlugin.Log.LogInfo($"Wrote texture reference to {path}.");
-        return true;
+        return TryWriteGeneratedFile(path, CreatureTextureRegistry.BuildTextureReferenceText, "texture reference", out error);
     }
 
     internal static bool TryWriteLevelVisualReferenceConfigurationFile(out string path, out string error)
     {
         path = LevelVisualReferenceConfigurationPath;
-        error = "";
-
-        if (!IsGameDataReady())
-        {
-            error = "Creature game data is not ready yet.";
-            return false;
-        }
-
-        File.WriteAllText(path, CreatureReferenceWriter.BuildLevelVisualReferenceYaml());
-        CreatureManagerPlugin.Log.LogInfo($"Wrote level visual reference YAML to {path}.");
-        return true;
+        return TryWriteGeneratedFile(path, CreatureReferenceWriter.BuildLevelVisualReferenceYaml, "level visual reference YAML", out error);
     }
 
     internal static bool TryWriteCreatureLoadoutReferenceConfigurationFile(out string path, out string error)
     {
         path = CreatureLoadoutReferenceConfigurationPath;
-        error = "";
-
-        if (!IsGameDataReady())
-        {
-            error = "Creature game data is not ready yet.";
-            return false;
-        }
-
-        File.WriteAllText(path, CreatureReferenceWriter.BuildCreatureLoadoutReferenceText());
-        CreatureManagerPlugin.Log.LogInfo($"Wrote creature loadout reference to {path}.");
-        return true;
+        return TryWriteGeneratedFile(path, CreatureReferenceWriter.BuildCreatureLoadoutReferenceText, "creature loadout reference", out error);
     }
 
     internal static bool TryWriteProjectileReferenceConfigurationFile(out string path, out string error)
     {
         path = ProjectileReferenceConfigurationPath;
-        error = "";
+        return TryWriteGeneratedFile(path, CreatureReferenceWriter.BuildProjectileReferenceYaml, "projectile reference YAML", out error);
+    }
 
+    private static bool TryWriteGeneratedFile(string path, Func<string> buildContent, string label, out string error)
+    {
+        error = "";
         if (!IsGameDataReady())
         {
             error = "Creature game data is not ready yet.";
             return false;
         }
 
-        File.WriteAllText(path, CreatureReferenceWriter.BuildProjectileReferenceYaml());
-        CreatureManagerPlugin.Log.LogInfo($"Wrote projectile reference YAML to {path}.");
-        return true;
+        try
+        {
+            File.WriteAllText(path, buildContent());
+            CreatureManagerPlugin.Log.LogInfo($"Wrote {label} to {path}.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = $"Failed to write {label}: {ex.Message}";
+            CreatureManagerPlugin.Log.LogError($"{error} Path: {path}");
+            return false;
+        }
     }
 
-    private static void RefreshReferenceConfigurationFilesIfNeeded()
+    private sealed class ReferenceFileSnapshot
     {
-        if (!IsGameDataReady() || ConfigSync?.IsSourceOfTruth == false)
+        internal readonly string CreatureYaml;
+        internal readonly string AiYaml;
+        internal readonly string AttackYaml;
+        internal readonly string CreatureLoadout;
+        internal readonly string ProjectileYaml;
+        internal readonly string TextureReference;
+        internal readonly string Signature;
+
+        internal ReferenceFileSnapshot(
+            string creatureYaml,
+            string aiYaml,
+            string attackYaml,
+            string creatureLoadout,
+            string projectileYaml,
+            string textureReference,
+            string signature)
+        {
+            CreatureYaml = creatureYaml;
+            AiYaml = aiYaml;
+            AttackYaml = attackYaml;
+            CreatureLoadout = creatureLoadout;
+            ProjectileYaml = projectileYaml;
+            TextureReference = textureReference;
+            Signature = signature;
+        }
+    }
+
+    private sealed class CloneMaterializationRequest
+    {
+        internal readonly string Target;
+        internal readonly string Source;
+        internal readonly string Domain;
+
+        internal CloneMaterializationRequest(string target, string source, string domain)
+        {
+            Target = target;
+            Source = source;
+            Domain = domain;
+        }
+    }
+
+    private static void CaptureReferenceConfigurationFilesIfNeeded()
+    {
+        if (ReferenceCaptureAttemptedForCurrentGameData || !IsGameDataReady())
         {
             return;
         }
 
-        CreatureAssetOwnerCatalog.RefreshMappings();
-        string creatureYaml = CreatureReferenceWriter.BuildReferenceYaml();
-        string aiYaml = CreatureReferenceWriter.BuildAiReferenceYaml();
-        string attackYaml = CreatureReferenceWriter.BuildAttackReferenceYaml();
-        string creatureLoadoutReference = CreatureReferenceWriter.BuildCreatureLoadoutReferenceText();
-        string projectileReference = CreatureReferenceWriter.BuildProjectileReferenceYaml();
-        string textureReference = CreatureTextureRegistry.BuildTextureReferenceText();
-        if (creatureYaml == "[]\n" && aiYaml == "[]\n" && attackYaml == "[]\n" && creatureLoadoutReference == "[]\n" && projectileReference == "[]\n" && textureReference == "[]\n")
+        ReferenceCaptureAttemptedForCurrentGameData = true;
+        if (ConfigSync?.IsSourceOfTruth == false)
         {
             return;
         }
 
-        string signature = ComputeStableSignature(ReferenceLogicVersion + "\n" + creatureYaml + "\n---ai---\n" + aiYaml + "\n---attacks---\n" + attackYaml + "\n---loadout---\n" + creatureLoadoutReference + "\n---projectile---\n" + projectileReference + "\n---textures---\n" + textureReference);
-        if (ReferenceFilesAreCurrent(signature))
+        try
+        {
+            CreatureAssetOwnerCatalog.RefreshMappings();
+            string creatureYaml = CreatureReferenceWriter.BuildReferenceYaml();
+            string aiYaml = CreatureReferenceWriter.BuildAiReferenceYaml();
+            string attackYaml = CreatureReferenceWriter.BuildAttackReferenceYaml();
+            string creatureLoadoutReference = CreatureReferenceWriter.BuildCreatureLoadoutReferenceText();
+            string projectileReference = CreatureReferenceWriter.BuildProjectileReferenceYaml();
+            string textureReference = CreatureTextureRegistry.BuildTextureReferenceText();
+            if (creatureYaml == "[]\n" && aiYaml == "[]\n" && attackYaml == "[]\n" && creatureLoadoutReference == "[]\n" && projectileReference == "[]\n" && textureReference == "[]\n")
+            {
+                return;
+            }
+
+            string signature = ComputeStableSignature(ReferenceLogicVersion + "\n" + creatureYaml + "\n---ai---\n" + aiYaml + "\n---attacks---\n" + attackYaml + "\n---loadout---\n" + creatureLoadoutReference + "\n---projectile---\n" + projectileReference + "\n---textures---\n" + textureReference);
+            CapturedReferenceFiles = new ReferenceFileSnapshot(
+                creatureYaml,
+                aiYaml,
+                attackYaml,
+                creatureLoadoutReference,
+                projectileReference,
+                textureReference,
+                signature);
+        }
+        catch (Exception ex)
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Failed to capture pristine CreatureManager reference data; automatic reference generation is disabled until game data reloads: {ex.Message}");
+        }
+    }
+
+    private static void WriteCapturedReferenceConfigurationFilesIfNeeded()
+    {
+        ReferenceFileSnapshot? snapshot = CapturedReferenceFiles;
+        if (snapshot == null ||
+            ConfigSync?.IsSourceOfTruth == false ||
+            ReferenceFilesAreCurrent(snapshot.Signature))
         {
             return;
         }
 
-        File.WriteAllText(ReferenceConfigurationPath, creatureYaml);
-        File.WriteAllText(AiReferenceConfigurationPath, aiYaml);
-        File.WriteAllText(AttackReferenceConfigurationPath, attackYaml);
-        File.WriteAllText(CreatureLoadoutReferenceConfigurationPath, creatureLoadoutReference);
-        File.WriteAllText(ProjectileReferenceConfigurationPath, projectileReference);
-        File.WriteAllText(TextureReferenceConfigurationPath, textureReference);
-        RecordReferenceSignature(signature);
-        CreatureManagerPlugin.Log.LogInfo($"Updated reference files at {ReferenceConfigurationPath}, {AiReferenceConfigurationPath}, {AttackReferenceConfigurationPath}, {CreatureLoadoutReferenceConfigurationPath}, {ProjectileReferenceConfigurationPath}, and {TextureReferenceConfigurationPath}.");
+        try
+        {
+            File.WriteAllText(ReferenceConfigurationPath, snapshot.CreatureYaml);
+            File.WriteAllText(AiReferenceConfigurationPath, snapshot.AiYaml);
+            File.WriteAllText(AttackReferenceConfigurationPath, snapshot.AttackYaml);
+            File.WriteAllText(CreatureLoadoutReferenceConfigurationPath, snapshot.CreatureLoadout);
+            File.WriteAllText(ProjectileReferenceConfigurationPath, snapshot.ProjectileYaml);
+            File.WriteAllText(TextureReferenceConfigurationPath, snapshot.TextureReference);
+            RecordReferenceSignature(snapshot.Signature);
+            CreatureManagerPlugin.Log.LogInfo($"Updated reference files at {ReferenceConfigurationPath}, {AiReferenceConfigurationPath}, {AttackReferenceConfigurationPath}, {CreatureLoadoutReferenceConfigurationPath}, {ProjectileReferenceConfigurationPath}, and {TextureReferenceConfigurationPath}.");
+        }
+        catch (Exception ex)
+        {
+            CreatureManagerPlugin.Log.LogWarning($"Failed to update CreatureManager reference files: {ex.Message}");
+        }
     }
 
     internal static bool IsGameDataReady()
@@ -572,10 +713,12 @@ internal static class CreatureDomainManager
 
     internal static bool IsSynchronizedConfigurationReady()
     {
-        return (ConfigSync?.IsSourceOfTruth == true && !DiskReloadPending) ||
+        return ActiveDefinitionsApplied &&
+               !GameDataRefreshPending &&
+               ((ConfigSync?.IsSourceOfTruth == true && !DiskReloadPending) ||
                (ConfigSync?.IsSourceOfTruth == false &&
                 RemoteBundleReady &&
-                !SyncedApplyPending);
+                !SyncedApplyPending));
     }
 
     private static bool HasGameDataInstances()
@@ -645,7 +788,7 @@ internal static class CreatureDomainManager
             RemoteBundleReady = false;
             SyncedApplyPending = false;
             PendingSyncedApplyTime = DateTime.MaxValue;
-            RefreshReferenceConfigurationFilesIfNeeded();
+            WriteCapturedReferenceConfigurationFilesIfNeeded();
             LoadDefinitionsFromDisk(assignSyncedValue: true);
             return;
         }
@@ -653,6 +796,12 @@ internal static class CreatureDomainManager
         DiskReloadPending = false;
         PendingDiskReloadTime = DateTime.MaxValue;
         RemoteBundleReady = false;
+        if (WatcherResetPending)
+        {
+            TextureRefreshPending = true;
+            PendingTextureRefreshTime = DateTime.UtcNow;
+        }
+
         RequestSyncedYamlApply();
     }
 
@@ -660,6 +809,12 @@ internal static class CreatureDomainManager
     {
         if (SyncedYamlBundle == null)
         {
+            return;
+        }
+
+        if (GameDataRefreshPending)
+        {
+            RequestSyncedYamlApply();
             return;
         }
 
@@ -671,9 +826,31 @@ internal static class CreatureDomainManager
             return;
         }
 
-        CreatureKarmaManager.CommitParsedConfiguration(karma);
+        if (!TryBeginDefinitionClonePreparation(snapshot, source, out bool clonePreparationStarted))
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Keeping the complete last-known-good CreatureManager configuration because the clones from {source} could not be prepared.");
+            return;
+        }
+
+        bool previousRemoteBundleReady = RemoteBundleReady;
         RemoteBundleReady = ConfigSync?.IsSourceOfTruth == false;
-        SetActiveDefinitions(snapshot.Factions, snapshot.Levels, snapshot.Ai, snapshot.Attacks, snapshot.Projectiles, snapshot.Creatures, source);
+        bool committed = false;
+        try
+        {
+            if (!TrySetActiveDefinitions(snapshot, source, clonePreparationStarted))
+            {
+                RemoteBundleReady = previousRemoteBundleReady;
+                return;
+            }
+
+            CreatureKarmaManager.CommitParsedConfiguration(karma);
+            committed = true;
+        }
+        finally
+        {
+            EndDefinitionClonePreparation(clonePreparationStarted, committed);
+        }
     }
 
     private static bool TryBuildDiskSnapshot(out DefinitionSnapshot snapshot)
@@ -750,6 +927,7 @@ internal static class CreatureDomainManager
 
         try
         {
+            CreatureYaml.ValidateUniqueMappingKeysInDocument(yaml, source);
             SyncedYamlBundleData? bundle = Deserializer.Deserialize<SyncedYamlBundleData>(yaml);
             if (bundle == null || bundle.Version != SyncedYamlBundleVersion)
             {
@@ -811,56 +989,149 @@ internal static class CreatureDomainManager
         }
     }
 
-    private static void SetActiveDefinitions(List<FactionDefinition> factionDefinitions, List<LevelDefinition> levelDefinitions, List<AiDefinition> aiDefinitions, List<AttackDefinition> attackDefinitions, List<ProjectileDefinition> projectileDefinitions, List<CreatureDefinition> creatureDefinitions, string source)
+    private static bool TrySetActiveDefinitions(
+        DefinitionSnapshot snapshot,
+        string source,
+        bool clonePreparationStarted)
     {
+        DefinitionSnapshot previousSnapshot;
         lock (Sync)
         {
-            ActiveFactionDefinitions = factionDefinitions;
-            ActiveLevelDefinitions = levelDefinitions;
-            ActiveAiDefinitions = aiDefinitions;
-            ActiveAttackDefinitions = attackDefinitions;
-            ActiveProjectileDefinitions = projectileDefinitions;
-            ActiveDefinitions = creatureDefinitions;
+            previousSnapshot = ActiveSnapshot;
         }
 
-        CreatureFactionManager.Load(factionDefinitions);
-        CreatureLevelManager.Load(levelDefinitions);
-        CreatureManagerPlugin.Log.LogInfo($"Loaded {factionDefinitions.Count} faction definition(s), {levelDefinitions.Count} level rule definition(s), {aiDefinitions.Count} AI definition(s), {attackDefinitions.Count} attack definition(s), {projectileDefinitions.Count} projectile definition(s), and {creatureDefinitions.Count} creature definition(s) from {source}.");
-        ApplyDefinitionsToGameData();
+        if (!CreatureFactionManager.Load(snapshot.Factions))
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Keeping the complete last-known-good CreatureManager configuration because the faction rules from {source} were rejected.");
+            return false;
+        }
+
+        if (!TryPreflightCreatureFactionReferences(snapshot, source))
+        {
+            CreatureFactionManager.Load(previousSnapshot.Factions);
+            return false;
+        }
+
+        bool canApplyDefinitions = CanApplyDefinitionsToGameData();
+        if (canApplyDefinitions &&
+            !ApplyDefinitionsToGameData(snapshot, clonePreparationStarted))
+        {
+            bool factionRestored = CreatureFactionManager.Load(previousSnapshot.Factions);
+            bool definitionsRestored = ApplyDefinitionsToGameData(
+                previousSnapshot,
+                cloneTransactionPrepared: false);
+            ActiveDefinitionsApplied = factionRestored && definitionsRestored;
+            if (!ActiveDefinitionsApplied)
+            {
+                SuccessfullyAppliedDefinitionTargets.Clear();
+            }
+
+            if (!factionRestored || !definitionsRestored)
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    "CreatureManager could not fully restore the previous prefab/faction state after a definition apply failed. Restart the game before editing the YAML files again.");
+            }
+
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Keeping the complete last-known-good CreatureManager configuration because applying {source} to the game prefabs failed.");
+            return false;
+        }
+
+        ActiveDefinitionsApplied = canApplyDefinitions;
+
+        lock (Sync)
+        {
+            ActiveSnapshot = snapshot;
+        }
+
+        CreatureLevelManager.Load(snapshot.Levels);
+        CreatureManagerPlugin.Log.LogInfo($"Loaded {snapshot.Factions.Count} faction definition(s), {snapshot.Levels.Count} level rule definition(s), {snapshot.Ai.Count} AI definition(s), {snapshot.Attacks.Count} attack definition(s), {snapshot.Projectiles.Count} projectile definition(s), and {snapshot.Creatures.Count} creature definition(s) from {source}.");
+        return true;
     }
 
     private static void ApplyDefinitionsToGameData()
     {
+        DefinitionSnapshot snapshot;
+        lock (Sync)
+        {
+            snapshot = ActiveSnapshot;
+        }
+
         if (!CanApplyDefinitionsToGameData())
         {
+            ActiveDefinitionsApplied = false;
             return;
         }
 
-        CreaturePrefabBaseline.BeginApplyPass();
-        ManagedRagdollPrefabs.Clear();
-        CreaturePrefabRegistry.BeginCloneApplyPass();
-        EquipmentVisualScales.Clear();
-        RandomHairPrefabsByCreature.Clear();
-        AppearanceByCreature.Clear();
-        AppearanceByRagdollPrefab.Clear();
-        RagdollScalesByPrefab.Clear();
-        RagdollTexturesByPrefab.Clear();
-        AppliedRagdollTextureVisuals.Clear();
-        BeginTextureOverrideApply();
+        bool applied = ApplyDefinitionsToGameData(snapshot, cloneTransactionPrepared: false);
+        if (!applied && CanApplyDefinitionsToGameData())
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                "CreatureManager will retry the active definition snapshot once after its first prefab apply failed.");
+            applied = ApplyDefinitionsToGameData(snapshot, cloneTransactionPrepared: false);
+        }
+
+        ActiveDefinitionsApplied = applied;
+        if (!applied)
+        {
+            SuccessfullyAppliedDefinitionTargets.Clear();
+            CreatureManagerPlugin.Log.LogError(
+                "CreatureManager could not apply the active definition snapshot. Supported prefab fields were restored to their pre-CreatureManager baselines, and level/modifier application is paused until the next successful reload.");
+        }
+    }
+
+    private static bool ApplyDefinitionsToGameData(
+        DefinitionSnapshot snapshot,
+        bool cloneTransactionPrepared)
+    {
+        if (!CanApplyDefinitionsToGameData())
+        {
+            return false;
+        }
+
+        List<AiDefinition> aiDefinitions = snapshot.Ai.ToList();
+        List<AttackDefinition> attackDefinitions = snapshot.Attacks.ToList();
+        List<ProjectileDefinition> projectileDefinitions = snapshot.Projectiles.ToList();
+        List<CreatureDefinition> creatureDefinitions = snapshot.Creatures.ToList();
+        if (!TryBuildCloneMaterializationOrder(
+                projectileDefinitions,
+                attackDefinitions,
+                creatureDefinitions,
+                out List<CloneMaterializationRequest> cloneOrder))
+        {
+            CreatureManagerPlugin.Log.LogError("CreatureManager definitions were not applied because their clonedFrom graph is invalid.");
+            return false;
+        }
+
+        if (!cloneTransactionPrepared)
+        {
+            CreaturePrefabRegistry.BeginCloneApplyPass();
+        }
+
+        bool templateApplyStarted = false;
         bool applyCompleted = false;
+        DefinitionApplyCheckpoint? checkpoint = null;
         try
         {
-            List<AiDefinition> aiDefinitions;
-            List<AttackDefinition> attackDefinitions;
-            List<ProjectileDefinition> projectileDefinitions;
-            List<CreatureDefinition> creatureDefinitions;
-            lock (Sync)
+            if (!cloneTransactionPrepared && !TryMaterializeDefinitionClones(cloneOrder))
             {
-                aiDefinitions = ActiveAiDefinitions.ToList();
-                attackDefinitions = ActiveAttackDefinitions.ToList();
-                projectileDefinitions = ActiveProjectileDefinitions.ToList();
-                creatureDefinitions = ActiveDefinitions.ToList();
+                return false;
             }
+
+            if (!cloneTransactionPrepared &&
+                !TryPreflightDefinitionApplication(snapshot, "active definition snapshot"))
+            {
+                return false;
+            }
+
+            // Keep the clone registration pass open until every template write succeeds. A failed
+            // pass can then remove only clones introduced by this candidate snapshot.
+            checkpoint = new DefinitionApplyCheckpoint();
+            CreaturePrefabBaseline.BeginApplyPass();
+            ClearActiveDefinitionSideState();
+            BeginTextureOverrideApply();
+            templateApplyStarted = true;
 
             Dictionary<string, AiDefinition> aiDefinitionsByName = BuildAiDefinitionLookup(aiDefinitions);
             foreach (ProjectileDefinition definition in projectileDefinitions)
@@ -877,6 +1148,7 @@ internal static class CreatureDomainManager
                 catch (Exception ex)
                 {
                     CreatureManagerPlugin.Log.LogError($"Failed to apply projectile definition for '{definition.Prefab}': {ex}");
+                    return false;
                 }
             }
 
@@ -894,6 +1166,7 @@ internal static class CreatureDomainManager
                 catch (Exception ex)
                 {
                     CreatureManagerPlugin.Log.LogError($"Failed to apply attack definition for '{definition.Prefab}': {ex}");
+                    return false;
                 }
             }
 
@@ -911,36 +1184,902 @@ internal static class CreatureDomainManager
                 catch (Exception ex)
                 {
                     CreatureManagerPlugin.Log.LogError($"Failed to apply creature definition for '{definition.Prefab}': {ex}");
+                    return false;
                 }
             }
 
             applyCompleted = true;
+            UpdateSuccessfullyAppliedDefinitionTargets(snapshot);
+            return true;
         }
         finally
         {
-            CompleteTextureOverrideApply();
-            if (applyCompleted)
+            if (templateApplyStarted)
             {
-                CreaturePrefabRegistry.CompleteCloneApplyPass();
-                try
+                CompleteTextureOverrideApply();
+            }
+
+            if (!applyCompleted)
+            {
+                if (templateApplyStarted)
                 {
-                    CreatureManagerRandomHairRuntime.RefreshLoadedHumanoids();
+                    RestoreAfterFailedTemplateApply(checkpoint!);
                 }
-                catch (Exception ex)
-                {
-                    CreatureManagerPlugin.Log.LogWarning($"Failed to refresh random hair on loaded humanoids: {ex.Message}");
-                }
+
+                CreaturePrefabRegistry.CancelCloneApplyPass();
             }
             else
             {
-                CreaturePrefabRegistry.CancelCloneApplyPass();
+                if (!cloneTransactionPrepared)
+                {
+                    CreaturePrefabRegistry.CompleteCloneApplyPass();
+                }
+
+                if (!LoadedHumanoidsRefreshedForCurrentGameData)
+                {
+                    // Catch characters that initialized before the first valid local/server definition bundle.
+                    // Later hot reloads update templates only and must not retrofit already loaded humanoids.
+                    LoadedHumanoidsRefreshedForCurrentGameData = true;
+                    try
+                    {
+                        CreatureManagerRandomHairRuntime.RefreshLoadedHumanoids();
+                    }
+                    catch (Exception ex)
+                    {
+                        CreatureManagerPlugin.Log.LogWarning($"Failed to initialize random hair on loaded humanoids: {ex.Message}");
+                    }
+                }
+            }
+        }
+    }
+
+    private static void ClearActiveDefinitionSideState()
+    {
+        ManagedRagdollPrefabs.Clear();
+        EquipmentVisualScales.Clear();
+        RandomHairPrefabsByCreature.Clear();
+        AppearanceByCreature.Clear();
+        AppearanceByRagdollPrefab.Clear();
+        RagdollScalesByPrefab.Clear();
+        RagdollTexturesByPrefab.Clear();
+        AppliedRagdollTextureVisuals.Clear();
+    }
+
+    private static void RestoreAfterFailedTemplateApply(DefinitionApplyCheckpoint checkpoint)
+    {
+        // Restore every field group captured during the failed pass before a previous snapshot is
+        // reapplied. Texture overrides and the derived runtime maps need the same reset because they
+        // are intentionally maintained outside the component baselines.
+        CreaturePrefabBaseline.BeginApplyPass();
+        ClearActiveDefinitionSideState();
+        BeginTextureOverrideApply();
+        CompleteTextureOverrideApply();
+
+        foreach ((int rendererId, int materialIndex) in TextureMaterialOverrides.Keys
+                     .Where(key =>
+                         !checkpoint.TextureOverrides.TryGetValue(key, out TextureMaterialOverride previous) ||
+                         !ReferenceEquals(TextureMaterialOverrides[key], previous))
+                     .ToArray())
+        {
+            (int RendererId, int MaterialIndex) key = (rendererId, materialIndex);
+            TextureMaterialOverride textureOverride = TextureMaterialOverrides[key];
+            RestoreTextureOverrideSlot(textureOverride);
+            if (textureOverride.Generated != null)
+            {
+                Object.Destroy(textureOverride.Generated);
+            }
+
+            TextureMaterialOverrides.Remove(key);
+        }
+
+        RestoreDictionary(InheritedAppearanceByClone, checkpoint.InheritedAppearances);
+        RestoreDictionary(RagdollCloneSources, checkpoint.RagdollSources);
+        RestoreDictionary(OriginalRagdollScales, checkpoint.OriginalRagdollScaleValues);
+        RestoreDictionary(InheritedRagdollScales, checkpoint.InheritedRagdollScaleValues);
+        RestoreDictionary(InheritedRagdollTextures, checkpoint.InheritedRagdollTextureValues);
+    }
+
+    private static void RestoreDictionary<TKey, TValue>(
+        IDictionary<TKey, TValue> target,
+        IReadOnlyDictionary<TKey, TValue> checkpoint)
+        where TKey : notnull
+    {
+        target.Clear();
+        foreach (KeyValuePair<TKey, TValue> pair in checkpoint)
+        {
+            target[pair.Key] = pair.Value;
+        }
+    }
+
+    private static void UpdateSuccessfullyAppliedDefinitionTargets(DefinitionSnapshot snapshot)
+    {
+        SuccessfullyAppliedDefinitionTargets.Clear();
+        foreach (ProjectileDefinition definition in snapshot.Projectiles)
+        {
+            AddSuccessfullyAppliedTarget(definition.IsEnabled, definition.Prefab);
+        }
+
+        foreach (AttackDefinition definition in snapshot.Attacks)
+        {
+            AddSuccessfullyAppliedTarget(definition.IsEnabled, definition.Prefab);
+        }
+
+        foreach (CreatureDefinition definition in snapshot.Creatures)
+        {
+            AddSuccessfullyAppliedTarget(definition.IsEnabled, definition.Prefab);
+        }
+    }
+
+    private static void AddSuccessfullyAppliedTarget(bool enabled, string? prefabName)
+    {
+        string name = (prefabName ?? "").Trim();
+        if (!enabled || name.Length == 0)
+        {
+            return;
+        }
+
+        GameObject? prefab = CreaturePrefabRegistry.GetPrefab(name);
+        if (prefab != null &&
+            (CreaturePrefabBaseline.HasAppliedGroups(prefab) || HasActiveTextureOverride(prefab)))
+        {
+            SuccessfullyAppliedDefinitionTargets.Add(name);
+        }
+    }
+
+    private static bool HasActiveTextureOverride(GameObject prefab)
+    {
+        Transform root = prefab.transform;
+        return TextureMaterialOverrides.Values.Any(textureOverride =>
+            textureOverride.Active &&
+            textureOverride.Renderer != null &&
+            textureOverride.Renderer.transform.IsChildOf(root));
+    }
+
+    private static bool TryBeginDefinitionClonePreparation(
+        DefinitionSnapshot snapshot,
+        string source,
+        out bool preparationStarted)
+    {
+        preparationStarted = false;
+        if (!IsGameDataReady() || GameDataRefreshPending)
+        {
+            return true;
+        }
+
+        if (!TryBuildCloneMaterializationOrder(
+                snapshot.Projectiles,
+                snapshot.Attacks,
+                snapshot.Creatures,
+                out List<CloneMaterializationRequest> cloneOrder))
+        {
+            return false;
+        }
+
+        CreaturePrefabRegistry.BeginCloneApplyPass();
+        if (TryMaterializeDefinitionClones(cloneOrder) &&
+            TryPreflightDefinitionApplication(snapshot, source))
+        {
+            preparationStarted = true;
+            return true;
+        }
+
+        CreaturePrefabRegistry.CancelCloneApplyPass();
+        CreatureManagerPlugin.Log.LogError(
+            $"CreatureManager clone preparation failed for {source}; no configuration state was committed.");
+        return false;
+    }
+
+    private static void EndDefinitionClonePreparation(bool preparationStarted, bool keepPreparedClones)
+    {
+        if (!preparationStarted)
+        {
+            return;
+        }
+
+        if (keepPreparedClones)
+        {
+            CreaturePrefabRegistry.CompleteCloneApplyPass();
+        }
+        else
+        {
+            CreaturePrefabRegistry.CancelCloneApplyPass();
+        }
+    }
+
+    private static bool TryBuildCloneMaterializationOrder(
+        IEnumerable<ProjectileDefinition> projectileDefinitions,
+        IEnumerable<AttackDefinition> attackDefinitions,
+        IEnumerable<CreatureDefinition> creatureDefinitions,
+        out List<CloneMaterializationRequest> ordered)
+    {
+        ordered = new List<CloneMaterializationRequest>();
+        Dictionary<string, CloneMaterializationRequest> requests = new(StringComparer.OrdinalIgnoreCase);
+
+        bool AddRequest(string? targetValue, string? sourceValue, string domain)
+        {
+            string target = (targetValue ?? "").Trim();
+            string source = (sourceValue ?? "").Trim();
+            if (target.Length == 0 || source.Length == 0)
+            {
+                return true;
+            }
+
+            if (requests.TryGetValue(target, out CloneMaterializationRequest existing))
+            {
+                if (string.Equals(existing.Source, source, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                CreatureManagerPlugin.Log.LogError(
+                    $"Clone '{target}' has conflicting clonedFrom sources '{existing.Source}' ({existing.Domain}) and '{source}' ({domain}).");
+                return false;
+            }
+
+            requests[target] = new CloneMaterializationRequest(target, source, domain);
+            return true;
+        }
+
+        foreach (ProjectileDefinition definition in projectileDefinitions)
+        {
+            if (definition.IsEnabled && !AddRequest(definition.Prefab, definition.ClonedFrom, "projectile"))
+            {
+                return false;
+            }
+        }
+
+        foreach (AttackDefinition definition in attackDefinitions)
+        {
+            if (definition.IsEnabled && !AddRequest(definition.Prefab, definition.ClonedFrom, "attack"))
+            {
+                return false;
+            }
+        }
+
+        foreach (CreatureDefinition definition in creatureDefinitions)
+        {
+            if (definition.IsEnabled && !AddRequest(definition.Prefab, definition.ClonedFrom, "creature"))
+            {
+                return false;
+            }
+        }
+
+        Dictionary<string, int> indegree = requests.Keys.ToDictionary(
+            key => key,
+            _ => 0,
+            StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, List<string>> dependents = new(StringComparer.OrdinalIgnoreCase);
+        foreach (CloneMaterializationRequest request in requests.Values)
+        {
+            GameObject? existingTarget = CreaturePrefabRegistry.GetPrefab(request.Target);
+            if (existingTarget != null && !CreaturePrefabRegistry.IsCreatureManagerClone(existingTarget))
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    $"Clone '{request.Target}' was not created because a prefab with that name is already registered.");
+                return false;
+            }
+
+            bool targetAlreadyManaged =
+                CreaturePrefabRegistry.TryGetCloneSource(request.Target, out string existingSource);
+            if (targetAlreadyManaged &&
+                !string.Equals(existingSource, request.Source, StringComparison.OrdinalIgnoreCase))
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    $"CreatureManager clone '{request.Target}' is already based on '{existingSource}' and cannot be changed to '{request.Source}' at runtime. Restart the game after changing clonedFrom.");
+                return false;
+            }
+
+            if (!targetAlreadyManaged &&
+                SuccessfullyAppliedDefinitionTargets.Contains(request.Source))
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    $"Cannot hot-add {request.Domain} clone '{request.Target}' from '{request.Source}' because CreatureManager has already applied overrides to that source prefab. " +
+                    "Creating it now would copy a different source state than a clean startup. Keep the YAML change and restart the game/server to create the clone deterministically.");
+                return false;
+            }
+
+            if (requests.ContainsKey(request.Source))
+            {
+                indegree[request.Target]++;
+                if (!dependents.TryGetValue(request.Source, out List<string> targets))
+                {
+                    targets = new List<string>();
+                    dependents[request.Source] = targets;
+                }
+
+                targets.Add(request.Target);
+                continue;
+            }
+
+            GameObject? externalSource = CreaturePrefabRegistry.GetPrefab(request.Source);
+            if (externalSource == null)
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    $"{request.Domain} clone source '{request.Source}' for '{request.Target}' was not found.");
+                return false;
+            }
+
+            if (CreaturePrefabRegistry.IsCreatureManagerClone(externalSource))
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    $"Clone '{request.Target}' depends on stale CreatureManager clone '{request.Source}', which is not defined in the current YAML bundle.");
+                return false;
+            }
+
+            if (CreaturePrefabRegistry.IsPlayerPrefab(externalSource))
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    $"Clone source '{request.Source}' for '{request.Target}' is a Player prefab and is not managed by CreatureManager.");
+                return false;
+            }
+
+        }
+
+        SortedSet<string> ready = new(
+            indegree.Where(pair => pair.Value == 0).Select(pair => pair.Key),
+            StringComparer.OrdinalIgnoreCase);
+        while (ready.Count > 0)
+        {
+            string target = ready.Min!;
+            ready.Remove(target);
+            ordered.Add(requests[target]);
+            if (!dependents.TryGetValue(target, out List<string> targets))
+            {
+                continue;
+            }
+
+            foreach (string dependent in targets.OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
+            {
+                int remaining = --indegree[dependent];
+                if (remaining == 0)
+                {
+                    ready.Add(dependent);
+                }
+            }
+        }
+
+        if (ordered.Count == requests.Count)
+        {
+            foreach (CloneMaterializationRequest request in ordered)
+            {
+                string prototypeName = request.Source;
+                while (requests.TryGetValue(prototypeName, out CloneMaterializationRequest sourceRequest))
+                {
+                    prototypeName = sourceRequest.Source;
+                }
+
+                GameObject? prototype = CreaturePrefabRegistry.GetPrefab(prototypeName);
+                if (prototype == null)
+                {
+                    CreatureManagerPlugin.Log.LogError(
+                        $"Clone source prototype '{prototypeName}' for '{request.Target}' was not found.");
+                    ordered.Clear();
+                    return false;
+                }
+
+                if (!CreaturePrefabRegistry.TryValidateCloneRegistration(
+                        prototype,
+                        request.Target,
+                        out string registrationError))
+                {
+                    CreatureManagerPlugin.Log.LogError(registrationError);
+                    ordered.Clear();
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        string cycle = string.Join(
+            ", ",
+            indegree.Where(pair => pair.Value > 0)
+                .Select(pair => pair.Key)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase));
+        CreatureManagerPlugin.Log.LogError($"CreatureManager clonedFrom graph contains a cycle involving: {cycle}.");
+        ordered.Clear();
+        return false;
+    }
+
+    private static bool TryMaterializeDefinitionClones(IEnumerable<CloneMaterializationRequest> ordered)
+    {
+        foreach (CloneMaterializationRequest request in ordered)
+        {
+            try
+            {
+                GameObject? source = CreaturePrefabRegistry.GetPrefab(request.Source);
+                if (source == null || CreaturePrefabRegistry.ClonePrefab(source, request.Target) == null)
+                {
+                    CreatureManagerPlugin.Log.LogError(
+                        $"Failed to materialize {request.Domain} clone '{request.Target}' from '{request.Source}'. No CreatureManager prefab overrides were applied.");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    $"Failed to materialize {request.Domain} clone '{request.Target}' from '{request.Source}': {ex}");
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryPreflightDefinitionApplication(DefinitionSnapshot snapshot, string source)
+    {
+        List<string> errors = new();
+        HashSet<string> currentCloneTargets = BuildCurrentCloneTargetSet(snapshot);
+        Dictionary<string, AiDefinition> aiDefinitions = snapshot.Ai
+            .Where(definition => definition.IsEnabled && !string.IsNullOrWhiteSpace(definition.Ai))
+            .GroupBy(definition => definition.Ai!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (ProjectileDefinition definition in snapshot.Projectiles.Where(definition => definition.IsEnabled))
+        {
+            string prefabName = (definition.Prefab ?? "").Trim();
+            GameObject? prefab = CreaturePrefabRegistry.GetPrefab(prefabName);
+            if (prefab == null)
+            {
+                errors.Add($"projectile '{prefabName}' target prefab was not found");
+                continue;
+            }
+            if (IsStaleManagedClone(prefab, currentCloneTargets))
+            {
+                errors.Add($"projectile '{prefabName}' resolves to a stale CreatureManager clone that is not defined by the current YAML bundle");
+                continue;
+            }
+
+            if (definition.Projectile?.SpawnOnHitSpecified == true)
+            {
+                if (prefab.GetComponent<Projectile>() == null)
+                {
+                    errors.Add($"projectile '{prefabName}' sets projectile.spawnOnHit but has no root Projectile component");
+                }
+
+                string? spawnOnHit = definition.Projectile.SpawnOnHit?.Trim();
+                if (spawnOnHit != null)
+                {
+                    GameObject? spawnOnHitPrefab = CreaturePrefabRegistry.GetPrefab(spawnOnHit);
+                    if (spawnOnHitPrefab == null)
+                    {
+                        errors.Add($"projectile '{prefabName}' references missing projectile.spawnOnHit prefab '{spawnOnHit}'");
+                    }
+                    else if (IsStaleManagedClone(spawnOnHitPrefab, currentCloneTargets))
+                    {
+                        errors.Add($"projectile '{prefabName}' references stale projectile.spawnOnHit clone '{spawnOnHit}'");
+                    }
+                }
+            }
+
+            if (definition.SpawnAbility?.SpawnPrefabs == null)
+            {
+                continue;
+            }
+
+            if (prefab.GetComponent<SpawnAbility>() == null)
+            {
+                errors.Add($"projectile '{prefabName}' sets spawnAbility.spawnPrefabs but has no root SpawnAbility component");
+            }
+
+            if (!CreatureYaml.TryParseSpawnPrefabEntries(
+                    definition.SpawnAbility.SpawnPrefabs,
+                    out List<(string PrefabName, int Weight)> spawnPrefabs,
+                    out string spawnError))
+            {
+                errors.Add($"projectile '{prefabName}' has invalid spawnAbility.spawnPrefabs: {spawnError}");
+                continue;
+            }
+
+            foreach ((string spawnPrefabName, _) in spawnPrefabs)
+            {
+                GameObject? spawnPrefab = CreaturePrefabRegistry.GetPrefab(spawnPrefabName);
+                if (spawnPrefab == null)
+                {
+                    errors.Add($"projectile '{prefabName}' references missing spawnAbility prefab '{spawnPrefabName}'");
+                }
+                else if (IsStaleManagedClone(spawnPrefab, currentCloneTargets))
+                {
+                    errors.Add($"projectile '{prefabName}' references stale spawnAbility clone '{spawnPrefabName}'");
+                }
+            }
+        }
+
+        foreach (AttackDefinition definition in snapshot.Attacks.Where(definition => definition.IsEnabled))
+        {
+            string prefabName = (definition.Prefab ?? "").Trim();
+            GameObject? prefab = CreaturePrefabRegistry.GetPrefab(prefabName);
+            ItemDrop? itemDrop = prefab != null ? prefab.GetComponent<ItemDrop>() : null;
+            if (prefab == null)
+            {
+                errors.Add($"attack '{prefabName}' target prefab was not found");
+                continue;
+            }
+            if (IsStaleManagedClone(prefab, currentCloneTargets))
+            {
+                errors.Add($"attack '{prefabName}' resolves to a stale CreatureManager clone that is not defined by the current YAML bundle");
+                continue;
+            }
+
+            if (itemDrop == null)
+            {
+                errors.Add($"attack '{prefabName}' has no ItemDrop component");
+                continue;
+            }
+
+            if (itemDrop.m_itemData?.m_shared == null)
+            {
+                errors.Add($"attack '{prefabName}' has no initialized ItemDrop shared data");
+                continue;
+            }
+
+            string[] projectileTuple = definition.Projectile != null
+                ? CleanTuple(definition.Projectile)
+                : Array.Empty<string>();
+            if (projectileTuple.Length > 0)
+            {
+                GameObject? projectilePrefab = CreaturePrefabRegistry.GetPrefab(projectileTuple[0]);
+                if (projectilePrefab == null)
+                {
+                    errors.Add($"attack '{prefabName}' references missing projectile prefab '{projectileTuple[0]}'");
+                }
+                else if (IsStaleManagedClone(projectilePrefab, currentCloneTargets))
+                {
+                    errors.Add($"attack '{prefabName}' references stale projectile clone '{projectileTuple[0]}'");
+                }
+            }
+
+            string[] statusEffectTuple = definition.StatusEffect != null
+                ? CleanTuple(definition.StatusEffect)
+                : Array.Empty<string>();
+            if (statusEffectTuple.Length > 0 &&
+                ResolveAttackStatusEffect(statusEffectTuple[0]) == null)
+            {
+                errors.Add($"attack '{prefabName}' references missing status effect '{statusEffectTuple[0]}'");
+            }
+        }
+
+        foreach (CreatureDefinition definition in snapshot.Creatures.Where(definition => definition.IsEnabled))
+        {
+            string prefabName = (definition.Prefab ?? "").Trim();
+            GameObject? prefab = CreaturePrefabRegistry.GetPrefab(prefabName);
+            if (prefab == null)
+            {
+                errors.Add($"creature '{prefabName}' target prefab was not found");
+                continue;
+            }
+            if (IsStaleManagedClone(prefab, currentCloneTargets))
+            {
+                errors.Add($"creature '{prefabName}' resolves to a stale CreatureManager clone that is not defined by the current YAML bundle");
+                continue;
+            }
+
+            if (CreaturePrefabRegistry.IsPlayerPrefab(prefab))
+            {
+                errors.Add($"creature '{prefabName}' resolves to the Player prefab, which CreatureManager does not manage");
+                continue;
+            }
+
+            if (definition.Character != null && prefab.GetComponent<Character>() == null)
+            {
+                errors.Add($"creature '{prefabName}' has a character block but no Character component");
+            }
+
+            if (definition.Humanoid != null)
+            {
+                if (prefab.GetComponent<Humanoid>() == null)
+                {
+                    errors.Add($"creature '{prefabName}' has a humanoid block but no Humanoid component");
+                }
+                else
+                {
+                    PreflightHumanoidReferences(prefabName, definition.Humanoid, currentCloneTargets, errors);
+                }
+            }
+
+            if (definition.Appearance?.HasSpecifiedFields == true)
+            {
+                if ((definition.Appearance.Hair != null || definition.Appearance.Beard != null) &&
+                    prefab.GetComponent<Humanoid>() == null)
+                {
+                    errors.Add($"creature '{prefabName}' sets appearance hair/beard but has no Humanoid component");
+                }
+
+                if ((definition.Appearance.HairColor != null ||
+                     definition.Appearance.SkinColor != null ||
+                     definition.Appearance.ModelIndex.HasValue) &&
+                    prefab.GetComponent<VisEquipment>() == null)
+                {
+                    errors.Add($"creature '{prefabName}' sets visual appearance fields but has no VisEquipment component");
+                }
+
+                PreflightAppearanceItemReference(
+                    prefabName,
+                    definition.Appearance.Hair,
+                    "hair",
+                    currentCloneTargets,
+                    errors);
+                PreflightAppearanceItemReference(
+                    prefabName,
+                    definition.Appearance.Beard,
+                    "beard",
+                    currentCloneTargets,
+                    errors);
+            }
+
+            string aiName = (definition.Ai ?? "").Trim();
+            if (aiName.Length > 0)
+            {
+                PreflightCreatureAiReference(prefab, aiName, aiDefinitions, currentCloneTargets, errors);
+            }
+        }
+
+        if (errors.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (string error in errors)
+        {
+            CreatureManagerPlugin.Log.LogError($"Definition preflight failed: {error}.");
+        }
+
+        CreatureManagerPlugin.Log.LogWarning(
+            $"CreatureManager rejected {source} before publishing prefab changes because {errors.Count} required component/reference validation error(s) were found.");
+        return false;
+    }
+
+    private static void PreflightAppearanceItemReference(
+        string creatureName,
+        string? itemName,
+        string field,
+        ISet<string> currentCloneTargets,
+        ICollection<string> errors)
+    {
+        string prefabName = (itemName ?? "").Trim();
+        if (prefabName.Length == 0)
+        {
+            return;
+        }
+
+        GameObject? prefab = CreaturePrefabRegistry.GetPrefab(prefabName);
+        if (prefab != null && IsStaleManagedClone(prefab, currentCloneTargets))
+        {
+            errors.Add($"creature '{creatureName}' appearance.{field} references stale item clone '{prefabName}'");
+        }
+    }
+
+    private static HashSet<string> BuildCurrentCloneTargetSet(DefinitionSnapshot snapshot)
+    {
+        return snapshot.Projectiles
+            .Select(definition => (definition.IsEnabled, definition.Prefab, definition.ClonedFrom))
+            .Concat(snapshot.Attacks.Select(definition => (definition.IsEnabled, definition.Prefab, definition.ClonedFrom)))
+            .Concat(snapshot.Creatures.Select(definition => (definition.IsEnabled, definition.Prefab, definition.ClonedFrom)))
+            .Where(entry => entry.IsEnabled &&
+                            !string.IsNullOrWhiteSpace(entry.Prefab) &&
+                            !string.IsNullOrWhiteSpace(entry.ClonedFrom))
+            .Select(entry => entry.Prefab!.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsStaleManagedClone(GameObject prefab, ISet<string> currentCloneTargets)
+    {
+        return CreaturePrefabRegistry.IsCreatureManagerClone(prefab) &&
+               !currentCloneTargets.Contains(prefab.name);
+    }
+
+    private static bool TryPreflightCreatureFactionReferences(
+        DefinitionSnapshot snapshot,
+        string source)
+    {
+        List<string> missing = snapshot.Creatures
+            .Where(definition => definition.IsEnabled && definition.Character?.Faction != null)
+            .Select(definition => new
+            {
+                Prefab = (definition.Prefab ?? "").Trim(),
+                Faction = definition.Character!.Faction!
+            })
+            .Where(reference => !CreatureFactionManager.TryGetFaction(reference.Faction, out _))
+            .Select(reference => $"creature '{reference.Prefab}' references unknown faction '{reference.Faction}'")
+            .ToList();
+        if (missing.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (string error in missing)
+        {
+            CreatureManagerPlugin.Log.LogError($"Definition preflight failed: {error}.");
+        }
+
+        CreatureManagerPlugin.Log.LogWarning(
+            $"CreatureManager rejected {source} because {missing.Count} creature faction reference(s) could not be resolved.");
+        return false;
+    }
+
+    private static void PreflightHumanoidReferences(
+        string creatureName,
+        HumanoidDefinition definition,
+        ISet<string> currentCloneTargets,
+        ICollection<string> errors)
+    {
+        ValidateSimpleItemList(definition.DefaultItems, "defaultItems");
+        ValidateSimpleItemList(definition.RandomWeapon, "randomWeapon");
+        ValidateSimpleItemList(definition.RandomArmor, "randomArmor");
+        ValidateSimpleItemList(definition.RandomHair, "randomHair");
+        ValidateSimpleItemList(definition.RandomShield, "randomShield");
+
+        if (definition.RandomItems != null)
+        {
+            foreach (string entry in definition.RandomItems)
+            {
+                if (!CreatureYaml.TryParseRandomItemTuple(entry, out string itemName, out _, out string error))
+                {
+                    errors.Add($"creature '{creatureName}' humanoid.randomItems entry is invalid: {error}");
+                }
+                else
+                {
+                    ValidateItem(itemName, "randomItems");
+                }
+            }
+        }
+
+        if (definition.RandomSets != null)
+        {
+            foreach (string entry in definition.RandomSets)
+            {
+                if (!CreatureYaml.TryParseRandomSetTuple(entry, out _, out string[] itemNames, out string error))
+                {
+                    errors.Add($"creature '{creatureName}' humanoid.randomSets entry is invalid: {error}");
+                    continue;
+                }
+
+                foreach (string itemName in itemNames)
+                {
+                    ValidateItem(itemName, "randomSets");
+                }
+            }
+        }
+
+        return;
+
+        void ValidateSimpleItemList(IEnumerable<string>? itemNames, string field)
+        {
+            if (itemNames == null)
+            {
+                return;
+            }
+
+            foreach (string itemName in itemNames)
+            {
+                ValidateItem(itemName, field);
+            }
+        }
+
+        void ValidateItem(string itemName, string field)
+        {
+            string prefabName = itemName.Trim();
+            if (prefabName.Length == 0)
+            {
+                return;
+            }
+
+            GameObject? itemPrefab = CreaturePrefabRegistry.GetPrefab(prefabName);
+            if (itemPrefab == null)
+            {
+                errors.Add($"creature '{creatureName}' humanoid.{field} references missing item prefab '{prefabName}'");
+            }
+            else if (IsStaleManagedClone(itemPrefab, currentCloneTargets))
+            {
+                errors.Add($"creature '{creatureName}' humanoid.{field} references stale item clone '{prefabName}'");
+            }
+            else if (itemPrefab.GetComponent<ItemDrop>() == null)
+            {
+                errors.Add($"creature '{creatureName}' humanoid.{field} prefab '{prefabName}' has no ItemDrop component");
+            }
+        }
+    }
+
+    private static void PreflightCreatureAiReference(
+        GameObject target,
+        string aiName,
+        IReadOnlyDictionary<string, AiDefinition> aiDefinitions,
+        ISet<string> currentCloneTargets,
+        ICollection<string> errors)
+    {
+        bool targetIsMonster = target.GetComponent<MonsterAI>() != null;
+        bool targetIsAnimal = target.GetComponent<AnimalAI>() != null;
+        if (!targetIsMonster && !targetIsAnimal)
+        {
+            errors.Add($"creature '{target.name}' references AI '{aiName}' but has no MonsterAI or AnimalAI component");
+            return;
+        }
+
+        if (!aiDefinitions.TryGetValue(aiName, out AiDefinition definition))
+        {
+            ValidateAiPrefab(aiName, $"creature '{target.name}' AI", targetIsMonster, targetIsAnimal);
+            return;
+        }
+
+        HashSet<string> visited = new(StringComparer.OrdinalIgnoreCase);
+        while (definition != null)
+        {
+            string definitionName = (definition.Ai ?? "").Trim();
+            if (!visited.Add(definitionName))
+            {
+                errors.Add($"creature '{target.name}' AI preset '{aiName}' has a copyFrom cycle at '{definitionName}'");
+                return;
+            }
+
+            if (definition.MonsterAI != null && !targetIsMonster)
+            {
+                errors.Add($"creature '{target.name}' uses MonsterAI preset '{definitionName}' but has no MonsterAI component");
+                return;
+            }
+
+            string clonedFrom = (definition.ClonedFrom ?? "").Trim();
+            if (clonedFrom.Length > 0)
+            {
+                ValidateAiPrefab(
+                    clonedFrom,
+                    $"AI preset '{definitionName}' clonedFrom",
+                    targetIsMonster,
+                    targetIsAnimal && definition.MonsterAI == null);
+            }
+
+            string copyFrom = (definition.CopyFrom ?? "").Trim();
+            if (copyFrom.Length == 0)
+            {
+                return;
+            }
+
+            if (!aiDefinitions.TryGetValue(copyFrom, out AiDefinition parent))
+            {
+                ValidateAiPrefab(
+                    copyFrom,
+                    $"AI preset '{definitionName}' copyFrom",
+                    targetIsMonster,
+                    targetIsAnimal && definition.MonsterAI == null);
+                return;
+            }
+
+            definition = parent;
+        }
+
+        return;
+
+        void ValidateAiPrefab(
+            string prefabName,
+            string context,
+            bool requireMonster,
+            bool requireAnimal)
+        {
+            GameObject? source = CreaturePrefabRegistry.GetPrefab(prefabName);
+            if (source == null)
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"{context} prefab '{prefabName}' was not found; omitted AI fields keep the target prefab's current values.");
+            }
+            else if (IsStaleManagedClone(source, currentCloneTargets))
+            {
+                errors.Add($"{context} prefab '{prefabName}' is a stale CreatureManager clone not defined by the current YAML bundle");
+            }
+            else if (requireMonster && source.GetComponent<MonsterAI>() == null)
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"{context} prefab '{prefabName}' has no MonsterAI component; omitted MonsterAI fields keep the target prefab's current values.");
+            }
+            else if (!requireMonster && requireAnimal && source.GetComponent<AnimalAI>() == null)
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"{context} prefab '{prefabName}' has no AnimalAI component; omitted AnimalAI fields keep the target prefab's current values.");
             }
         }
     }
 
     private static bool CanApplyDefinitionsToGameData()
     {
-        if (!IsGameDataReady() || ZNet.instance == null)
+        if (GameDataRefreshPending || !IsGameDataReady() || ZNet.instance == null)
         {
             return false;
         }
@@ -1627,7 +2766,7 @@ internal static class CreatureDomainManager
                 return;
             }
 
-            string? spawnOnHitName = definition.Projectile!.SpawnOnHit;
+            string? spawnOnHitName = definition.Projectile!.SpawnOnHit?.Trim();
             if (spawnOnHitName != null)
             {
                 spawnOnHit = CreaturePrefabRegistry.GetPrefab(spawnOnHitName);
@@ -1696,8 +2835,8 @@ internal static class CreatureDomainManager
 
     private static GameObject? ResolveProjectilePrefab(ProjectileDefinition definition)
     {
-        string targetName = definition.Prefab!;
-        string sourceName = definition.ClonedFrom ?? "";
+        string targetName = definition.Prefab!.Trim();
+        string sourceName = (definition.ClonedFrom ?? "").Trim();
         if (string.IsNullOrWhiteSpace(sourceName))
         {
             return CreaturePrefabRegistry.GetPrefab(targetName);
@@ -1759,8 +2898,8 @@ internal static class CreatureDomainManager
 
     private static GameObject? ResolveAttackPrefab(AttackDefinition definition)
     {
-        string targetName = definition.Prefab!;
-        string sourceName = definition.ClonedFrom ?? "";
+        string targetName = definition.Prefab!.Trim();
+        string sourceName = (definition.ClonedFrom ?? "").Trim();
         if (string.IsNullOrWhiteSpace(sourceName))
         {
             return CreaturePrefabRegistry.GetPrefab(targetName);
@@ -1778,8 +2917,8 @@ internal static class CreatureDomainManager
 
     private static GameObject? ResolveTargetPrefab(CreatureDefinition definition)
     {
-        string targetName = definition.Prefab!;
-        string sourceName = definition.ClonedFrom ?? "";
+        string targetName = definition.Prefab!.Trim();
+        string sourceName = (definition.ClonedFrom ?? "").Trim();
         if (string.Equals(targetName, "Player", StringComparison.OrdinalIgnoreCase))
         {
             CreatureManagerPlugin.Log.LogWarning("Creature prefab 'Player' is not managed by CreatureManager.");
@@ -3392,17 +4531,29 @@ internal static class CreatureDomainManager
     private static void SetupWatcher()
     {
         Watcher?.Dispose();
-        Watcher = new FileSystemWatcher(ConfigDirectoryPath)
+        Watcher = null;
+        WatcherResetPending = false;
+        try
         {
-            IncludeSubdirectories = true,
-            Filter = "*.*",
-            SynchronizingObject = ThreadingHelper.SynchronizingObject,
-            EnableRaisingEvents = true
-        };
-        Watcher.Changed += OnOverrideFileChanged;
-        Watcher.Created += OnOverrideFileChanged;
-        Watcher.Renamed += OnOverrideFileChanged;
-        Watcher.Deleted += OnOverrideFileChanged;
+            Watcher = new FileSystemWatcher(ConfigDirectoryPath)
+            {
+                IncludeSubdirectories = true,
+                Filter = "*.*",
+                SynchronizingObject = ThreadingHelper.SynchronizingObject
+            };
+            Watcher.Changed += OnOverrideFileChanged;
+            Watcher.Created += OnOverrideFileChanged;
+            Watcher.Renamed += OnOverrideFileChanged;
+            Watcher.Deleted += OnOverrideFileChanged;
+            Watcher.Error += OnOverrideWatcherError;
+            Watcher.EnableRaisingEvents = true;
+        }
+        catch (Exception ex)
+        {
+            Watcher?.Dispose();
+            Watcher = null;
+            CreatureManagerPlugin.Log.LogError($"Failed to watch CreatureManager configuration files: {ex.Message}");
+        }
     }
 
     private static void OnOverrideFileChanged(object sender, FileSystemEventArgs e)
@@ -3416,12 +4567,30 @@ internal static class CreatureDomainManager
             return;
         }
 
-        if (!IsOverrideFile(e.FullPath) || ConfigSync?.IsSourceOfTruth == false)
+        bool overrideChanged = IsOverrideFile(e.FullPath) ||
+                               e is RenamedEventArgs renamedOverride && IsOverrideFile(renamedOverride.OldFullPath);
+        if (!overrideChanged || ConfigSync?.IsSourceOfTruth == false)
         {
             return;
         }
 
         RequestConfigurationReload();
+    }
+
+    private static void OnOverrideWatcherError(object sender, ErrorEventArgs args)
+    {
+        CreatureManagerPlugin.Log.LogWarning(
+            $"CreatureManager configuration watcher lost file events and will be rebuilt: {args.GetException().Message}");
+        WatcherResetPending = true;
+        if (ConfigSync?.IsSourceOfTruth == false)
+        {
+            TextureRefreshPending = true;
+            PendingTextureRefreshTime = DateTime.UtcNow.AddTicks(ReloadDebounceTicks);
+        }
+        else
+        {
+            RequestConfigurationReload();
+        }
     }
 
     private static bool IsTextureFile(string path)
@@ -3577,7 +4746,8 @@ internal static class CreatureDomainManager
     private static bool IsConfigurationFile(string path, string prefix)
     {
         string stem = Path.GetFileNameWithoutExtension(path);
-        if (prefix.Equals("factions", StringComparison.OrdinalIgnoreCase))
+        if (prefix.Equals("factions", StringComparison.OrdinalIgnoreCase) ||
+            prefix.Equals("karma", StringComparison.OrdinalIgnoreCase))
         {
             return stem.Equals(prefix, StringComparison.OrdinalIgnoreCase) &&
                    Path.GetExtension(path).Equals(".yml", StringComparison.OrdinalIgnoreCase);
@@ -3693,6 +4863,8 @@ internal static class CreatureDomainManager
         StringBuilder builder = new();
         AppendTemplateComment(builder, "CreatureManager level configuration.");
         AppendTemplateComment(builder, "Loaded files: levels.yml, levels.yaml, levels_*.yml, levels_*.yaml.");
+        AppendTemplateComment(builder, "A YAML reload does not reroll completed creatures: stored levels, health/damage multipliers, and modifier state remain unchanged.");
+        AppendTemplateComment(builder, "Visual scale is resolved again when visuals rebuild, and an external SetLevel recalculates health, damage, and visual scale from the current rules.");
         AppendTemplateComment(builder, "BepInEx 'Enable Level System' is the master switch. BepInEx 'Biome Level Preset' adds built-in biome rules.");
         AppendTemplateComment(builder, "BepInEx 'Global Modifiers', 'Boss Modifiers', and 'Enforcer Modifiers' independently gate modifier rolls/effects for those creature classes.");
         AppendTemplateComment(builder, "Top-level targets: Global, Boss, biome names, group names, or prefab names.");
@@ -3702,7 +4874,7 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "Use modifiers: [] as a terminal clear that blocks every lower-priority modifier source for that target.");
         AppendTemplateComment(builder, "Enforcer summons ignore Boss and continue to use prefab/group, biome, and Global rules even when their source prefab is a boss.");
         AppendTemplateComment(builder, "Nested biome rules under a prefab/group beat the same target without a biome. User biome targets do not affect regular bosses; built-in preset biome levels can be opted in by config.");
-        AppendTemplateComment(builder, "Rules apply to spawned Character instances on the server. Existing instances already marked by CreatureManager are not rerolled.");
+        AppendTemplateComment(builder, "Rules are selected by the current network owner from the server-synchronized definitions when a creature is processed.");
         AppendTemplateComment(builder, "Modifiers are rolled at most once per group. Group totals below 100 leave the remainder as no modifier; totals above 100 are normalized as weights.");
         AppendTemplateComment(builder, "Reaping healing, max health, and damage work in dungeons, but new Reaping scale gains are disabled there.");
         AppendTemplateComment(builder, "CreatureManager does not manage loot/drop from this domain.");
@@ -3871,6 +5043,8 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "CreatureManager creature configuration.");
         AppendTemplateComment(builder, "Copy entries from creatures.reference.yml, or run cm:full creature to generate creatures.full.yml for exhaustive field examples.");
         AppendTemplateComment(builder, "Loaded files: creatures.yml, creatures.yaml, creatures_*.yml, creatures_*.yaml.");
+        AppendTemplateComment(builder, "Hot reload updates templates used by later creature instances; already loaded creature GameObjects are not rebuilt.");
+        AppendTemplateComment(builder, "A persistent creature instantiated again after zone unload uses the current template. Changing clonedFrom for an existing clone requires a restart.");
         AppendTemplateComment(builder, "Omitted fields keep the current creature value. The schema below is commented out and safe to leave in the file.");
         AppendTemplateBlankLine(builder);
         AppendTemplateComment(builder, "Schema:");
@@ -3944,6 +5118,7 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "In ai.yml, a preset named like an existing prefab uses that prefab as its baseline unless copyFrom or clonedFrom is set.");
         AppendTemplateComment(builder, "Copy entries from ai.reference.yml into ai.yml only when you want to create or edit a reusable preset.");
         AppendTemplateComment(builder, "Loaded files: ai.yml, ai.yaml, ai_*.yml, ai_*.yaml.");
+        AppendTemplateComment(builder, "Hot reload updates AI templates used by later creature instances; loaded BaseAI and MonsterAI components keep their current values.");
         AppendTemplateComment(builder, "Omitted fields keep the baseline AI value. If no baseline is found, they keep the current target AI value.");
         AppendTemplateComment(builder, "Effect lists are intentionally not managed here.");
         AppendTemplateComment(builder, "Use baseAI for shared BaseAI fields. AnimalAI creatures use baseAI only; monsterAI adds MonsterAI-only fields.");
@@ -4002,6 +5177,7 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "CreatureManager attack configuration.");
         AppendTemplateComment(builder, "Copy entries from attacks.reference.yml and use the schema below for optional fields.");
         AppendTemplateComment(builder, "Loaded files: attacks.yml, attacks.yaml, attacks_*.yml, attacks_*.yaml.");
+        AppendTemplateComment(builder, "Hot reload updates attack item templates used by later creature instances; loaded creatures keep their equipped attack data.");
         AppendTemplateComment(builder, "Omitted fields keep the current attack prefab value. The schema below is commented out and safe to leave in the file.");
         AppendTemplateBlankLine(builder);
         AppendTemplateComment(builder, "Schema:");
@@ -4033,6 +5209,7 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "CreatureManager projectile configuration.");
         AppendTemplateComment(builder, "Copy entries from projectile.reference.yml and use only the fields that should change.");
         AppendTemplateComment(builder, "Loaded files: projectile.yml, projectile.yaml, projectile_*.yml, projectile_*.yaml.");
+        AppendTemplateComment(builder, "Already flying projectiles keep their values. Any projectile instantiated after a hot reload uses the current template, even when fired by an existing creature.");
         AppendTemplateComment(builder, "Omitted fields inherit the source prefab. Clones retain every unexposed component and field unchanged.");
         AppendTemplateComment(builder, "usedByAttacks is generated reference metadata. It is accepted in this file but never changes runtime behavior.");
         AppendTemplateComment(builder, "There is no type field; projectile and spawnAbility blocks already identify the supported component.");

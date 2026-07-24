@@ -16,6 +16,7 @@ internal static class CreatureConsoleCommands
     }
 
     private const string SpawnCommandName = "cm:spawn";
+    private const int MaximumCommandSpawnLevel = 100;
     private static readonly List<string> ReferenceDomainOptions = new() { "creature", "ai", "attack", "loadout", "projectile", "texture", "levelvisual" };
     private static readonly List<string> FullDomainOptions = new() { "creature" };
     private static readonly List<string> EmptyAutocompleteOptions = new();
@@ -43,7 +44,7 @@ internal static class CreatureConsoleCommands
             optionsFetcher: GetFullDomainOptions);
         SpawnCommand = new Terminal.ConsoleCommand(
             SpawnCommandName,
-            "Spawn a creature with optional modifiers and an exact trailing level. Usage: cm:spawn <prefab> [modifier1,modifier2,modifier3,modifier4] [level]",
+            $"Spawn a creature with optional modifiers and an exact trailing level from 1 to {MaximumCommandSpawnLevel}. Usage: cm:spawn <prefab> [modifier1,modifier2,modifier3,modifier4] [level]",
             Spawn,
             isCheat: true,
             isNetwork: true,
@@ -438,7 +439,7 @@ internal static class CreatureConsoleCommands
             !CreatureModifierManager.TryApplyForcedModifiers(character, modifiers, out error) ||
             !CreatureLevelManager.TryApplyForcedLevel(character, level, out error))
         {
-            UnityEngine.Object.Destroy(spawned);
+            CleanupFailedSpawn(spawned);
             reply(error.Length > 0 ? error : $"Failed to initialize '{prefabName}'.");
             return;
         }
@@ -446,6 +447,28 @@ internal static class CreatureConsoleCommands
         CreatureManagerCharacterLifecycle.ApplyLevelAndModifiers(character);
         string modifierText = modifiers.Count > 0 ? string.Join(", ", modifiers) : "none";
         reply($"Spawned {prefab.name} at level {level} with modifiers: {modifierText}.");
+    }
+
+    private static void CleanupFailedSpawn(GameObject spawned)
+    {
+        try
+        {
+            ZNetView? nview = spawned.GetComponent<ZNetView>();
+            if (ZNetScene.instance != null &&
+                nview != null &&
+                nview.IsValid() &&
+                nview.GetZDO() != null)
+            {
+                ZNetScene.instance.Destroy(spawned);
+                return;
+            }
+        }
+        catch
+        {
+            // Fall back to local destruction when network registration is incomplete.
+        }
+
+        UnityEngine.Object.Destroy(spawned);
     }
 
     internal static bool TryHandleAuthenticatedRemoteAdminCommand(ZNet znet, ZRpc rpc, string command)
@@ -591,9 +614,9 @@ internal static class CreatureConsoleCommands
         if (args.Length >= 3 &&
             int.TryParse(args[args.Length - 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedLevel))
         {
-            if (parsedLevel < 1)
+            if (parsedLevel < 1 || parsedLevel > MaximumCommandSpawnLevel)
             {
-                error = "level must be an integer greater than or equal to 1.";
+                error = $"level must be an integer from 1 to {MaximumCommandSpawnLevel}.";
                 return false;
             }
 

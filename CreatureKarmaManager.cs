@@ -12,6 +12,13 @@ namespace CreatureManager;
 
 internal static class CreatureKarmaManager
 {
+    internal enum KarmaAddResult
+    {
+        Added,
+        Saturated,
+        Unavailable
+    }
+
     private const string CountedDeathKey = "CreatureManager_KarmaDeathCounted";
     private const string EnforcerKey = "CreatureManager_KarmaEnforcer";
     private const string EnforcerSummonedKey = "CreatureManager_KarmaEnforcerSummoned";
@@ -32,6 +39,18 @@ internal static class CreatureKarmaManager
     private const float ProcessedCreatureDeathRetention = 300f;
     private const int MaximumPendingCreatureDeaths = 512;
     private const int MaximumPendingCreatureDeathsPerPeer = 64;
+    private const int MaximumEnforcerMinionEntries = 16;
+    private const int MaximumEnforcerMinionsPerEntry = 16;
+    private const int MaximumEnforcerMinionsPerCandidate = 16;
+    private const int MaximumEnforcerLootEntries = 32;
+    private const int MaximumEnforcerLootAmountPerEntry = 64;
+    private const int MaximumEnforcerLootAmountPerCandidate = 64;
+    private const int MaximumEnforcerPrefabNameLength = 128;
+    private const int MaximumSerializedEnforcerLootLength = 8192;
+    private const float SectorPruneInterval = 1f;
+    private const int MaximumSectorScansPerPass = 256;
+    private const int MaximumSectorStates = 32768;
+    private const float SectorCapacityWarningInterval = 30f;
     private const string EnforcerNameSuffix = "$cm_suffix_enforcer";
     private const string EnforcerMinionSuffix = "$cm_suffix_minion";
     private const int ZoneRadius = 1;
@@ -77,6 +96,7 @@ internal static class CreatureKarmaManager
     };
     private static readonly object Sync = new();
     private static readonly Dictionary<string, SectorState> Sectors = new(StringComparer.Ordinal);
+    private static readonly Queue<string> SectorPruneQueue = new();
     private static readonly SectorState EmptySectorState = new();
     private static readonly HashSet<int> RuntimeSummonedCreatureIds = new();
     private static readonly Dictionary<int, ResolvedEnforcerSettings> RuntimeEnforcerSettings = new();
@@ -99,6 +119,8 @@ internal static class CreatureKarmaManager
     private static MethodInfo? ExpandWorldDataTryGetBiomeDisplayNameMethod;
     private static bool ExpandWorldDataBiomeMethodsResolved;
     private static float NextSummonCheckTime;
+    private static float NextSectorPruneTime;
+    private static float NextSectorCapacityWarningTime;
     private static readonly Dictionary<string, List<Vector3>> DungeonComponentPositionCache = new(StringComparer.Ordinal);
     private static float NextKarmaStatusRequestTime;
     private static int NextKarmaStatusRequestId;
@@ -139,6 +161,7 @@ internal static class CreatureKarmaManager
         NoEligibleCandidate,
         InvalidCandidate,
         NoSpawnPosition,
+        SectorStateCapacity,
         SpawnFailed
     }
 
@@ -263,6 +286,7 @@ internal static class CreatureKarmaManager
         lock (Sync)
         {
             Sectors.Clear();
+            SectorPruneQueue.Clear();
             ObservedPlayerDeathStates.Clear();
         }
 
@@ -280,6 +304,8 @@ internal static class CreatureKarmaManager
         DungeonComponentPositionCache.Clear();
         // Registration follows the ZRoutedRpc instance lifetime. It has no unregister API and Register uses Dictionary.Add.
         NextSummonCheckTime = 0f;
+        NextSectorPruneTime = 0f;
+        NextSectorCapacityWarningTime = 0f;
         NextKarmaStatusRequestTime = 0f;
         NextKarmaStatusRequestId = 0;
         LastKarmaStatusResponseId = -1;
@@ -299,8 +325,11 @@ internal static class CreatureKarmaManager
 # Each connected region rolls once; its highest-Karma eligible window supplies the table and spawn location.
 # Blockers and cooldowns scan the full region, while Karma consumption and cooldown writes use that anchor window.
 # Feature mode, Enforcer cap, summon blocking, and Karma-gain blocking are configured in BepInEx section '3 - Karma'.
+# Karma gain, decay, thresholds, and Enforcer checks are global live rules; reload does not clear stored regional Karma.
+# Spawn-time Karma level bonuses, modifiers, loot, and Enforcer creature definitions affect later spawns, not existing Enforcers.
 # In any modifiers field, omission or {} keeps normal inheritance/fallback; [] is a terminal clear that blocks every lower modifier source.
 # A mapping overrides listed values only. Candidates inherit Enforcer.modifiers, and Enforcer.modifiers inherits omitted values from levels.yml.
+# Safety limits per candidate: at most 16 minion entries/16 total minions and 32 loot entries/64 total loot items.
 
 karma:
   thresholds: [60, 120, 180]             # Karma values reached for +1, +2, +3 level bonus; append more to extend levels. Positive gain stops at the highest value; [] leaves gain uncapped.
@@ -1204,9 +1233,11 @@ AshLands:
 
     internal static void UpdateSummons()
     {
-        if (ZNet.instance != null && ZNet.instance.IsServer())
+        bool isServer = ZNet.instance != null && ZNet.instance.IsServer();
+        if (isServer)
         {
             RefreshObservedPlayerDeathTransitions();
+            PruneSectorStates(Time.time);
         }
 
         if (!IsEnforcerEnabled())
@@ -1785,9 +1816,15 @@ AshLands:
         float now = Time.time;
         lock (Sync)
         {
-            foreach (string key in GetSectorKeys(position))
+            string[] keys = GetSectorKeys(position).ToArray();
+            if (!TryEnsureSectorStatesUnsafe(keys))
             {
-                SectorState state = GetStateUnsafe(key);
+                return;
+            }
+
+            foreach (string key in keys)
+            {
+                SectorState state = Sectors[key];
                 state.Karma = Mathf.Max(0f, value);
                 state.LastKarmaTime = now;
             }
@@ -1821,16 +1858,16 @@ AshLands:
                IsRuntimeSummonedCreature(character);
     }
 
-    internal static bool TryAddBlamerKarma(Vector3 position, float amount)
+    internal static KarmaAddResult TryAddBlamerKarma(Vector3 position, float amount)
     {
         if (!IsKarmaSystemEnabled() || amount <= 0f || float.IsNaN(amount) || float.IsInfinity(amount))
         {
-            return false;
+            return KarmaAddResult.Unavailable;
         }
 
         if (ZNet.instance != null && !ZNet.instance.IsServer())
         {
-            return false;
+            return KarmaAddResult.Unavailable;
         }
 
         return AddKarma(position, amount);
@@ -2020,14 +2057,6 @@ AshLands:
             excludedCharacterId);
         if (blockerFailure != EnforcerSummonFailure.None)
         {
-            if (!ignoreCooldown)
-            {
-                lock (Sync)
-                {
-                    RefreshEnforcerCooldownUnsafe(statePosition, now);
-                }
-            }
-
             failure = blockerFailure;
             return false;
         }
@@ -2070,6 +2099,15 @@ AshLands:
             failure = EnforcerSummonFailure.NoSpawnPosition;
             CreatureManagerPlugin.Log.LogDebug($"Karma Enforcer summon skipped: no spawn position near {playerPosition}.");
             return false;
+        }
+
+        lock (Sync)
+        {
+            if (!TryEnsureSectorStatesUnsafe(GetSectorKeys(statePosition).ToArray()))
+            {
+                failure = EnforcerSummonFailure.SectorStateCapacity;
+                return false;
+            }
         }
 
         if (!TrySpawnCreature(summon.Boss, spawnPosition, playerPosition, markEnforcer: true, EnforcerNameSuffix, resolvedSettings, candidate.Loot, out Character boss))
@@ -2731,21 +2769,56 @@ AshLands:
     private static List<EnforcerLootDefinition> DeserializeEnforcerLoot(string value)
     {
         List<EnforcerLootDefinition> loot = new();
-        foreach (string token in (value ?? "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        if (string.IsNullOrEmpty(value))
         {
+            return loot;
+        }
+
+        if (value.Length > MaximumSerializedEnforcerLootLength)
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Stored Enforcer loot was ignored because it exceeds the {MaximumSerializedEnforcerLootLength}-character safety limit.");
+            return loot;
+        }
+
+        int totalAmount = 0;
+        foreach (string token in value.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (loot.Count >= MaximumEnforcerLootEntries ||
+                totalAmount >= MaximumEnforcerLootAmountPerCandidate)
+            {
+                break;
+            }
+
             int separator = token.LastIndexOf(':');
             if (separator <= 0 || separator >= token.Length - 1 ||
+                separator > MaximumEnforcerPrefabNameLength ||
                 !int.TryParse(token.Substring(separator + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out int amount) ||
                 amount <= 0)
             {
                 continue;
             }
 
+            amount = Math.Min(
+                Math.Min(amount, MaximumEnforcerLootAmountPerEntry),
+                MaximumEnforcerLootAmountPerCandidate - totalAmount);
+            if (amount <= 0)
+            {
+                break;
+            }
+
+            string prefab = token.Substring(0, separator).Trim();
+            if (prefab.Length == 0 || prefab.Length > MaximumEnforcerPrefabNameLength)
+            {
+                continue;
+            }
+
             loot.Add(new EnforcerLootDefinition
             {
-                Prefab = token.Substring(0, separator).Trim(),
+                Prefab = prefab,
                 Amount = amount
             });
+            totalAmount += amount;
         }
 
         return loot;
@@ -3153,8 +3226,10 @@ AshLands:
     {
         foreach (string key in GetSectorKeys(position))
         {
-            SectorState state = GetStateUnsafe(key);
-            state.LastEnforcerTime = now;
+            if (Sectors.TryGetValue(key, out SectorState state))
+            {
+                state.LastEnforcerTime = now;
+            }
         }
     }
 
@@ -3173,25 +3248,34 @@ AshLands:
         return amount;
     }
 
-    private static bool AddKarma(Vector3 position, float amount)
+    private static KarmaAddResult AddKarma(Vector3 position, float amount)
     {
         float now = Time.time;
         bool levelIncreased = false;
         bool karmaIncreased = false;
+        bool gainCapReached = false;
         lock (Sync)
         {
+            string[] keys = GetSectorKeys(position).ToArray();
+            if (!TryEnsureSectorStatesUnsafe(keys))
+            {
+                return KarmaAddResult.Unavailable;
+            }
+
             List<float> thresholds = Settings.Karma.Thresholds;
             bool hasGainCap = thresholds.Count > 0;
             float gainCap = hasGainCap ? thresholds[thresholds.Count - 1] : 0f;
+            bool everySectorAtGainCap = hasGainCap;
             int previousBonus = IsKarmaLevelEnabled() ? GetSectorLevelBonus(GetBestStateUnsafe(position, out _).Karma) : 0;
             float updatedKarma = 0f;
-            foreach (string key in GetSectorKeys(position))
+            foreach (string key in keys)
             {
-                SectorState state = GetStateUnsafe(key);
+                SectorState state = Sectors[key];
                 ApplyDecayUnsafe(state, now);
                 float previousKarma = Mathf.Max(0f, state.Karma);
                 if (!hasGainCap || previousKarma < gainCap)
                 {
+                    everySectorAtGainCap = false;
                     state.Karma = Mathf.Max(0f, previousKarma + amount);
                     if (hasGainCap)
                     {
@@ -3209,6 +3293,7 @@ AshLands:
             }
 
             levelIncreased = IsKarmaLevelEnabled() && GetSectorLevelBonus(updatedKarma) > previousBonus;
+            gainCapReached = everySectorAtGainCap;
         }
 
         if (levelIncreased)
@@ -3216,7 +3301,14 @@ AshLands:
             BroadcastCenterQuote(KarmaLevelQuotes);
         }
 
-        return karmaIncreased;
+        if (karmaIncreased)
+        {
+            return KarmaAddResult.Added;
+        }
+
+        return gainCapReached
+            ? KarmaAddResult.Saturated
+            : KarmaAddResult.Unavailable;
     }
 
     private static float ReduceKarmaUnsafe(Vector3 position, float amount, float now)
@@ -3239,6 +3331,41 @@ AshLands:
         }
 
         return remainingKarma;
+    }
+
+    private static void PruneSectorStates(float now)
+    {
+        if (now < NextSectorPruneTime)
+        {
+            return;
+        }
+
+        NextSectorPruneTime = now + SectorPruneInterval;
+        float cooldown = Mathf.Max(0f, Settings.Enforcer.Cooldown);
+        lock (Sync)
+        {
+            int scanCount = Math.Min(MaximumSectorScansPerPass, SectorPruneQueue.Count);
+            for (int index = 0; index < scanCount; index++)
+            {
+                string key = SectorPruneQueue.Dequeue();
+                if (!Sectors.TryGetValue(key, out SectorState state))
+                {
+                    continue;
+                }
+
+                ApplyDecayUnsafe(state, now);
+                bool cooldownExpired = state.LastEnforcerTime <= 0f ||
+                                       cooldown <= 0f ||
+                                       now - state.LastEnforcerTime >= cooldown;
+                if (state.Karma <= 0f && cooldownExpired)
+                {
+                    Sectors.Remove(key);
+                    continue;
+                }
+
+                SectorPruneQueue.Enqueue(key);
+            }
+        }
     }
 
     private static float GetKarma(Vector3 position)
@@ -3326,15 +3453,33 @@ AshLands:
         state.LastKarmaTime = state.Karma <= 0f ? now : now - graceSeconds;
     }
 
-    private static SectorState GetStateUnsafe(string key)
+    private static bool TryEnsureSectorStatesUnsafe(IReadOnlyCollection<string> keys)
     {
-        if (!Sectors.TryGetValue(key, out SectorState state))
+        HashSet<string> requiredKeys = new(keys, StringComparer.Ordinal);
+        string[] missingKeys = requiredKeys
+            .Where(key => !Sectors.ContainsKey(key))
+            .ToArray();
+        if (Sectors.Count + missingKeys.Length > MaximumSectorStates)
         {
-            state = new SectorState();
-            Sectors[key] = state;
+            float warningTime = Time.unscaledTime;
+            if (warningTime >= NextSectorCapacityWarningTime)
+            {
+                NextSectorCapacityWarningTime = warningTime + SectorCapacityWarningInterval;
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"Karma sector state limit ({MaximumSectorStates}) reached; preserving active Karma/cooldowns and rejecting new regional state until the bounded background pruner reclaims capacity.");
+            }
+
+            return false;
         }
 
-        return state;
+        foreach (string key in missingKeys)
+        {
+            SectorState state = new();
+            Sectors[key] = state;
+            SectorPruneQueue.Enqueue(key);
+        }
+
+        return true;
     }
 
     private static int GetSectorLevelBonus(float karma)
@@ -4012,7 +4157,7 @@ AshLands:
 
         return new EnforcerCandidateDefinition
         {
-            Summon = ReadSummonSet(summonValues),
+            Summon = ReadSummonSet(summonValues, source, label),
             Weight = Mathf.Max(0f, ReadFloat(map, "weight", 1f)),
             Loot = ReadEnforcerLoot(map, source, label),
             Location = location,
@@ -4033,6 +4178,13 @@ AshLands:
             throw new FormatException($"Karma YAML from {source} {label}.loot must be a YAML list of itemPrefab:amount values without a space after the colon.");
         }
 
+        if (values.Count > MaximumEnforcerLootEntries)
+        {
+            throw new FormatException(
+                $"Karma YAML from {source} {label}.loot has {values.Count} entries; the maximum is {MaximumEnforcerLootEntries}.");
+        }
+
+        long totalAmount = 0;
         foreach (string value in values)
         {
             string text = value.Trim();
@@ -4045,9 +4197,23 @@ AshLands:
             }
 
             string prefab = text.Substring(0, separator).Trim();
-            if (prefab.Length == 0)
+            if (prefab.Length == 0 || prefab.Length > MaximumEnforcerPrefabNameLength)
             {
-                throw new FormatException($"Karma YAML from {source} {label}.loot has an empty item prefab in '{value}'.");
+                throw new FormatException(
+                    $"Karma YAML from {source} {label}.loot item prefab in '{value}' must contain from 1 to {MaximumEnforcerPrefabNameLength} characters.");
+            }
+
+            if (amount > MaximumEnforcerLootAmountPerEntry)
+            {
+                throw new FormatException(
+                    $"Karma YAML from {source} {label}.loot value '{value}' exceeds the per-item maximum of {MaximumEnforcerLootAmountPerEntry}.");
+            }
+
+            totalAmount += amount;
+            if (totalAmount > MaximumEnforcerLootAmountPerCandidate)
+            {
+                throw new FormatException(
+                    $"Karma YAML from {source} {label}.loot grants {totalAmount} total items; the maximum is {MaximumEnforcerLootAmountPerCandidate}.");
             }
 
             loot.Add(new EnforcerLootDefinition
@@ -4072,23 +4238,62 @@ AshLands:
         return settings;
     }
 
-    private static EnforcerSummonSet ReadSummonSet(List<string> values)
+    private static EnforcerSummonSet ReadSummonSet(List<string> values, string source, string label)
     {
         if (values.Count == 0)
         {
             return new EnforcerSummonSet();
         }
 
+        string boss = values[0].Trim();
+        if (boss.Length == 0 || boss.Length > MaximumEnforcerPrefabNameLength)
+        {
+            throw new FormatException(
+                $"Karma YAML from {source} {label}.summon boss prefab must contain from 1 to {MaximumEnforcerPrefabNameLength} characters.");
+        }
+
+        if (values.Count - 1 > MaximumEnforcerMinionEntries)
+        {
+            throw new FormatException(
+                $"Karma YAML from {source} {label}.summon has {values.Count - 1} minion entries; the maximum is {MaximumEnforcerMinionEntries}.");
+        }
+
+        List<EnforcerMinionDefinition> minions = new();
+        int totalMinions = 0;
+        foreach (string value in values.Skip(1))
+        {
+            EnforcerMinionDefinition minion = ParseMinionDefinition(value, source, label);
+            if (minion.Prefab.Length == 0 || minion.Count <= 0)
+            {
+                continue;
+            }
+
+            totalMinions += minion.Count;
+            if (totalMinions > MaximumEnforcerMinionsPerCandidate)
+            {
+                throw new FormatException(
+                    $"Karma YAML from {source} {label}.summon requests {totalMinions} total minions; the maximum is {MaximumEnforcerMinionsPerCandidate}.");
+            }
+
+            minions.Add(minion);
+        }
+
         return new EnforcerSummonSet
         {
-            Boss = values[0],
-            Minions = values.Skip(1).Select(ParseMinionDefinition).Where(minion => minion.Prefab.Length > 0 && minion.Count > 0).ToList()
+            Boss = boss,
+            Minions = minions
         };
     }
 
-    private static EnforcerMinionDefinition ParseMinionDefinition(string value)
+    private static EnforcerMinionDefinition ParseMinionDefinition(string value, string source, string label)
     {
         string text = value.Trim();
+        if (text.Length > MaximumEnforcerPrefabNameLength + 16)
+        {
+            throw new FormatException(
+                $"Karma YAML from {source} {label}.summon minion entry exceeds the supported prefab/count length.");
+        }
+
         int count = 1;
         int separator = text.LastIndexOf(':');
         if (separator > 0 && separator < text.Length - 1 &&
@@ -4096,11 +4301,23 @@ AshLands:
         {
             if (parsedCount < 1)
             {
-                throw new FormatException($"Enforcer minion '{value}' must use a count of 1 or greater.");
+                throw new FormatException($"Karma YAML from {source} {label}.summon minion '{value}' must use a count of 1 or greater.");
+            }
+
+            if (parsedCount > MaximumEnforcerMinionsPerEntry)
+            {
+                throw new FormatException(
+                    $"Karma YAML from {source} {label}.summon minion '{value}' exceeds the per-entry maximum of {MaximumEnforcerMinionsPerEntry}.");
             }
 
             text = text.Substring(0, separator).Trim();
             count = parsedCount;
+        }
+
+        if (text.Length == 0 || text.Length > MaximumEnforcerPrefabNameLength)
+        {
+            throw new FormatException(
+                $"Karma YAML from {source} {label}.summon minion prefab must contain from 1 to {MaximumEnforcerPrefabNameLength} characters.");
         }
 
         return new EnforcerMinionDefinition

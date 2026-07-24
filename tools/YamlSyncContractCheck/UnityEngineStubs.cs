@@ -59,9 +59,4 @@ namespace CreatureManager
         {
         }
     }
-
-    internal static class CreatureModifierManager
-    {
-        internal static bool IsKnownModifier(string modifier) => true;
-    }
 }

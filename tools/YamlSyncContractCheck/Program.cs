@@ -178,6 +178,58 @@ try
         !CreatureYaml.TryReadLevelDefinitions(duplicateCaseLevelYaml, "duplicate key contract", out _),
         "Case-insensitive duplicate level keys were accepted.");
 
+    const string unknownLevelModifierYaml = """
+        Troll:
+          modifiers:
+            definitelyNotAModifier: 10
+        """;
+    Require(
+        !CreatureYaml.TryReadLevelDefinitions(unknownLevelModifierYaml, "unknown modifier contract", out _),
+        "An unknown modifier key was accepted.");
+    Require(
+        CreatureModifierCatalog.Keys.Count == 32 &&
+        CreatureModifierCatalog.Keys.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 32,
+        "The pure modifier catalog is incomplete or contains duplicate keys.");
+    ModifierChanceDefinition modifierChances = new();
+    modifierChances.Set("EnRaGeD", 25f);
+    Require(
+        modifierChances.Get("enraged") == 25f,
+        "Modifier chance storage is not case-insensitive.");
+    ModifierPowerDefinition modifierPowers = new();
+    modifierPowers.Set("FiRe", 0.2f);
+    Require(
+        modifierPowers.Get("fire") == 0.2f,
+        "Modifier primary-power storage is not case-insensitive.");
+
+    const string duplicateCaseGenericYaml = """
+        - prefab: Troll
+          enabled: true
+          Enabled: false
+        """;
+    Require(
+        !CreatureYaml.TryReadDefinitions<CreatureDefinition>(duplicateCaseGenericYaml, "generic duplicate key contract", out _),
+        "Case-insensitive duplicate generic YAML keys were accepted.");
+
+    const string multiDocumentGenericYaml = """
+        - prefab: Troll
+        ---
+        - prefab: Boar
+        """;
+    Require(
+        !CreatureYaml.TryReadDefinitions<CreatureDefinition>(multiDocumentGenericYaml, "generic multiple document contract", out _),
+        "Additional generic YAML documents were silently ignored.");
+
+    Require(
+        !CreatureYaml.TryReadDefinitions<CreatureDefinition>("null", "generic null root contract", out _),
+        "A null generic YAML root was accepted as an empty definition list.");
+    Require(
+        !CreatureYaml.TryReadDefinitions<CreatureDefinition>("---", "generic empty document contract", out _),
+        "An explicit empty YAML document was accepted as an empty definition list.");
+    Require(
+        CreatureYaml.TryReadDefinitions<CreatureDefinition>("[]", "generic explicit empty sequence contract", out List<CreatureDefinition> explicitEmptyDefinitions) &&
+        explicitEmptyDefinitions.Count == 0,
+        "An explicit empty definition sequence was rejected.");
+
     const string numericAttackEnumYaml = """
         - prefab: test_attack
           attack: [999, swing]

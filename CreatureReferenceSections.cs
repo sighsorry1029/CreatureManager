@@ -308,7 +308,7 @@ internal static class CreatureAssetOwnerCatalog
 
     private static readonly object Sync = new();
     private static readonly Dictionary<string, string> AssetOwners = new(StringComparer.OrdinalIgnoreCase);
-    private static string LoadedSignature = "";
+    private static string? LoadedSignature;
     private static bool MappingsPrepared;
 
     internal static string GetOwnerName(string assetName)
@@ -331,6 +331,7 @@ internal static class CreatureAssetOwnerCatalog
         lock (Sync)
         {
             MappingsPrepared = false;
+            LoadedSignature = null;
         }
     }
 

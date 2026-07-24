@@ -59,6 +59,12 @@ internal static class CreatureCompendiumManager
             return;
         }
 
+        Dictionary<string, CompendiumModifierEntry> entriesByKey = new(StringComparer.OrdinalIgnoreCase);
+        foreach (CompendiumModifierEntry entry in entries)
+        {
+            entriesByKey[entry.ModifierKey] = entry;
+        }
+
         TMP_Text textArea = dialog.m_textArea;
         RectTransform? content = textArea.transform.parent as RectTransform;
         if (content == null)
@@ -75,9 +81,7 @@ internal static class CreatureCompendiumManager
             TMP_LinkInfo link = textInfo.linkInfo[linkIndex];
             string linkId = link.GetLinkID();
             if (!linkId.StartsWith(IconLinkPrefix, StringComparison.Ordinal) ||
-                !int.TryParse(linkId.Substring(IconLinkPrefix.Length), out int entryIndex) ||
-                entryIndex < 0 ||
-                entryIndex >= entries.Count ||
+                !entriesByKey.TryGetValue(linkId.Substring(IconLinkPrefix.Length), out CompendiumModifierEntry entry) ||
                 link.linkTextfirstCharacterIndex < 0 ||
                 link.linkTextfirstCharacterIndex >= textInfo.characterCount)
             {
@@ -85,7 +89,7 @@ internal static class CreatureCompendiumManager
             }
 
             TMP_CharacterInfo character = textInfo.characterInfo[link.linkTextfirstCharacterIndex];
-            AttachBodyIcon(content, textArea.rectTransform, character, entries[entryIndex].Sprite, entryIndex);
+            AttachBodyIcon(content, textArea.rectTransform, character, entry.Sprite, entry.ModifierKey);
         }
     }
 
@@ -107,6 +111,7 @@ internal static class CreatureCompendiumManager
             }
 
             entries.Add(new CompendiumModifierEntry(
+                modifier,
                 CreatureModifierManager.GetModifierGroupHeading(modifier),
                 CreatureModifierManager.GetModifierDisplayName(modifier),
                 CreatureModifierManager.GetModifierCompendiumText(modifier, definition),
@@ -120,9 +125,8 @@ internal static class CreatureCompendiumManager
     {
         StringBuilder builder = new();
         string previousGroup = string.Empty;
-        for (int entryIndex = 0; entryIndex < entries.Count; entryIndex++)
+        foreach (CompendiumModifierEntry entry in entries)
         {
-            CompendiumModifierEntry entry = entries[entryIndex];
             if (!string.Equals(previousGroup, entry.GroupHeading, StringComparison.Ordinal))
             {
                 if (builder.Length > 0)
@@ -140,7 +144,7 @@ internal static class CreatureCompendiumManager
             builder
                 .Append("<link=\"")
                 .Append(IconLinkPrefix)
-                .Append(entryIndex)
+                .Append(entry.ModifierKey)
                 .Append("\"><color=#00000000>")
                 .Append(IconPlaceholder)
                 .Append("</color></link> ")
@@ -162,14 +166,14 @@ internal static class CreatureCompendiumManager
         RectTransform textArea,
         TMP_CharacterInfo marker,
         Sprite sprite,
-        int index)
+        string modifierKey)
     {
         if (content == null || textArea == null || sprite == null)
         {
             return;
         }
 
-        GameObject icon = new($"{BodyIconPrefix}{index}", typeof(RectTransform), typeof(Image), typeof(LayoutElement))
+        GameObject icon = new($"{BodyIconPrefix}{modifierKey}", typeof(RectTransform), typeof(Image), typeof(LayoutElement))
         {
             layer = textArea.gameObject.layer
         };
@@ -228,13 +232,15 @@ internal static class CreatureCompendiumManager
 
     private readonly struct CompendiumModifierEntry
     {
+        internal readonly string ModifierKey;
         internal readonly string GroupHeading;
         internal readonly string Name;
         internal readonly string Description;
         internal readonly Sprite Sprite;
 
-        internal CompendiumModifierEntry(string groupHeading, string name, string description, Sprite sprite)
+        internal CompendiumModifierEntry(string modifierKey, string groupHeading, string name, string description, Sprite sprite)
         {
+            ModifierKey = modifierKey;
             GroupHeading = groupHeading;
             Name = name;
             Description = description;

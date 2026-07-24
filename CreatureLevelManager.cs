@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using HarmonyLib;
 using UnityEngine;
 
 namespace CreatureManager;
@@ -70,7 +69,7 @@ internal static class CreatureLevelManager
         internal readonly LevelRuleScope ModifierScope;
         internal readonly bool AllowModifierDistanceScaling;
 
-        internal bool KeepExistingRuntime => ModifierMode == ModifierApplicationMode.Keep;
+        internal bool PreserveExistingRolls => ModifierMode == ModifierApplicationMode.Keep;
 
         internal SpawnPolicy(
             bool rollLevel,
@@ -94,14 +93,6 @@ internal static class CreatureLevelManager
     internal static bool IsLevelSystemEnabled()
     {
         return CreatureManagerPlugin.EnableLevelSystem?.Value != CreatureManagerPlugin.Toggle.Off;
-    }
-
-    internal static bool IsExternalTamedSpawn(Character character)
-    {
-        return character != null &&
-               !character.IsPlayer() &&
-               character.IsTamed() &&
-               !CreatureManagerSpawnLifecycle.IsManagedSpawn(character);
     }
 
     internal static void Load(List<LevelDefinition> definitions)
@@ -189,7 +180,7 @@ internal static class CreatureLevelManager
 
             if (zdo.GetBool(ProcessingCompleteKey, false))
             {
-                SynchronizeCompletedRuntimeState(character, zdo);
+                SynchronizeStoredRuntimeState(character, zdo);
                 if (nview.IsOwner())
                 {
                     CreatureModifierManager.TryRollModifiers(character);
@@ -199,8 +190,9 @@ internal static class CreatureLevelManager
                 continue;
             }
 
-            if (ShouldKeepExistingRuntime(character))
+            if (ShouldPreserveExistingRolls(character))
             {
+                SynchronizeStoredRuntimeState(character, zdo);
                 ForgetPendingLevelCharacter(character, zdo.m_uid);
                 continue;
             }
@@ -303,11 +295,6 @@ internal static class CreatureLevelManager
             return;
         }
 
-        if (ShouldKeepExistingRuntime(character))
-        {
-            return;
-        }
-
         ZNetView? nview = character.m_nview;
         if (nview == null || !nview.IsValid())
         {
@@ -334,8 +321,15 @@ internal static class CreatureLevelManager
 
         if (zdo.GetBool(ProcessingCompleteKey, false))
         {
-            SynchronizeCompletedRuntimeState(character, zdo);
+            SynchronizeStoredRuntimeState(character, zdo);
             CreatureModifierManager.TryRollModifiers(character);
+            ForgetPendingLevelCharacter(character, zdo.m_uid);
+            return;
+        }
+
+        if (ShouldPreserveExistingRolls(character))
+        {
+            SynchronizeStoredRuntimeState(character, zdo);
             ForgetPendingLevelCharacter(character, zdo.m_uid);
             return;
         }
@@ -367,8 +361,11 @@ internal static class CreatureLevelManager
             }
         }
 
-        if (!zdo.GetBool(HealthAppliedKey, false) &&
-            TrySelectHealthMultiplier(character, out float healthMultiplier))
+        if (zdo.GetBool(HealthAppliedKey, false))
+        {
+            RestoreStoredHealthMultiplier(character, zdo);
+        }
+        else if (TrySelectHealthMultiplier(character, out float healthMultiplier))
         {
             ApplyHealthMultiplier(character, healthMultiplier);
             zdo.Set(HealthMultiplierKey, healthMultiplier);
@@ -613,7 +610,7 @@ internal static class CreatureLevelManager
         }
     }
 
-    private static void SynchronizeCompletedRuntimeState(Character character, ZDO zdo)
+    private static void SynchronizeStoredRuntimeState(Character character, ZDO zdo)
     {
         int level = zdo.GetInt(
             DesiredLevelKey,
@@ -624,7 +621,80 @@ internal static class CreatureLevelManager
             character.m_level = level;
         }
 
+        RestoreStoredHealthMultiplier(character, zdo);
         ApplyRuntimeVisuals(character);
+    }
+
+    private static void RestoreStoredHealthMultiplier(Character character, ZDO zdo)
+    {
+        ZNetView? nview = character.m_nview;
+        if (nview == null ||
+            !nview.IsValid() ||
+            !nview.IsOwner() ||
+            !zdo.GetBool(HealthAppliedKey, false))
+        {
+            return;
+        }
+
+        float multiplier = zdo.GetFloat(HealthMultiplierKey, 1f);
+        ApplyHealthMultiplier(character, multiplier);
+    }
+
+    internal static float CaptureStoredHealthDeficit(Character character)
+    {
+        if (character == null ||
+            character.IsPlayer() ||
+            !TryGetOwnedZdo(character, out ZDO zdo) ||
+            !zdo.GetBool(HealthAppliedKey, false))
+        {
+            return float.NaN;
+        }
+
+        float maxHealth = character.GetMaxHealth();
+        float health = character.GetHealth();
+        return maxHealth > 0f && health > 0f
+            ? Mathf.Max(0f, maxHealth - health)
+            : float.NaN;
+    }
+
+    internal static void RestoreStoredHealthDeficit(Character character, float missingHealth)
+    {
+        if (float.IsNaN(missingHealth) ||
+            float.IsInfinity(missingHealth) ||
+            character == null ||
+            character.IsPlayer() ||
+            !TryGetOwnedZdo(character, out ZDO zdo) ||
+            character.GetHealth() <= 0f)
+        {
+            return;
+        }
+
+        RestoreStoredHealthMultiplier(character, zdo);
+        float maxHealth = character.GetMaxHealth();
+        if (maxHealth <= 0f)
+        {
+            return;
+        }
+
+        float minimumHealth = Mathf.Min(1f, maxHealth);
+        character.SetHealth(Mathf.Clamp(maxHealth - missingHealth, minimumHealth, maxHealth));
+    }
+
+    private static bool TryGetOwnedZdo(Character character, out ZDO zdo)
+    {
+        ZNetView? nview = character.m_nview;
+        if (nview != null && nview.IsValid() && nview.IsOwner())
+        {
+            ZDO current = nview.GetZDO();
+            if (current != null)
+            {
+                zdo = current;
+                return true;
+            }
+        }
+
+        zdo = null!;
+        return false;
     }
 
     private static bool IsDeadOrWithoutHealth(Character character, ZDO zdo)
@@ -664,7 +734,7 @@ internal static class CreatureLevelManager
             return false;
         }
 
-        if (ShouldKeepExistingRuntime(character))
+        if (ShouldPreserveExistingRolls(character))
         {
             return true;
         }
@@ -757,11 +827,6 @@ internal static class CreatureLevelManager
             return;
         }
 
-        if (ShouldKeepExistingRuntime(character))
-        {
-            return;
-        }
-
         ZNetView? nview = character.m_nview;
         if (nview == null || !nview.IsValid() || !nview.IsOwner())
         {
@@ -769,14 +834,31 @@ internal static class CreatureLevelManager
         }
 
         ZDO zdo = nview.GetZDO();
-        if (zdo == null || !zdo.GetBool(AppliedKey, false))
+        if (zdo == null)
+        {
+            return;
+        }
+
+        if (ShouldPreserveExistingRolls(character))
+        {
+            RestoreStoredHealthMultiplier(character, zdo);
+            return;
+        }
+
+        if (!zdo.GetBool(AppliedKey, false))
         {
             return;
         }
 
         int desiredLevel = zdo.GetInt(DesiredLevelKey, 0);
-        if (desiredLevel <= 0 || desiredLevel == level)
+        if (desiredLevel <= 0)
         {
+            return;
+        }
+
+        if (desiredLevel == level)
+        {
+            RestoreStoredHealthMultiplier(character, zdo);
             return;
         }
 
@@ -786,6 +868,7 @@ internal static class CreatureLevelManager
         }
 
         SetManagedLevel(character, desiredLevel);
+        RestoreStoredHealthMultiplier(character, zdo);
     }
 
     internal static void BeginExplicitExternalLevelContext(string reason, Character? source = null)
@@ -835,7 +918,7 @@ internal static class CreatureLevelManager
             CreatureModifierManager.InheritModifiers(source, character);
         }
 
-        if (ShouldKeepExistingRuntime(character))
+        if (ShouldPreserveExistingRolls(character))
         {
             InheritLevelRuntimeState(source, character, zdo);
         }
@@ -904,14 +987,13 @@ internal static class CreatureLevelManager
     {
         if (TrySelectHealthMultiplier(character, out float healthMultiplier))
         {
-            ResetVanillaMaxHealth(character);
             ApplyHealthMultiplier(character, healthMultiplier);
             zdo.Set(HealthMultiplierKey, healthMultiplier);
             zdo.Set(HealthAppliedKey, true);
         }
         else if (zdo.GetBool(HealthAppliedKey, false))
         {
-            ResetVanillaMaxHealth(character);
+            ApplyHealthMultiplier(character, 1f);
             zdo.Set(HealthMultiplierKey, 1f);
             zdo.Set(HealthAppliedKey, false);
         }
@@ -952,7 +1034,6 @@ internal static class CreatureLevelManager
             float healthMultiplier = Mathf.Max(0f, sourceZdo.GetFloat(HealthMultiplierKey, 1f));
             if (healthMultiplier > 0f)
             {
-                ResetVanillaMaxHealth(target);
                 ApplyHealthMultiplier(target, healthMultiplier);
                 targetZdo.Set(HealthMultiplierKey, healthMultiplier);
                 targetZdo.Set(HealthAppliedKey, true);
@@ -965,11 +1046,6 @@ internal static class CreatureLevelManager
             targetZdo.Set(DamageMultiplierKey, damageMultiplier);
             targetZdo.Set(DamageAppliedKey, true);
         }
-    }
-
-    private static void ResetVanillaMaxHealth(Character character)
-    {
-        AccessTools.DeclaredMethod(typeof(Character), "SetupMaxHealth")?.Invoke(character, Array.Empty<object>());
     }
 
     internal static void ApplyRuntimeVisuals(Character character)
@@ -1173,9 +1249,9 @@ internal static class CreatureLevelManager
         return GetSpawnPolicy(character).RollLevel;
     }
 
-    private static bool ShouldKeepExistingRuntime(Character character)
+    private static bool ShouldPreserveExistingRolls(Character character)
     {
-        return GetSpawnPolicy(character).KeepExistingRuntime;
+        return GetSpawnPolicy(character).PreserveExistingRolls;
     }
 
     private static SpawnPolicy GetSpawnPolicy(Character character)
@@ -1258,6 +1334,11 @@ internal static class CreatureLevelManager
     internal static bool ShouldRollModifiers(Character character)
     {
         return AreModifiersEnabled(character) && GetModifierMode(character) == ModifierApplicationMode.Roll;
+    }
+
+    internal static bool BlocksModifierRoll(Character character)
+    {
+        return GetModifierMode(character) == ModifierApplicationMode.Block;
     }
 
     internal static bool AllowsModifierEffects(Character character)
@@ -1833,16 +1914,6 @@ internal static class CreatureLevelManager
         return definition;
     }
 
-    private static bool HasHealthEffect(LevelDefinition rule)
-    {
-        return rule.Health.HasValue || rule.HealthPerLevel.HasValue || HasDistanceScalingValue(rule.DistanceScaling, 1);
-    }
-
-    private static bool HasDamageEffect(LevelDefinition rule)
-    {
-        return rule.Damage.HasValue || rule.DamagePerLevel.HasValue || HasDistanceScalingValue(rule.DistanceScaling, 0);
-    }
-
     private static bool HasDistanceScalingValue(List<float>? scaling, int index)
     {
         return scaling != null && scaling.Count > index && scaling[index] > 0f;
@@ -2109,28 +2180,31 @@ internal static class CreatureLevelManager
 
     private static void ApplyHealthMultiplier(Character character, float multiplier)
     {
-        if (multiplier <= 0f)
+        if (multiplier <= 0f || float.IsNaN(multiplier) || float.IsInfinity(multiplier))
         {
             return;
         }
 
-        float maxHealth = character.GetMaxHealth();
+        float vanillaMaxHealth = character.GetMaxHealthBase() * Math.Max(1, character.GetLevel());
+        float targetMaxHealth = vanillaMaxHealth * multiplier;
+        if (targetMaxHealth <= 0f || float.IsNaN(targetMaxHealth) || float.IsInfinity(targetMaxHealth))
+        {
+            return;
+        }
+
+        float currentMaxHealth = character.GetMaxHealth();
+        if (Mathf.Approximately(currentMaxHealth, targetMaxHealth))
+        {
+            return;
+        }
+
         float currentHealth = character.GetHealth();
-        if (maxHealth <= 0f)
-        {
-            return;
-        }
-
-        float missingHealth = Mathf.Max(0f, maxHealth - currentHealth);
-        float targetMaxHealth = maxHealth * multiplier;
+        float missingHealth = Mathf.Max(0f, currentMaxHealth - currentHealth);
         character.SetMaxHealth(targetMaxHealth);
-        if (missingHealth > 0f)
+        if (currentMaxHealth > 0f && currentHealth > 0f)
         {
-            character.SetHealth(Mathf.Max(1f, targetMaxHealth - missingHealth));
-        }
-        else
-        {
-            character.Heal(targetMaxHealth, true);
+            float minimumHealth = Mathf.Min(1f, targetMaxHealth);
+            character.SetHealth(Mathf.Clamp(targetMaxHealth - missingHealth, minimumHealth, targetMaxHealth));
         }
     }
 
@@ -2143,7 +2217,19 @@ internal static class CreatureLevelManager
             return false;
         }
 
-        float total = weights.Where(weight => weight > 0f).Sum();
+        float total = 0f;
+        int lastPositiveLevel = 1;
+        for (int index = 0; index < weights.Count; index++)
+        {
+            if (weights[index] <= 0f)
+            {
+                continue;
+            }
+
+            total += weights[index];
+            lastPositiveLevel = index + 1;
+        }
+
         if (total <= 0f)
         {
             CreatureManagerPlugin.Log.LogWarning($"Level rule for '{prefabName}' has no positive level weights.");
@@ -2163,13 +2249,8 @@ internal static class CreatureLevelManager
             roll -= weight;
         }
 
-        level = weights.Count;
+        level = lastPositiveLevel;
         return true;
-    }
-
-    internal static string GetBiomeName(Vector3 position)
-    {
-        return GetBiome(position).ToString();
     }
 
     private static Heightmap.Biome GetBiome(Vector3 position)

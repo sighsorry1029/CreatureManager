@@ -191,6 +191,8 @@ Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains
 4. Change only the fields you need.
 5. Save the file. Most YAML and texture changes reload automatically.
 
+Saving an active YAML file updates synchronized templates and global rules without a restart. Already loaded creatures keep their creature fields, AI, equipped attack data, and completed level and modifier state; existing Enforcers keep their identity, level, loot, and modifiers. Creature GameObjects instantiated after the reload use the current templates; this includes persistent creatures loaded again after a zone unload. Projectiles and ragdolls are separate runtime objects, so ones created after the reload also use current templates even when their source creature already existed. Faction relationships, Karma economy and encounter checks, server localization, and shared texture visuals are live global or visual exceptions. Changing `clonedFrom` for an already registered clone requires a restart.
+
 The generated YAML headers are the schema reference. This README intentionally does not duplicate their field-by-field examples.
 
 ## Configuration Files

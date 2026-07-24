@@ -223,9 +223,48 @@ internal static class CreaturePrefabRegistry
         return IsClonedPrefab(prefab);
     }
 
+    internal static bool TryGetCloneSource(string cloneName, out string sourceName)
+    {
+        if (ClonedPrefabs.TryGetValue(cloneName, out CloneRecord record) && record.Prefab != null)
+        {
+            sourceName = record.SourceName;
+            return true;
+        }
+
+        sourceName = "";
+        return false;
+    }
+
     internal static bool IsPlayerPrefab(GameObject prefab)
     {
         return prefab.GetComponent<Player>() != null;
+    }
+
+    internal static bool TryValidateCloneRegistration(GameObject source, string cloneName, out string error)
+    {
+        error = "";
+        if (source == null || string.IsNullOrWhiteSpace(cloneName))
+        {
+            error = "Cannot create a CreatureManager prefab clone without a source and clone name.";
+            return false;
+        }
+
+        cloneName = cloneName.Trim();
+        GameObject? externalPrefab = FindExternalPrefabByName(cloneName);
+        if (externalPrefab != null)
+        {
+            error = $"CreatureManager clone '{cloneName}' was not created because an external prefab with that name is already registered.";
+            return false;
+        }
+
+        if (TryFindExternalHashOwner(source, cloneName, out GameObject? hashOwner))
+        {
+            error =
+                $"CreatureManager clone '{cloneName}' was not created because its stable hash collides with external prefab '{hashOwner!.name}'.";
+            return false;
+        }
+
+        return true;
     }
 
     internal static GameObject? ClonePrefab(GameObject source, string cloneName)
@@ -238,6 +277,7 @@ internal static class CreaturePrefabRegistry
 
         cloneName = cloneName.Trim();
         string sourceName = source.name;
+        GameObject? existingClone = null;
         if (ClonedPrefabs.TryGetValue(cloneName, out CloneRecord existingRecord))
         {
             if (existingRecord.Prefab == null)
@@ -252,30 +292,31 @@ internal static class CreaturePrefabRegistry
             }
             else
             {
-                return existingRecord.Prefab;
+                existingClone = existingRecord.Prefab;
             }
         }
 
-        GameObject? externalPrefab = FindExternalPrefabByName(cloneName);
-        if (externalPrefab != null)
+        if (!TryValidateCloneRegistration(source, cloneName, out string error))
         {
-            CreatureManagerPlugin.Log.LogError(
-                $"CreatureManager clone '{cloneName}' was not created because an external prefab with that name is already registered.");
+            CreatureManagerPlugin.Log.LogError(error);
             return null;
         }
 
-        if (TryFindExternalHashOwner(source, cloneName, out GameObject? hashOwner))
+        if (existingClone != null)
         {
-            CreatureManagerPlugin.Log.LogError(
-                $"CreatureManager clone '{cloneName}' was not created because its stable hash collides with external prefab '{hashOwner!.name}'.");
-            return null;
+            return existingClone;
         }
 
         Transform root = GetRootTransform();
         GameObject clone = Object.Instantiate(source, root, false);
         clone.name = cloneName;
         ClonedPrefabs[cloneName] = new CloneRecord(clone, sourceName);
-        RegisterPrefab(clone);
+        if (!RegisterPrefab(clone))
+        {
+            RemoveOwnedClone(cloneName);
+            return null;
+        }
+
         return clone;
     }
 
@@ -336,11 +377,11 @@ internal static class CreaturePrefabRegistry
         }
     }
 
-    private static void RegisterPrefab(GameObject prefab)
+    private static bool RegisterPrefab(GameObject prefab)
     {
         if (prefab == null)
         {
-            return;
+            return false;
         }
 
         if (!PrefabsToRegister.Contains(prefab))
@@ -348,10 +389,11 @@ internal static class CreaturePrefabRegistry
             PrefabsToRegister.Add(prefab);
         }
 
-        RegisterWithZNetScene(ZNetScene.instance, prefab);
-        RegisterWithZNetScene(FejdZNetScene, prefab);
-        RegisterWithObjectDb(ObjectDB.instance, prefab);
-        RegisterWithObjectDb(FejdObjectDb, prefab);
+        bool registered = RegisterWithZNetScene(ZNetScene.instance, prefab);
+        registered &= RegisterWithZNetScene(FejdZNetScene, prefab);
+        registered &= RegisterWithObjectDb(ObjectDB.instance, prefab);
+        registered &= RegisterWithObjectDb(FejdObjectDb, prefab);
+        return registered;
     }
 
     internal static void RegisterPendingPrefabs(ZNetScene scene)
@@ -459,11 +501,11 @@ internal static class CreaturePrefabRegistry
         }
     }
 
-    private static void RegisterWithZNetScene(ZNetScene? scene, GameObject prefab)
+    private static bool RegisterWithZNetScene(ZNetScene? scene, GameObject prefab)
     {
         if (scene == null || prefab.GetComponent<ZNetView>() == null)
         {
-            return;
+            return true;
         }
 
         int hash = StringExtensionMethods.GetStableHashCode(prefab.name);
@@ -476,7 +518,7 @@ internal static class CreaturePrefabRegistry
         {
             CreatureManagerPlugin.Log.LogError(
                 $"CreatureManager prefab '{prefab.name}' was not registered in ZNetScene because its name or stable hash is already owned by another prefab.");
-            return;
+            return false;
         }
 
         if (!scene.m_prefabs.Contains(prefab))
@@ -488,14 +530,16 @@ internal static class CreaturePrefabRegistry
         {
             scene.m_namedPrefabs[hash] = prefab;
         }
+
+        return true;
     }
 
-    private static void RegisterWithObjectDb(ObjectDB? objectDb, GameObject prefab)
+    private static bool RegisterWithObjectDb(ObjectDB? objectDb, GameObject prefab)
     {
         ItemDrop? itemDrop = prefab.GetComponent<ItemDrop>();
         if (objectDb == null || itemDrop == null)
         {
-            return;
+            return true;
         }
 
         int hash = StringExtensionMethods.GetStableHashCode(prefab.name);
@@ -512,7 +556,7 @@ internal static class CreaturePrefabRegistry
         {
             CreatureManagerPlugin.Log.LogError(
                 $"CreatureManager prefab '{prefab.name}' was not registered in ObjectDB because its name or stable hash is already owned by another prefab.");
-            return;
+            return false;
         }
 
         if (!objectDb.m_items.Contains(prefab))
@@ -529,6 +573,8 @@ internal static class CreaturePrefabRegistry
         {
             objectDb.m_itemByData[shared] = prefab;
         }
+
+        return true;
     }
 
     private static void RemoveOwnedClone(string cloneName)
@@ -600,45 +646,41 @@ internal static class CreaturePrefabRegistry
         }
 
         objectDb.m_items.RemoveAll(candidate => ReferenceEquals(candidate, prefab));
-        if (objectDb.m_itemByHash == null)
+        if (objectDb.m_itemByHash != null)
         {
-            return;
-        }
-
-        foreach (int hash in objectDb.m_itemByHash
-                     .Where(pair => ReferenceEquals(pair.Value, prefab))
-                     .Select(pair => pair.Key)
-                     .ToArray())
-        {
-            objectDb.m_itemByHash.Remove(hash);
-            GameObject? replacement = objectDb.m_items.FirstOrDefault(candidate =>
-                candidate != null &&
-                !IsClonedPrefab(candidate) &&
-                StringExtensionMethods.GetStableHashCode(candidate.name) == hash);
-            if (replacement != null)
+            foreach (int hash in objectDb.m_itemByHash
+                         .Where(pair => ReferenceEquals(pair.Value, prefab))
+                         .Select(pair => pair.Key)
+                         .ToArray())
             {
-                objectDb.m_itemByHash[hash] = replacement;
+                objectDb.m_itemByHash.Remove(hash);
+                GameObject? replacement = objectDb.m_items.FirstOrDefault(candidate =>
+                    candidate != null &&
+                    !IsClonedPrefab(candidate) &&
+                    StringExtensionMethods.GetStableHashCode(candidate.name) == hash);
+                if (replacement != null)
+                {
+                    objectDb.m_itemByHash[hash] = replacement;
+                }
             }
         }
 
-        if (objectDb.m_itemByData == null)
+        if (objectDb.m_itemByData != null)
         {
-            return;
-        }
-
-        foreach (ItemDrop.ItemData.SharedData shared in objectDb.m_itemByData
-                     .Where(pair => ReferenceEquals(pair.Value, prefab))
-                     .Select(pair => pair.Key)
-                     .ToArray())
-        {
-            objectDb.m_itemByData.Remove(shared);
-            GameObject? replacement = objectDb.m_items.FirstOrDefault(candidate =>
-                candidate != null &&
-                !IsClonedPrefab(candidate) &&
-                ReferenceEquals(candidate.GetComponent<ItemDrop>()?.m_itemData?.m_shared, shared));
-            if (replacement != null)
+            foreach (ItemDrop.ItemData.SharedData shared in objectDb.m_itemByData
+                         .Where(pair => ReferenceEquals(pair.Value, prefab))
+                         .Select(pair => pair.Key)
+                         .ToArray())
             {
-                objectDb.m_itemByData[shared] = replacement;
+                objectDb.m_itemByData.Remove(shared);
+                GameObject? replacement = objectDb.m_items.FirstOrDefault(candidate =>
+                    candidate != null &&
+                    !IsClonedPrefab(candidate) &&
+                    ReferenceEquals(candidate.GetComponent<ItemDrop>()?.m_itemData?.m_shared, shared));
+                if (replacement != null)
+                {
+                    objectDb.m_itemByData[shared] = replacement;
+                }
             }
         }
     }

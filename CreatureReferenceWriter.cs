@@ -665,11 +665,11 @@ internal static class CreatureReferenceWriter
         }
 
         GameObject? instance = null;
+        bool previousForceDisableInit = ZNetView.m_forceDisableInit;
         try
         {
             ZNetView.m_forceDisableInit = true;
             instance = UnityEngine.Object.Instantiate(prefab);
-            ZNetView.m_forceDisableInit = false;
             return GetAnimatorParameterNames(instance.GetComponentInChildren<Animator>(true));
         }
         catch (Exception ex)
@@ -679,7 +679,7 @@ internal static class CreatureReferenceWriter
         }
         finally
         {
-            ZNetView.m_forceDisableInit = false;
+            ZNetView.m_forceDisableInit = previousForceDisableInit;
             if (instance != null)
             {
                 UnityEngine.Object.DestroyImmediate(instance);
@@ -1031,8 +1031,6 @@ internal static class CreatureReferenceWriter
         List<string> names = items?
             .Where(item => item != null)
             .Select(item => item.name)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList() ?? new List<string>();
 
         if (names.Count == 0)
@@ -1053,8 +1051,6 @@ internal static class CreatureReferenceWriter
         List<string> lines = randomItems?
             .Where(item => item?.m_prefab != null)
             .Select(item => $"{item.m_prefab.name}, {FormatFloat(item.m_chance)}")
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(line => line, StringComparer.OrdinalIgnoreCase)
             .ToList() ?? new List<string>();
 
         if (lines.Count == 0)
@@ -1076,8 +1072,6 @@ internal static class CreatureReferenceWriter
             .Where(set => set?.m_items != null)
             .Select(set => $"{set.m_name}, {string.Join(", ", set.m_items.Where(item => item != null).Select(item => item.name))}".TrimEnd(' ', ','))
             .Where(line => line.IndexOf(',') >= 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(line => line, StringComparer.OrdinalIgnoreCase)
             .ToList() ?? new List<string>();
 
         if (lines.Count == 0)

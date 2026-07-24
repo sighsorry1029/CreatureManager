@@ -598,6 +598,7 @@ internal static class CreatureServerLocalization
             "# English is the fallback; the selected client language overrides matching English tokens.\n" +
             "# Keys may have one leading '$'; reference them as $token in creatures.yml or other localized fields.\n" +
             "# Remote clients ignore their local files while connected. Redefining an existing token changes every use of it.\n" +
+            "# Localization is a global live rule; synchronized edits refresh the current language and UI immediately.\n" +
             "# These default names are used by creatures.sample.yml.\n" +
             translations + "\n";
     }

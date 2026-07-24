@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.7
+
+- Make synchronized YAML reloads transactional and last-known-good: reject invalid faction relationships, duplicate or multi-document mappings, broken clone graphs, stale clone references, and missing required prefab components before publishing, then restore prefab, faction, and clone state if application fails.
+- Make live edits deterministic: loaded creatures retain their creature, AI, attack, level, and modifier state, while newly instantiated creatures, projectiles, and ragdolls use current templates; live faction, Karma, localization, and shared texture rules remain immediate, and changing or unsafely hot-adding `clonedFrom` requires a restart.
+- Preserve stored level health multipliers and missing health through reload, ownership, and `SetLevel` paths; stop blocked Enforcer checks from extending cooldown, and pause Blamer flee/icon behavior at the regional Karma cap without consuming the modifier.
+- Bound server state and modifier traffic: limit each Enforcer candidate to 16 minions and 64 loot items, cap `cm:spawn` levels at 100, prune bounded Karma sector state, authorize Reaping only from observed deaths, limit Reflection/Reaping queues, and rate-limit Vortex/Juggernaut network effects.
+- Centralize and validate all 32 modifier definitions and icons, add reproducible exact-icon checks, keep Compendium icon links stable, and preserve loadout ordering and duplicate weight entries in generated references.
+- Improve partial-startup and shutdown cleanup, and automatically rebuild a failed configuration file watcher.
+
 ## 1.0.6
 
 - Remove runtime assembly loading for `UnityEngine.ImageConversionModule`; PNG decoding now resolves `ImageConversion.LoadImage` through reflection from Unity's existing compile-time type reference.

@@ -22,57 +22,188 @@ internal static class CreatureFactionManager
         Load(DefaultFactionDefinitions());
     }
 
-    internal static void Load(List<FactionDefinition> definitions)
+    internal static bool Load(List<FactionDefinition> definitions)
     {
         if (definitions.Count == 0)
         {
             definitions = DefaultFactionDefinitions();
         }
 
+        if (!TryBuildSnapshot(definitions, out FactionSnapshot snapshot, out List<string> errors))
+        {
+            foreach (string error in errors)
+            {
+                CreatureManagerPlugin.Log.LogError($"Faction configuration rejected: {error}");
+            }
+
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Faction configuration was not applied because {errors.Count} validation error(s) were found; the previously published faction rules remain active.");
+            return false;
+        }
+
+        lock (Sync)
+        {
+            NameToFaction = snapshot.NameToFaction;
+            FactionToName = snapshot.FactionToName;
+            FactionDataByFaction = snapshot.FactionDataByFaction;
+            Aggravatable = snapshot.Aggravatable;
+        }
+
+        RefreshLiveBaseAis();
+        return true;
+    }
+
+    private static bool TryBuildSnapshot(
+        IReadOnlyList<FactionDefinition> definitions,
+        out FactionSnapshot snapshot,
+        out List<string> errors)
+    {
+        errors = new List<string>();
         Dictionary<string, Character.Faction> names = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<Character.Faction, string> displayNames = new();
-        int nextCustomId = CustomFactionStartId;
+        Dictionary<string, Character.Faction> vanillaFactions = Enum.GetNames(typeof(Character.Faction))
+            .ToDictionary(
+                name => name,
+                name => (Character.Faction)Enum.Parse(typeof(Character.Faction), name),
+                StringComparer.OrdinalIgnoreCase);
+        HashSet<int> vanillaIds = vanillaFactions.Values
+            .Select(faction => (int)faction)
+            .ToHashSet();
+        HashSet<int> reservedIds = new(vanillaIds);
 
-        foreach (FactionDefinition definition in definitions)
+        for (int index = 0; index < definitions.Count; index++)
         {
+            FactionDefinition? definition = definitions[index];
+            if (definition == null)
+            {
+                errors.Add($"entry {index + 1} is null; each faction entry must be a mapping.");
+                continue;
+            }
+
+            if (definition.Id.HasValue)
+            {
+                reservedIds.Add(definition.Id.Value);
+            }
+        }
+
+        int nextCustomId = CustomFactionStartId;
+        for (int index = 0; index < definitions.Count; index++)
+        {
+            FactionDefinition? definition = definitions[index];
+            if (definition == null)
+            {
+                continue;
+            }
+
             string? name = NormalizeName(definition.Faction);
             if (name == null)
             {
+                errors.Add($"entry {index + 1} has an empty faction name.");
                 continue;
             }
 
-            int id = definition.Id ?? GetDefaultId(name, ref nextCustomId);
-            Character.Faction faction = (Character.Faction)id;
+            if (int.TryParse(name, out _))
+            {
+                errors.Add($"entry {index + 1} faction name '{name}' is numeric; use a non-numeric name and the id field instead.");
+                continue;
+            }
+
             if (names.ContainsKey(name))
             {
-                CreatureManagerPlugin.Log.LogWarning($"Duplicate faction name '{name}' skipped.");
+                errors.Add($"entry {index + 1} duplicates faction name '{name}' (names are case-insensitive).");
                 continue;
             }
 
-            if (displayNames.ContainsKey(faction))
+            int id;
+            if (vanillaFactions.TryGetValue(name, out Character.Faction vanillaFaction))
             {
-                CreatureManagerPlugin.Log.LogWarning($"Duplicate faction id '{id}' for '{name}' skipped.");
+                id = (int)vanillaFaction;
+                if (definition.Id.HasValue && definition.Id.Value != id)
+                {
+                    errors.Add(
+                        $"entry {index + 1} faction '{name}' is a vanilla faction and must use id {id}, not {definition.Id.Value}.");
+                    continue;
+                }
+            }
+            else if (definition.Id.HasValue)
+            {
+                id = definition.Id.Value;
+                if (vanillaIds.Contains(id))
+                {
+                    string vanillaName = GetVanillaNameForId(vanillaFactions, id);
+                    errors.Add(
+                        $"entry {index + 1} custom faction '{name}' cannot alias vanilla faction id {id} ({vanillaName}).");
+                    continue;
+                }
+            }
+            else
+            {
+                id = GetNextCustomId(reservedIds, ref nextCustomId);
+            }
+
+            Character.Faction faction = (Character.Faction)id;
+            if (displayNames.TryGetValue(faction, out string existingName))
+            {
+                errors.Add(
+                    $"entry {index + 1} faction '{name}' duplicates id {id}, which is already assigned to '{existingName}'.");
                 continue;
             }
 
             names[name] = faction;
             displayNames[faction] = name;
+            reservedIds.Add(id);
         }
 
         Dictionary<Character.Faction, FactionData> data = new();
         HashSet<Character.Faction> aggravatable = new();
-        foreach (FactionDefinition definition in definitions)
+        HashSet<Character.Faction> allFactions = displayNames.Keys.ToHashSet();
+        for (int index = 0; index < definitions.Count; index++)
         {
+            FactionDefinition? definition = definitions[index];
+            if (definition == null)
+            {
+                continue;
+            }
+
             string? name = NormalizeName(definition.Faction);
             if (name == null || !names.TryGetValue(name, out Character.Faction faction))
             {
                 continue;
             }
 
+            bool friendlyValid = TryResolveFactionSet(
+                definition.Friendly,
+                names,
+                allFactions,
+                name,
+                "friendly",
+                errors,
+                out HashSet<Character.Faction> friendly);
+            bool aggravatedValid = TryResolveOptionalFactionSet(
+                definition.AggravatedFriendly,
+                names,
+                allFactions,
+                name,
+                "aggravatedFriendly",
+                errors,
+                out HashSet<Character.Faction>? aggravatedFriendly);
+            bool alertedValid = TryResolveOptionalFactionSet(
+                definition.AlertedFriendly,
+                names,
+                allFactions,
+                name,
+                "alertedFriendly",
+                errors,
+                out HashSet<Character.Faction>? alertedFriendly);
+            if (!friendlyValid || !aggravatedValid || !alertedValid)
+            {
+                continue;
+            }
+
             FactionData factionData = new(
-                ResolveFactionSet(definition.Friendly, names, displayNames.Keys),
-                definition.AggravatedFriendly == null ? null : ResolveFactionSet(definition.AggravatedFriendly, names, displayNames.Keys),
-                definition.AlertedFriendly == null ? null : ResolveFactionSet(definition.AlertedFriendly, names, displayNames.Keys));
+                friendly,
+                aggravatedFriendly,
+                alertedFriendly);
 
             data[faction] = factionData;
             if (factionData.AggravatedFriendly != null)
@@ -81,15 +212,8 @@ internal static class CreatureFactionManager
             }
         }
 
-        lock (Sync)
-        {
-            NameToFaction = names;
-            FactionToName = displayNames;
-            FactionDataByFaction = data;
-            Aggravatable = aggravatable;
-        }
-
-        RefreshLiveBaseAis();
+        snapshot = new FactionSnapshot(names, displayNames, data, aggravatable);
+        return errors.Count == 0;
     }
 
     internal static bool TryGetFaction(string? name, out Character.Faction faction)
@@ -111,11 +235,26 @@ internal static class CreatureFactionManager
 
         if (int.TryParse(normalized, out int id))
         {
-            faction = (Character.Faction)id;
-            return true;
+            lock (Sync)
+            {
+                if (FactionToName.ContainsKey((Character.Faction)id))
+                {
+                    faction = (Character.Faction)id;
+                    return true;
+                }
+            }
+
+            if (Enum.IsDefined(typeof(Character.Faction), id))
+            {
+                faction = (Character.Faction)id;
+                return true;
+            }
+
+            return false;
         }
 
-        return Enum.TryParse(normalized, true, out faction);
+        return Enum.TryParse(normalized, true, out faction) &&
+               Enum.IsDefined(typeof(Character.Faction), faction);
     }
 
     internal static bool TryGetRegisteredFaction(
@@ -289,6 +428,8 @@ internal static class CreatureFactionManager
         builder.AppendLine("# Vanilla faction relationships are listed below as comments, then repeated as active YAML.");
         builder.AppendLine("# Edit these entries or append custom factions. Custom ids should normally start at 100.");
         builder.AppendLine("# friendly/aggravatedFriendly/alertedFriendly accept faction names or [All].");
+        builder.AppendLine("# Faction relationships are global live rules and immediately affect loaded creatures.");
+        builder.AppendLine("# Give custom factions explicit stable ids; do not change an id while persisted creatures use it.");
         builder.AppendLine("#");
         foreach (FactionDefinition definition in DefaultFactionDefinitions())
         {
@@ -338,22 +479,50 @@ internal static class CreatureFactionManager
         return values == null || values.Count == 0 ? "[]" : $"[{string.Join(", ", values)}]";
     }
 
-    private static HashSet<Character.Faction> ResolveFactionSet(
+    private static bool TryResolveOptionalFactionSet(
         List<string>? values,
         Dictionary<string, Character.Faction> names,
-        IEnumerable<Character.Faction> allFactions)
+        HashSet<Character.Faction> allFactions,
+        string owner,
+        string field,
+        List<string> errors,
+        out HashSet<Character.Faction>? factions)
     {
-        HashSet<Character.Faction> factions = new();
         if (values == null)
         {
-            return factions;
+            factions = null;
+            return true;
         }
 
-        foreach (string rawValue in values)
+        bool valid = TryResolveFactionSet(values, names, allFactions, owner, field, errors, out HashSet<Character.Faction> resolved);
+        factions = resolved;
+        return valid;
+    }
+
+    private static bool TryResolveFactionSet(
+        List<string>? values,
+        Dictionary<string, Character.Faction> names,
+        HashSet<Character.Faction> allFactions,
+        string owner,
+        string field,
+        List<string> errors,
+        out HashSet<Character.Faction> factions)
+    {
+        factions = new HashSet<Character.Faction>();
+        if (values == null)
         {
+            return true;
+        }
+
+        bool valid = true;
+        for (int index = 0; index < values.Count; index++)
+        {
+            string? rawValue = values[index];
             string? value = NormalizeName(rawValue);
             if (value == null)
             {
+                errors.Add($"faction '{owner}' field '{field}' contains an empty target at position {index + 1}.");
+                valid = false;
                 continue;
             }
 
@@ -369,18 +538,29 @@ internal static class CreatureFactionManager
             }
             else
             {
-                CreatureManagerPlugin.Log.LogWarning($"Unknown faction relationship target '{value}'.");
+                errors.Add($"faction '{owner}' field '{field}' references unknown faction '{value}'.");
+                valid = false;
             }
         }
 
-        return factions;
+        return valid;
     }
 
-    private static int GetDefaultId(string name, ref int nextCustomId)
+    private static string GetVanillaNameForId(
+        IReadOnlyDictionary<string, Character.Faction> vanillaFactions,
+        int id)
     {
-        if (Enum.TryParse(name, true, out Character.Faction faction))
+        return vanillaFactions
+            .Where(entry => (int)entry.Value == id)
+            .Select(entry => entry.Key)
+            .FirstOrDefault() ?? "unknown";
+    }
+
+    private static int GetNextCustomId(HashSet<int> reservedIds, ref int nextCustomId)
+    {
+        while (reservedIds.Contains(nextCustomId))
         {
-            return (int)faction;
+            nextCustomId++;
         }
 
         return nextCustomId++;
@@ -394,12 +574,30 @@ internal static class CreatureFactionManager
 
     private static void RefreshLiveBaseAis()
     {
-        foreach (BaseAI baseAi in BaseAI.GetAllInstances())
+        try
         {
-            if (baseAi != null)
+            foreach (BaseAI baseAi in BaseAI.GetAllInstances())
             {
-                SetupBaseAi(baseAi);
+                if (baseAi == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    SetupBaseAi(baseAi);
+                }
+                catch (Exception ex)
+                {
+                    CreatureManagerPlugin.Log.LogWarning(
+                        $"Failed to refresh live faction state for '{baseAi.name}': {ex.Message}");
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Failed to enumerate live creatures while refreshing faction state: {ex.Message}");
         }
     }
 
@@ -466,6 +664,26 @@ internal static class CreatureFactionManager
         public HashSet<Character.Faction> Friendly { get; }
         public HashSet<Character.Faction>? AggravatedFriendly { get; }
         public HashSet<Character.Faction>? AlertedFriendly { get; }
+    }
+
+    private sealed class FactionSnapshot
+    {
+        public FactionSnapshot(
+            Dictionary<string, Character.Faction> nameToFaction,
+            Dictionary<Character.Faction, string> factionToName,
+            Dictionary<Character.Faction, FactionData> factionDataByFaction,
+            HashSet<Character.Faction> aggravatable)
+        {
+            NameToFaction = nameToFaction;
+            FactionToName = factionToName;
+            FactionDataByFaction = factionDataByFaction;
+            Aggravatable = aggravatable;
+        }
+
+        public Dictionary<string, Character.Faction> NameToFaction { get; }
+        public Dictionary<Character.Faction, string> FactionToName { get; }
+        public Dictionary<Character.Faction, FactionData> FactionDataByFaction { get; }
+        public HashSet<Character.Faction> Aggravatable { get; }
     }
 }
 

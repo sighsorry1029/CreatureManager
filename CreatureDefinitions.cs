@@ -168,6 +168,24 @@ internal sealed class FactionDefinition
     public List<string>? AlertedFriendly { get; set; }
 }
 
+internal static class CreatureModifierCatalog
+{
+    internal static readonly IReadOnlyList<string> Keys = Array.AsReadOnly(new[]
+    {
+        "enraged", "fire", "frost", "lightning", "spirit", "armorPiercing", "staggering", "undodgeable",
+        "armored", "deathward", "regenerating", "reflection", "vortex", "adaptive", "unflinching", "chameleon",
+        "exposed", "weakened", "withered", "crippling", "disruptive", "adrenalineDrain", "corrosive", "toxicDeath",
+        "swift", "attackSpeed", "vampiric", "reaping", "blink", "omen", "juggernaut", "blamer"
+    });
+
+    private static readonly HashSet<string> KeySet = new(Keys, StringComparer.OrdinalIgnoreCase);
+
+    internal static bool IsKnown(string modifier)
+    {
+        return !string.IsNullOrWhiteSpace(modifier) && KeySet.Contains(modifier.Trim());
+    }
+}
+
 internal sealed class LevelDefinition
 {
     private Dictionary<string, ModifierDefinition>? _modifiers;
@@ -252,98 +270,57 @@ internal sealed class ModifierDefinition
 
 internal sealed class ModifierChanceDefinition
 {
-    public float? Enraged { get; set; }
-    public float? Fire { get; set; }
-    public float? Frost { get; set; }
-    public float? Lightning { get; set; }
-    public float? Spirit { get; set; }
-    public float? ArmorPiercing { get; set; }
-    public float? Staggering { get; set; }
-    public float? Undodgeable { get; set; }
+    private readonly Dictionary<string, float> _values = new(StringComparer.OrdinalIgnoreCase);
 
-    public float? Armored { get; set; }
-    public float? Deathward { get; set; }
-    public float? Regenerating { get; set; }
-    public float? Reflection { get; set; }
-    public float? Vortex { get; set; }
-    public float? Adaptive { get; set; }
-    public float? Unflinching { get; set; }
-    public float? Chameleon { get; set; }
+    internal float? Get(string modifier)
+    {
+        return _values.TryGetValue(modifier, out float chance) ? chance : null;
+    }
 
-    public float? Exposed { get; set; }
-    public float? Weakened { get; set; }
-    public float? Withered { get; set; }
-    public float? Crippling { get; set; }
-    public float? Disruptive { get; set; }
-    public float? AdrenalineDrain { get; set; }
-    public float? Corrosive { get; set; }
-    public float? ToxicDeath { get; set; }
-
-    public float? Swift { get; set; }
-    public float? AttackSpeed { get; set; }
-    public float? Vampiric { get; set; }
-    public float? Reaping { get; set; }
-    public float? Blink { get; set; }
-    public float? Omen { get; set; }
-    public float? Knockback { get; set; }
-    public float? Blamer { get; set; }
+    internal void Set(string modifier, float chance)
+    {
+        _values[modifier] = chance;
+    }
 }
 
 internal sealed class ModifierPowerDefinition
 {
-    public float? Enraged { get; set; }
-    public float? Fire { get; set; }
-    public float? Frost { get; set; }
-    public float? Lightning { get; set; }
-    public float? Spirit { get; set; }
-    public float? ArmorPiercing { get; set; }
-    public float? Staggering { get; set; }
-    public float? Undodgeable { get; set; }
+    private readonly Dictionary<string, float> _values = new(StringComparer.OrdinalIgnoreCase);
 
-    public float? Armored { get; set; }
-    public float? Deathward { get; set; }
+    internal float? Get(string modifier)
+    {
+        return _values.TryGetValue(modifier, out float power) ? power : null;
+    }
+
+    internal void Set(string modifier, float power)
+    {
+        _values[modifier] = power;
+    }
+
     public float? DeathwardCooldown { get; set; }
     public int? DeathwardMaxActivations { get; set; }
-    public float? Regenerating { get; set; }
-    public float? Reflection { get; set; }
     public float? ReflectionProcChance { get; set; }
-    public float? Vortex { get; set; }
-    public float? Adaptive { get; set; }
-    public float? Unflinching { get; set; }
-    public float? Chameleon { get; set; }
 
-    public float? Exposed { get; set; }
     public float? ExposedProcChance { get; set; }
     public float? ExposedDuration { get; set; }
-    public float? Weakened { get; set; }
     public float? WeakenedProcChance { get; set; }
     public float? WeakenedDuration { get; set; }
-    public float? Withered { get; set; }
     public float? WitheredProcChance { get; set; }
     public float? WitheredDuration { get; set; }
-    public float? Crippling { get; set; }
     public float? CripplingJump { get; set; }
     public float? CripplingProcChance { get; set; }
     public float? CripplingDuration { get; set; }
-    public float? Disruptive { get; set; }
     public float? DisruptiveEitr { get; set; }
     public float? DisruptiveProcChance { get; set; }
     public float? DisruptiveDuration { get; set; }
-    public float? AdrenalineDrain { get; set; }
     public float? AdrenalineDrainGainReduction { get; set; }
     public float? AdrenalineDrainProcChance { get; set; }
     public float? AdrenalineDrainDuration { get; set; }
-    public float? Corrosive { get; set; }
     public float? CorrosiveProcChance { get; set; }
     public float? CorrosiveDuration { get; set; }
-    public float? ToxicDeath { get; set; }
     public float? ToxicDeathRadius { get; set; }
     public string? ToxicDeathTriggerEffect { get; set; }
 
-    public float? Swift { get; set; }
-    public float? AttackSpeed { get; set; }
-    public float? Vampiric { get; set; }
-    public float? Reaping { get; set; }
     public int? ReapingHealMaxActivations { get; set; }
     public float? ReapingMaxHealthPerKill { get; set; }
     public float? ReapingMaxHealthCap { get; set; }
@@ -351,14 +328,10 @@ internal sealed class ModifierPowerDefinition
     public float? ReapingDamageCap { get; set; }
     public float? ReapingScalePerKill { get; set; }
     public float? ReapingScaleCap { get; set; }
-    public float? Blink { get; set; }
     public float? BlinkCooldown { get; set; }
     public float? BlinkMaxRange { get; set; }
     public string? BlinkStartEffect { get; set; }
-    public float? Omen { get; set; }
-    public float? Knockback { get; set; }
     public float? KnockbackCooldown { get; set; }
-    public float? Blamer { get; set; }
     public float? BlamerMaxKarmaGain { get; set; }
     public float? BlamerFleeHealthRatio { get; set; }
 }

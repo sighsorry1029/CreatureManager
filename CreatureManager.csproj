@@ -137,10 +137,12 @@
         <Compile Include="CreatureDomainManager.cs"/>
         <Compile Include="CreatureFactionManager.cs"/>
         <Compile Include="CreatureHarmonyPatches.cs"/>
+        <Compile Include="CreatureAppearanceRuntime.cs"/>
         <Compile Include="CreatureKarmaManager.cs"/>
         <Compile Include="CreatureLevelManager.cs"/>
         <Compile Include="CreatureLocalization.cs"/>
         <Compile Include="CreatureModifierManager.cs"/>
+        <Compile Include="ModifierIconSource.cs"/>
         <Compile Include="CreaturePrefabBaseline.cs"/>
         <Compile Include="CreaturePrefabRegistry.cs"/>
         <Compile Include="CreatureReferenceSections.cs"/>

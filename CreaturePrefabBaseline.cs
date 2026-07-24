@@ -147,6 +147,14 @@ internal static class CreaturePrefabBaseline
         }
     }
 
+    internal static bool HasAppliedGroups(GameObject prefab)
+    {
+        return prefab != null &&
+               Entries.TryGetValue(prefab.GetInstanceID(), out Entry entry) &&
+               ReferenceEquals(entry.Prefab, prefab) &&
+               entry.AppliedGroups != CreaturePrefabBaselineGroup.None;
+    }
+
     internal static void Capture(GameObject prefab, CreaturePrefabBaselineGroup groups)
     {
         if (prefab == null || groups == CreaturePrefabBaselineGroup.None)

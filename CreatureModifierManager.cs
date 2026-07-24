@@ -204,6 +204,7 @@ internal static class CreatureModifierManager
     private const float KnockbackDefaultCooldown = 5f;
     private const float BlamerDefaultKarmaPerSecond = 1f;
     private const float BlamerTickInterval = 1f;
+    private const float BlamerSaturatedRetryInterval = 5f;
     private const float BlamerDefaultMaxKarmaGain = 60f;
     private const float BlamerDefaultFleeHealthRatio = 0.75f;
     private const float BlamerKarmaRequestTimeout = 5f;
@@ -212,10 +213,23 @@ internal static class CreatureModifierManager
     private const float BlamerRejectionLogInterval = 10f;
     private const float BlamerGlobalRejectionLogInterval = 2f;
     private const float ReflectionServerMinimumRequestInterval = 0.05f;
+    private const float ReflectionHealthSyncTimeout = 2f;
+    private const float ReflectionDamageAuthorizationLifetime = 2f;
+    private const float ReflectionDamageAuthorizationTolerance = 0.1f;
+    private const int MaximumPendingReflectionRequests = 512;
+    private const int MaximumPendingReflectionRequestsPerPeer = 64;
     private const float VortexEffectServerMinimumRequestInterval = 0.075f;
+    private const float KnockbackNetworkMinimumRequestInterval = 0.05f;
     private const float ModifierRequestValidationRange = 128f;
     private const float ReapingDeathSyncTimeout = 2f;
     private const float ReapingDeathPositionTolerance = 8f;
+    private const int MaximumPendingReapingDeaths = 512;
+    private const int MaximumPendingReapingDeathsPerPeer = 64;
+    private const int MaximumReapingRequestsPerPeerWindow = 128;
+    private const double ReapingPeerRequestWindowSeconds = 1d;
+    private const int MaximumAuthorizedReapingDeaths = 4096;
+    private const int MaximumQueuedReapingAuthorizations = 8192;
+    private const int MaximumReapingAuthorizationPruneChecksPerTick = 64;
     private const byte VortexPreResolvedFlag = 0x80;
     private const byte VortexProcFlag = 0x40;
     private const byte VortexOriginalHitTypeMask = 0x3F;
@@ -289,41 +303,41 @@ internal static class CreatureModifierManager
     private static Sprite? FallbackStarSprite;
     private static readonly ModifierSpec[] ModifierSpecs =
     {
-        new(ModifierGroup.Offense, "enraged", "Enraged", ModifierMask.Enraged, EnragedBonusKey, EnragedDefaultPower, GetEnragedSprite, value => value.Enraged, (value, chance) => value.Enraged = chance, value => value.Enraged, (value, power) => value.Enraged = power, power => $"Increases outgoing damage by {FormatPercent(power)}."),
-        new(ModifierGroup.Offense, "fire", "Fire", ModifierMask.Fire, FirePowerKey, FireDefaultPower, GetFireSprite, value => value.Fire, (value, chance) => value.Fire = chance, value => value.Fire, (value, power) => value.Fire = power, power => $"Adds fire damage equal to {FormatPercent(power)} of the original hit damage."),
-        new(ModifierGroup.Offense, "frost", "Frost", ModifierMask.Frost, FrostPowerKey, FrostDefaultPower, GetFrostSprite, value => value.Frost, (value, chance) => value.Frost = chance, value => value.Frost, (value, power) => value.Frost = power, power => $"Adds frost damage equal to {FormatPercent(power)} of the original hit damage."),
-        new(ModifierGroup.Offense, "lightning", "Lightning", ModifierMask.Lightning, LightningPowerKey, LightningDefaultPower, GetLightningSprite, value => value.Lightning, (value, chance) => value.Lightning = chance, value => value.Lightning, (value, power) => value.Lightning = power, power => $"Adds lightning damage equal to {FormatPercent(power)} of the original hit damage."),
-        new(ModifierGroup.Offense, "spirit", "Spirit", ModifierMask.Spirit, SpiritPowerKey, ElementalDefaultPower, GetSpiritSprite, value => value.Spirit, (value, chance) => value.Spirit = chance, value => value.Spirit, (value, power) => value.Spirit = power, power => $"Adds spirit damage equal to {FormatPercent(power)} of the original hit damage. Against players, a damaging hit adds that amount to vanilla Spirit damage-over-time; its ticks bypass resistance and armor."),
-        new(ModifierGroup.Offense, "armorPiercing", "Armor Piercing", ModifierMask.ArmorPiercing, ArmorPiercingPowerKey, ArmorPiercingDefaultPower, GetArmorPiercingSprite, value => value.ArmorPiercing, (value, chance) => value.ArmorPiercing = chance, value => value.ArmorPiercing, (value, power) => value.ArmorPiercing = power, power => $"Against players, ignores {FormatPercent(power)} of body armor for that hit."),
-        new(ModifierGroup.Offense, "staggering", "Staggering", ModifierMask.Staggering, StaggeringPowerKey, StaggeringDefaultPower, GetStaggeringSprite, value => value.Staggering, (value, chance) => value.Staggering = chance, value => value.Staggering, (value, power) => value.Staggering = power, power => $"Increases outgoing normal-hit and block-stagger buildup by {FormatPercent(power)}."),
-        new(ModifierGroup.Offense, "undodgeable", "Undodgeable", ModifierMask.Undodgeable, UndodgeableDamageReductionKey, UndodgeableDefaultDamageReduction, GetUndodgeableSprite, value => value.Undodgeable, (value, chance) => value.Undodgeable = chance, value => value.Undodgeable, (value, power) => value.Undodgeable = power, power => $"Attacks against players ignore dodge invulnerability but deal {FormatPercent(power)} less damage. Blocking and parrying remain available.", ClampUndodgeableDamageReduction),
+        new(ModifierGroup.Offense, "enraged", "Enraged", ModifierMask.Enraged, EnragedBonusKey, EnragedDefaultPower, GetEnragedSprite, power => $"Increases outgoing damage by {FormatPercent(power)}."),
+        new(ModifierGroup.Offense, "fire", "Fire", ModifierMask.Fire, FirePowerKey, FireDefaultPower, GetFireSprite, power => $"Adds fire damage equal to {FormatPercent(power)} of the original hit damage."),
+        new(ModifierGroup.Offense, "frost", "Frost", ModifierMask.Frost, FrostPowerKey, FrostDefaultPower, GetFrostSprite, power => $"Adds frost damage equal to {FormatPercent(power)} of the original hit damage."),
+        new(ModifierGroup.Offense, "lightning", "Lightning", ModifierMask.Lightning, LightningPowerKey, LightningDefaultPower, GetLightningSprite, power => $"Adds lightning damage equal to {FormatPercent(power)} of the original hit damage."),
+        new(ModifierGroup.Offense, "spirit", "Spirit", ModifierMask.Spirit, SpiritPowerKey, ElementalDefaultPower, GetSpiritSprite, power => $"Adds spirit damage equal to {FormatPercent(power)} of the original hit damage. Against players, a damaging hit adds that amount to vanilla Spirit damage-over-time; its ticks bypass resistance and armor."),
+        new(ModifierGroup.Offense, "armorPiercing", "Armor Piercing", ModifierMask.ArmorPiercing, ArmorPiercingPowerKey, ArmorPiercingDefaultPower, GetArmorPiercingSprite, power => $"Against players, ignores {FormatPercent(power)} of body armor for that hit."),
+        new(ModifierGroup.Offense, "staggering", "Staggering", ModifierMask.Staggering, StaggeringPowerKey, StaggeringDefaultPower, GetStaggeringSprite, power => $"Increases outgoing normal-hit and block-stagger buildup by {FormatPercent(power)}."),
+        new(ModifierGroup.Offense, "undodgeable", "Undodgeable", ModifierMask.Undodgeable, UndodgeableDamageReductionKey, UndodgeableDefaultDamageReduction, GetUndodgeableSprite, power => $"Attacks against players ignore dodge invulnerability but deal {FormatPercent(power)} less damage. Blocking and parrying remain available.", ClampUndodgeableDamageReduction),
 
-        new(ModifierGroup.Defense, "armored", "Armored", ModifierMask.Armored, ArmoredReductionKey, ArmoredDefaultPower, GetArmoredSprite, value => value.Armored, (value, chance) => value.Armored = chance, value => value.Armored, (value, power) => value.Armored = power, power => $"Reduces incoming damage by {FormatPercent(power)}."),
-        new(ModifierGroup.Defense, "deathward", "Deathward", ModifierMask.Deathward, DeathwardHealthKey, DeathwardDefaultPower, GetDeathwardSprite, value => value.Deathward, (value, chance) => value.Deathward = chance, value => value.Deathward, (value, power) => value.Deathward = power, power => DescribeDeathward(power, DeathwardDefaultCooldown, DeathwardDefaultMaxActivations), ClampDeathwardHealth),
-        new(ModifierGroup.Defense, "regenerating", "Regenerating", ModifierMask.Regenerating, RegeneratingPowerKey, RegeneratingDefaultPower, GetRegeneratingSprite, value => value.Regenerating, (value, chance) => value.Regenerating = chance, value => value.Regenerating, (value, power) => value.Regenerating = power, power => $"Heals {FormatPercent(power)} of max health every second."),
-        new(ModifierGroup.Defense, "reflection", "Reflection", ModifierMask.Reflection, ReflectionPowerKey, ReflectionDefaultPower, GetReflectionSprite, value => value.Reflection, (value, chance) => value.Reflection = chance, value => value.Reflection, (value, power) => value.Reflection = power, power => DescribeReflection(power, ReflectionDefaultProcChance), procChanceKey: ReflectionChanceKey),
-        new(ModifierGroup.Defense, "vortex", "Vortex", ModifierMask.Vortex, VortexPowerKey, VortexDefaultPower, GetVortexSprite, value => value.Vortex, (value, chance) => value.Vortex = chance, value => value.Vortex, (value, power) => value.Vortex = power, power => $"On projectile hits, {FormatPercent(power)} proc chance to ignore all damage, push, stagger, and status effects."),
-        new(ModifierGroup.Defense, "adaptive", "Adaptive", ModifierMask.Adaptive, AdaptivePowerKey, AdaptiveDefaultPower, GetAdaptiveSprite, value => value.Adaptive, (value, chance) => value.Adaptive = chance, value => value.Adaptive, (value, power) => value.Adaptive = power, power => $"Remembers one hit's dominant damage type for {FormatSeconds(AdaptiveDuration)} without changing it. Matching damage is reduced by {FormatPercent(power)} until the memory expires."),
-        new(ModifierGroup.Defense, "unflinching", "Unflinching", ModifierMask.Unflinching, UnflinchingPowerKey, UnflinchingDefaultPower, GetUnflinchingSprite, value => value.Unflinching, (value, chance) => value.Unflinching = chance, value => value.Unflinching, (value, power) => value.Unflinching = power, _ => "Cannot be staggered by normal hits or perfect parries, preventing the vanilla double-damage stagger window."),
-        new(ModifierGroup.Defense, "chameleon", "Chameleon", ModifierMask.Chameleon, ChameleonIntervalKey, ChameleonDefaultInterval, GetChameleonSprite, value => value.Chameleon, (value, chance) => value.Chameleon = chance, value => value.Chameleon, (value, interval) => value.Chameleon = interval, interval => DescribeChameleon(interval), ResolveChameleonInterval),
+        new(ModifierGroup.Defense, "armored", "Armored", ModifierMask.Armored, ArmoredReductionKey, ArmoredDefaultPower, GetArmoredSprite, power => $"Reduces incoming damage by {FormatPercent(power)}."),
+        new(ModifierGroup.Defense, "deathward", "Deathward", ModifierMask.Deathward, DeathwardHealthKey, DeathwardDefaultPower, GetDeathwardSprite, power => DescribeDeathward(power, DeathwardDefaultCooldown, DeathwardDefaultMaxActivations), ClampDeathwardHealth),
+        new(ModifierGroup.Defense, "regenerating", "Regenerating", ModifierMask.Regenerating, RegeneratingPowerKey, RegeneratingDefaultPower, GetRegeneratingSprite, power => $"Heals {FormatPercent(power)} of max health every second."),
+        new(ModifierGroup.Defense, "reflection", "Reflection", ModifierMask.Reflection, ReflectionPowerKey, ReflectionDefaultPower, GetReflectionSprite, power => DescribeReflection(power, ReflectionDefaultProcChance), procChanceKey: ReflectionChanceKey),
+        new(ModifierGroup.Defense, "vortex", "Vortex", ModifierMask.Vortex, VortexPowerKey, VortexDefaultPower, GetVortexSprite, power => $"On projectile hits, {FormatPercent(power)} proc chance to ignore all damage, push, stagger, and status effects."),
+        new(ModifierGroup.Defense, "adaptive", "Adaptive", ModifierMask.Adaptive, AdaptivePowerKey, AdaptiveDefaultPower, GetAdaptiveSprite, power => $"Remembers one hit's dominant damage type for {FormatSeconds(AdaptiveDuration)} without changing it. Matching damage is reduced by {FormatPercent(power)} until the memory expires."),
+        new(ModifierGroup.Defense, "unflinching", "Unflinching", ModifierMask.Unflinching, UnflinchingPowerKey, UnflinchingDefaultPower, GetUnflinchingSprite, _ => "Cannot be staggered by normal hits or perfect parries, preventing the vanilla double-damage stagger window."),
+        new(ModifierGroup.Defense, "chameleon", "Chameleon", ModifierMask.Chameleon, ChameleonIntervalKey, ChameleonDefaultInterval, GetChameleonSprite, interval => DescribeChameleon(interval), ResolveChameleonInterval),
 
-        new(ModifierGroup.Affliction, "exposed", "Exposed", ModifierMask.Exposed, ExposedPowerKey, ExposedDefaultPower, GetExposedSprite, value => value.Exposed, (value, chance) => value.Exposed = chance, value => value.Exposed, (value, power) => value.Exposed = power, power => DescribePlayerAffliction("exposed", "make that player take", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration, "more damage"), procChanceKey: ExposedChanceKey),
-        new(ModifierGroup.Affliction, "weakened", "Weakened", ModifierMask.Weakened, WeakenedPowerKey, WeakenedDefaultPower, GetWeakenedSprite, value => value.Weakened, (value, chance) => value.Weakened = chance, value => value.Weakened, (value, power) => value.Weakened = power, power => DescribePlayerAffliction("weakened", "make that player deal", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration, "less damage"), procChanceKey: WeakenedChanceKey),
-        new(ModifierGroup.Affliction, "withered", "Withered", ModifierMask.Withered, WitheredPowerKey, WitheredDefaultPower, GetWitheredSprite, value => value.Withered, (value, chance) => value.Withered = chance, value => value.Withered, (value, power) => value.Withered = power, power => DescribePlayerAffliction("withered", "reduce that player's healing received by", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration), procChanceKey: WitheredChanceKey),
-        new(ModifierGroup.Affliction, "crippling", "Crippling", ModifierMask.Crippling, CripplingPowerKey, CripplingDefaultPower, GetCripplingSprite, value => value.Crippling, (value, chance) => value.Crippling = chance, value => value.Crippling, (value, power) => value.Crippling = power, power => DescribeCrippling(power, CripplingDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: CripplingChanceKey),
-        new(ModifierGroup.Affliction, "disruptive", "Disruptive", ModifierMask.Disruptive, DisruptivePowerKey, DisruptiveDefaultPower, GetDisruptiveSprite, value => value.Disruptive, (value, chance) => value.Disruptive = chance, value => value.Disruptive, (value, power) => value.Disruptive = power, power => DescribeDisruptive(power, DisruptiveDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: DisruptiveChanceKey),
-        new(ModifierGroup.Affliction, "adrenalineDrain", "Adrenaline Drain", ModifierMask.AdrenalineDrain, AdrenalineDrainPowerKey, AdrenalineDrainDefaultPower, GetAdrenalineDrainSprite, value => value.AdrenalineDrain, (value, chance) => value.AdrenalineDrain = chance, value => value.AdrenalineDrain, (value, power) => value.AdrenalineDrain = power, power => DescribeAdrenalineDrain(power, AdrenalineDrainDefaultGainReduction, PlayerDebuffDefaultProcChance, AdrenalineDrainDefaultDuration), procChanceKey: AdrenalineDrainChanceKey),
-        new(ModifierGroup.Affliction, "corrosive", "Corrosive", ModifierMask.Corrosive, CorrosivePowerKey, CorrosiveDefaultPower, GetCorrosiveSprite, value => value.Corrosive, (value, chance) => value.Corrosive = chance, value => value.Corrosive, (value, power) => value.Corrosive = power, power => DescribeCorrosive(power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration), procChanceKey: CorrosiveChanceKey),
-        new(ModifierGroup.Affliction, "toxicDeath", "Toxic Death", ModifierMask.ToxicDeath, ToxicDeathPowerKey, ToxicDeathDefaultPower, GetToxicDeathSprite, value => value.ToxicDeath, (value, chance) => value.ToxicDeath = chance, value => value.ToxicDeath, (value, power) => value.ToxicDeath = power, power => DescribeToxicDeath(power, ToxicDeathDefaultRadius)),
+        new(ModifierGroup.Affliction, "exposed", "Exposed", ModifierMask.Exposed, ExposedPowerKey, ExposedDefaultPower, GetExposedSprite, power => DescribePlayerAffliction("exposed", "make that player take", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration, "more damage"), procChanceKey: ExposedChanceKey),
+        new(ModifierGroup.Affliction, "weakened", "Weakened", ModifierMask.Weakened, WeakenedPowerKey, WeakenedDefaultPower, GetWeakenedSprite, power => DescribePlayerAffliction("weakened", "make that player deal", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration, "less damage"), procChanceKey: WeakenedChanceKey),
+        new(ModifierGroup.Affliction, "withered", "Withered", ModifierMask.Withered, WitheredPowerKey, WitheredDefaultPower, GetWitheredSprite, power => DescribePlayerAffliction("withered", "reduce that player's healing received by", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration), procChanceKey: WitheredChanceKey),
+        new(ModifierGroup.Affliction, "crippling", "Crippling", ModifierMask.Crippling, CripplingPowerKey, CripplingDefaultPower, GetCripplingSprite, power => DescribeCrippling(power, CripplingDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: CripplingChanceKey),
+        new(ModifierGroup.Affliction, "disruptive", "Disruptive", ModifierMask.Disruptive, DisruptivePowerKey, DisruptiveDefaultPower, GetDisruptiveSprite, power => DescribeDisruptive(power, DisruptiveDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: DisruptiveChanceKey),
+        new(ModifierGroup.Affliction, "adrenalineDrain", "Adrenaline Drain", ModifierMask.AdrenalineDrain, AdrenalineDrainPowerKey, AdrenalineDrainDefaultPower, GetAdrenalineDrainSprite, power => DescribeAdrenalineDrain(power, AdrenalineDrainDefaultGainReduction, PlayerDebuffDefaultProcChance, AdrenalineDrainDefaultDuration), procChanceKey: AdrenalineDrainChanceKey),
+        new(ModifierGroup.Affliction, "corrosive", "Corrosive", ModifierMask.Corrosive, CorrosivePowerKey, CorrosiveDefaultPower, GetCorrosiveSprite, power => DescribeCorrosive(power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration), procChanceKey: CorrosiveChanceKey),
+        new(ModifierGroup.Affliction, "toxicDeath", "Toxic Death", ModifierMask.ToxicDeath, ToxicDeathPowerKey, ToxicDeathDefaultPower, GetToxicDeathSprite, power => DescribeToxicDeath(power, ToxicDeathDefaultRadius)),
 
-        new(ModifierGroup.Special, "swift", "Swift", ModifierMask.Swift, SwiftPowerKey, SwiftDefaultPower, GetSwiftSprite, value => value.Swift, (value, chance) => value.Swift = chance, value => value.Swift, (value, power) => value.Swift = power, power => $"Increases movement speed, acceleration, and turning speed by {FormatPercent(power)}."),
-        new(ModifierGroup.Special, "attackSpeed", "Attack Speed", ModifierMask.AttackSpeed, AttackSpeedPowerKey, AttackSpeedDefaultPower, GetAttackSpeedSprite, value => value.AttackSpeed, (value, chance) => value.AttackSpeed = chance, value => value.AttackSpeed, (value, power) => value.AttackSpeed = power, power => $"Increases attack animation speed by {FormatPercent(power)} and shortens both weapon and creature AI attack intervals to {FormatPercent(1f / Mathf.Max(1f, 1f + power))} of normal."),
-        new(ModifierGroup.Special, "vampiric", "Vampiric", ModifierMask.Vampiric, VampiricPowerKey, VampiricDefaultPower, GetVampiricSprite, value => value.Vampiric, (value, chance) => value.Vampiric = chance, value => value.Vampiric, (value, power) => value.Vampiric = power, power => $"Heals the creature for {FormatPercent(power)} of health removed by direct hits. Delayed damage-over-time is excluded."),
-        new(ModifierGroup.Special, "reaping", "Reaping", ModifierMask.Reaping, ReapingPowerKey, ReapingDefaultPower, GetReapingSprite, value => value.Reaping, (value, chance) => value.Reaping = chance, value => value.Reaping, (value, power) => value.Reaping = power, power => DescribeReaping(power, ReapingDefaultMaxHealthPerKill, ReapingDefaultDamagePerKill, ReapingDefaultScalePerKill)),
-        new(ModifierGroup.Special, "blink", "Blink", ModifierMask.Blink, BlinkPowerKey, BlinkFixedProcChance, GetBlinkSprite, value => value.Blink, (value, chance) => value.Blink = chance, value => value.Blink, (value, power) => value.Blink = power, _ => DescribeBlink(BlinkDefaultCooldown, BlinkDefaultMaxRange)),
-        new(ModifierGroup.Special, "omen", "Omen", ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, GetOmenSprite, value => value.Omen, (value, chance) => value.Omen = chance, value => value.Omen, (value, power) => value.Omen = power, power => $"When killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player, has a {FormatPercent(power)} chance to force an Enforcer summon check. Cooldown blocking follows the server setting."),
-        new(ModifierGroup.Special, "juggernaut", "Juggernaut", ModifierMask.Knockback, KnockbackPowerKey, KnockbackDefaultPower, GetKnockbackSprite, value => value.Knockback, (value, chance) => value.Knockback = chance, value => value.Knockback, (value, power) => value.Knockback = power, power => DescribeKnockback(power, KnockbackDefaultCooldown), ClampKnockbackPower),
-        new(ModifierGroup.Special, "blamer", "Blamer", ModifierMask.Blamer, BlamerKarmaPerSecondKey, BlamerDefaultKarmaPerSecond, GetBlamerSprite, value => value.Blamer, (value, chance) => value.Blamer = chance, value => value.Blamer, (value, power) => value.Blamer = power, power => DescribeBlamer(power, BlamerDefaultMaxKarmaGain, BlamerDefaultFleeHealthRatio), ResolveBlamerKarmaPerSecond)
+        new(ModifierGroup.Special, "swift", "Swift", ModifierMask.Swift, SwiftPowerKey, SwiftDefaultPower, GetSwiftSprite, power => $"Increases movement speed, acceleration, and turning speed by {FormatPercent(power)}."),
+        new(ModifierGroup.Special, "attackSpeed", "Attack Speed", ModifierMask.AttackSpeed, AttackSpeedPowerKey, AttackSpeedDefaultPower, GetAttackSpeedSprite, power => $"Increases attack animation speed by {FormatPercent(power)} and shortens both weapon and creature AI attack intervals to {FormatPercent(1f / Mathf.Max(1f, 1f + power))} of normal."),
+        new(ModifierGroup.Special, "vampiric", "Vampiric", ModifierMask.Vampiric, VampiricPowerKey, VampiricDefaultPower, GetVampiricSprite, power => $"Heals the creature for {FormatPercent(power)} of health removed by direct hits. Delayed damage-over-time is excluded."),
+        new(ModifierGroup.Special, "reaping", "Reaping", ModifierMask.Reaping, ReapingPowerKey, ReapingDefaultPower, GetReapingSprite, power => DescribeReaping(power, ReapingDefaultMaxHealthPerKill, ReapingDefaultDamagePerKill, ReapingDefaultScalePerKill)),
+        new(ModifierGroup.Special, "blink", "Blink", ModifierMask.Blink, BlinkPowerKey, BlinkFixedProcChance, GetBlinkSprite, _ => DescribeBlink(BlinkDefaultCooldown, BlinkDefaultMaxRange)),
+        new(ModifierGroup.Special, "omen", "Omen", ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, GetOmenSprite, power => $"When killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player, has a {FormatPercent(power)} chance to force an Enforcer summon check. Cooldown blocking follows the server setting."),
+        new(ModifierGroup.Special, "juggernaut", "Juggernaut", ModifierMask.Knockback, KnockbackPowerKey, KnockbackDefaultPower, GetKnockbackSprite, power => DescribeKnockback(power, KnockbackDefaultCooldown), ClampKnockbackPower),
+        new(ModifierGroup.Special, "blamer", "Blamer", ModifierMask.Blamer, BlamerKarmaPerSecondKey, BlamerDefaultKarmaPerSecond, GetBlamerSprite, power => DescribeBlamer(power, BlamerDefaultMaxKarmaGain, BlamerDefaultFleeHealthRatio), ResolveBlamerKarmaPerSecond)
     };
     private static readonly ModifierGroup[] ModifierGroupOrder =
     {
@@ -332,8 +346,7 @@ internal static class CreatureModifierManager
         ModifierGroup.Affliction,
         ModifierGroup.Special
     };
-    private static readonly Dictionary<string, ModifierSpec> ModifierSpecsByKey = ModifierSpecs.ToDictionary(spec => spec.Key, StringComparer.OrdinalIgnoreCase);
-    private static readonly string[] ModifierKeys = ModifierSpecs.Select(spec => spec.Key).ToArray();
+    private static readonly Dictionary<string, ModifierSpec> ModifierSpecsByKey = BuildModifierSpecsByKey();
     private static readonly int ExposedStatusHash = ExposedStatusName.GetStableHashCode();
     private static readonly int WeakenedStatusHash = WeakenedStatusName.GetStableHashCode();
     private static readonly int WitheredStatusHash = WitheredStatusName.GetStableHashCode();
@@ -358,16 +371,27 @@ internal static class CreatureModifierManager
     private static readonly Dictionary<HitData, bool> PendingVortexProjectileDecisions = new();
     private static readonly Dictionary<HitData, KnockbackHitContext> PendingKnockbackHits = new();
     private static readonly Dictionary<int, HitData> PendingKnockbackReservations = new();
-    private static readonly Dictionary<int, float> LocalKnockbackReadyTimes = new();
+    private static readonly Dictionary<int, double> LocalKnockbackReadyTimes = new();
     private static readonly Dictionary<int, PendingBlamerKarmaRequest> PendingBlamerKarmaRequests = new();
     private static readonly Dictionary<ZDOID, ServerBlamerKarmaState> ServerBlamerKarmaStates = new();
     private static readonly Dictionary<ZDOID, float> NextBlamerRejectionLogTimes = new();
     private static readonly Dictionary<ZDOID, ServerReflectionRequestState> ServerReflectionRequestStates = new();
-    private static readonly Dictionary<ZDOID, float> ServerVortexEffectNextAllowedTimes = new();
-    private static readonly Dictionary<ZDOID, float> ServerKnockbackNextAllowedTimes = new();
-    private static readonly HashSet<ReapingRequestKey> ServerPendingReapingRequests = new();
+    private static readonly Dictionary<ReflectionPendingRequestKey, long> ServerPendingReflectionRequests = new();
+    private static readonly Dictionary<long, int> ServerPendingReflectionRequestCounts = new();
+    private static readonly Dictionary<ReflectionRequestKey, double> ServerReflectionNextAllowedTimes = new();
+    private static readonly Dictionary<ZDOID, double> ServerVortexEffectNextAllowedTimes = new();
+    private static readonly Dictionary<long, double> ServerVortexPeerNextAllowedTimes = new();
+    private static readonly Dictionary<ZDOID, double> ServerKnockbackNextAllowedTimes = new();
+    private static readonly Dictionary<ReapingRequestKey, long> ServerPendingReapingRequests = new();
+    private static readonly Dictionary<long, int> ServerPendingReapingRequestCounts = new();
+    private static readonly Dictionary<long, ReapingPeerRateState> ServerReapingPeerRateStates = new();
     private static readonly HashSet<ZDOID> ServerPendingReapingRespawns = new();
     private static readonly Dictionary<ZDOID, HashSet<ZDOID>> ServerAuthorizedReapingDeaths = new();
+    private static readonly Queue<ReapingRequestKey> ServerAuthorizedReapingDeathPruneQueue = new();
+    private static readonly HashSet<ReapingRequestKey> ServerQueuedReapingDeathAuthorizations = new();
+    private static readonly List<ZDOID> ExpiredServerRequestCharacterIds = new();
+    private static readonly List<long> ExpiredServerRequestPeerIds = new();
+    private static int ServerAuthorizedReapingDeathCount;
     private static readonly Stack<BlinkAttackAiOverrideState> BlinkAttackAiOverridePool = new();
     private static readonly FieldInfo? HitRangedField = typeof(HitData).GetField("m_ranged", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
     private static readonly EffectList SuppressedProjectileHitEffects = new();
@@ -419,6 +443,8 @@ internal static class CreatureModifierManager
     private static long NextBlamerKarmaRequestId;
     private static float NextBlamerGlobalRejectionLogTime;
     private static long NextReflectionRequestId = DateTime.UtcNow.Ticks;
+    private static uint ReflectionRequestEpoch;
+    private static uint ReapingDeathEpoch;
     [ThreadStatic]
     private static float BlockStaggerMultiplier;
     [ThreadStatic]
@@ -622,6 +648,12 @@ internal static class CreatureModifierManager
         internal float OriginalRunSpeed;
         internal float OriginalJumpForce;
         internal float OriginalJumpForceForward;
+        internal float AppliedCrouchSpeed;
+        internal float AppliedWalkSpeed;
+        internal float AppliedSpeed;
+        internal float AppliedRunSpeed;
+        internal float AppliedJumpForce;
+        internal float AppliedJumpForceForward;
         internal float LastStamina = -1f;
         internal float LastEitr = -1f;
         internal readonly Dictionary<ItemDrop.ItemData, float> DurabilitySnapshots = new();
@@ -640,6 +672,7 @@ internal static class CreatureModifierManager
     {
         Failed,
         Added,
+        Saturated,
         Pending
     }
 
@@ -657,15 +690,87 @@ internal static class CreatureModifierManager
         internal long RequestOwner;
         internal long LastRequestId;
         internal bool HasCachedResponse;
-        internal bool LastAccepted;
+        internal BlamerKarmaAddResult LastResult;
         internal float LastResponseAccumulated;
     }
 
     private sealed class ServerReflectionRequestState
     {
+        internal bool RequestOwnerInitialized;
         internal long RequestOwner;
         internal long LastRequestId;
-        internal float NextAllowedTime;
+        internal float LastObservedHealth = float.NaN;
+        internal float UnclaimedDamage;
+        internal float UnclaimedDamageUntil;
+    }
+
+    private sealed class ReapingPeerRateState
+    {
+        internal double WindowStart;
+        internal int RequestCount;
+    }
+
+    private readonly struct ReflectionPendingRequestKey : IEquatable<ReflectionPendingRequestKey>
+    {
+        internal ReflectionPendingRequestKey(ZDOID source, ZDOID target, long requestId)
+        {
+            Source = source;
+            Target = target;
+            RequestId = requestId;
+        }
+
+        internal ZDOID Source { get; }
+        internal ZDOID Target { get; }
+        internal long RequestId { get; }
+
+        public bool Equals(ReflectionPendingRequestKey other)
+        {
+            return Source.Equals(other.Source) && Target.Equals(other.Target) && RequestId == other.RequestId;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is ReflectionPendingRequestKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = (Source.GetHashCode() * 397) ^ Target.GetHashCode();
+                return (hash * 397) ^ RequestId.GetHashCode();
+            }
+        }
+    }
+
+    private readonly struct ReflectionRequestKey : IEquatable<ReflectionRequestKey>
+    {
+        internal ReflectionRequestKey(ZDOID source, ZDOID target)
+        {
+            Source = source;
+            Target = target;
+        }
+
+        internal ZDOID Source { get; }
+        internal ZDOID Target { get; }
+
+        public bool Equals(ReflectionRequestKey other)
+        {
+            return Source.Equals(other.Source) && Target.Equals(other.Target);
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is ReflectionRequestKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (Source.GetHashCode() * 397) ^ Target.GetHashCode();
+            }
+        }
     }
 
     private readonly struct ReapingRequestKey : IEquatable<ReapingRequestKey>
@@ -1103,14 +1208,12 @@ internal static class CreatureModifierManager
             float vampiricPower,
             Character? reflectionAttacker,
             float reflectionPower,
-            Vector3 reflectionHitPoint,
             float healthBefore)
         {
             VampiricAttacker = vampiricAttacker;
             VampiricPower = vampiricPower;
             ReflectionAttacker = reflectionAttacker;
             ReflectionPower = reflectionPower;
-            ReflectionHitPoint = reflectionHitPoint;
             HealthBefore = healthBefore;
         }
 
@@ -1118,7 +1221,6 @@ internal static class CreatureModifierManager
         internal float VampiricPower { get; }
         internal Character? ReflectionAttacker { get; }
         internal float ReflectionPower { get; }
-        internal Vector3 ReflectionHitPoint { get; }
         internal float HealthBefore { get; }
         internal bool HasVampiric => VampiricAttacker != null && VampiricPower > 0f;
         internal bool HasReflection => ReflectionAttacker != null && ReflectionPower > 0f;
@@ -1158,18 +1260,16 @@ internal static class CreatureModifierManager
 
     private readonly struct ReflectionDamageContext
     {
-        internal ReflectionDamageContext(Character attacker, Character target, float power, Vector3 hitPoint)
+        internal ReflectionDamageContext(Character attacker, Character target, float power)
         {
             Attacker = attacker;
             Target = target;
             Power = power;
-            HitPoint = hitPoint;
         }
 
         internal Character Attacker { get; }
         internal Character Target { get; }
         internal float Power { get; }
-        internal Vector3 HitPoint { get; }
     }
 
     private readonly struct KnockbackHitContext
@@ -1216,10 +1316,6 @@ internal static class CreatureModifierManager
             string powerKey,
             float defaultPower,
             Func<Sprite> sprite,
-            Func<ModifierChanceDefinition, float?> getChance,
-            Action<ModifierChanceDefinition, float> setChance,
-            Func<ModifierPowerDefinition, float?> getPower,
-            Action<ModifierPowerDefinition, float> setPower,
             Func<float, string> description,
             Func<float?, float>? powerClamp = null,
             string? procChanceKey = null)
@@ -1231,10 +1327,6 @@ internal static class CreatureModifierManager
             PowerKey = powerKey;
             DefaultPower = defaultPower;
             Sprite = sprite;
-            GetChance = getChance;
-            SetChance = setChance;
-            GetPower = getPower;
-            SetPower = setPower;
             ProcChanceKey = procChanceKey;
             _powerClamp = powerClamp ?? (value => ClampPower(value, defaultPower));
             _description = description;
@@ -1247,15 +1339,31 @@ internal static class CreatureModifierManager
         internal string PowerKey { get; }
         internal float DefaultPower { get; }
         internal Func<Sprite> Sprite { get; }
-        internal Func<ModifierChanceDefinition, float?> GetChance { get; }
-        internal Action<ModifierChanceDefinition, float> SetChance { get; }
-        internal Func<ModifierPowerDefinition, float?> GetPower { get; }
-        internal Action<ModifierPowerDefinition, float> SetPower { get; }
         internal string? ProcChanceKey { get; }
 
         internal float ResolvePower(float? configuredPower)
         {
             return _powerClamp(configuredPower);
+        }
+
+        internal float? GetChance(ModifierChanceDefinition chances)
+        {
+            return chances.Get(Key);
+        }
+
+        internal void SetChance(ModifierChanceDefinition chances, float chance)
+        {
+            chances.Set(Key, chance);
+        }
+
+        internal float? GetPower(ModifierPowerDefinition powers)
+        {
+            return powers.Get(Key);
+        }
+
+        internal void SetPower(ModifierPowerDefinition powers, float power)
+        {
+            powers.Set(Key, power);
         }
 
         internal string Describe(float power)
@@ -1345,25 +1453,9 @@ internal static class CreatureModifierManager
         }
     }
 
-    private delegate bool IconShape(int x, int y, out bool isBorder);
-    private delegate IconTone IconToneShape(int x, int y);
-
-    private enum IconTone : byte
-    {
-        Clear,
-        Primary,
-        Secondary,
-        Accent
-    }
-
     internal static IReadOnlyList<string> GetKnownModifierKeys()
     {
-        return ModifierKeys;
-    }
-
-    internal static bool IsKnownModifier(string modifier)
-    {
-        return TryGetModifierSpec(modifier, out _);
+        return CreatureModifierCatalog.Keys;
     }
 
     internal static bool TryNormalizeForcedModifierKeys(
@@ -1649,6 +1741,101 @@ internal static class CreatureModifierManager
             ("power", FormatPercent(power)));
     }
 
+    private static Dictionary<string, ModifierSpec> BuildModifierSpecsByKey()
+    {
+        Dictionary<string, ModifierSpec> specsByKey = new(StringComparer.OrdinalIgnoreCase);
+        List<string> errors = new();
+        HashSet<ModifierMask> masks = new();
+        foreach (ModifierSpec spec in ModifierSpecs)
+        {
+            if (specsByKey.ContainsKey(spec.Key))
+            {
+                errors.Add($"duplicate runtime key '{spec.Key}'");
+                continue;
+            }
+
+            specsByKey.Add(spec.Key, spec);
+
+            long rawMask = (long)spec.Mask;
+            if (rawMask <= 0 || (rawMask & (rawMask - 1)) != 0)
+            {
+                errors.Add($"runtime spec '{spec.Key}' must use exactly one modifier mask bit");
+            }
+            else if (!masks.Add(spec.Mask))
+            {
+                errors.Add($"runtime spec '{spec.Key}' reuses modifier mask '{spec.Mask}'");
+            }
+        }
+
+        int modifierGroupCount = Enum.GetValues(typeof(ModifierGroup)).Length;
+        if (ModifierGroupOrder.Length != MaxActiveModifiers ||
+            modifierGroupCount != MaxActiveModifiers)
+        {
+            errors.Add(
+                $"HUD slot count {MaxActiveModifiers}, modifier group count {modifierGroupCount}, and group order count {ModifierGroupOrder.Length} must match");
+        }
+
+        HashSet<ModifierGroup> hudGroups = new();
+        for (int index = 0; index < ModifierGroupOrder.Length; index++)
+        {
+            ModifierGroup group = ModifierGroupOrder[index];
+            if (!hudGroups.Add(group))
+            {
+                errors.Add($"HUD group order contains duplicate '{group}'");
+            }
+
+            if ((int)group != index)
+            {
+                errors.Add($"HUD group '{group}' must occupy slot {index}, but its enum value is {(int)group}");
+            }
+        }
+
+        foreach (ModifierSpec spec in ModifierSpecs)
+        {
+            if (!hudGroups.Contains(spec.Group))
+            {
+                errors.Add($"runtime spec '{spec.Key}' uses HUD group '{spec.Group}' missing from group order");
+            }
+        }
+
+        HashSet<string> catalogKeys = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string key in CreatureModifierCatalog.Keys)
+        {
+            if (!catalogKeys.Add(key))
+            {
+                errors.Add($"duplicate catalog key '{key}'");
+            }
+        }
+
+        foreach (string key in CreatureModifierCatalog.Keys)
+        {
+            if (!specsByKey.TryGetValue(key, out ModifierSpec spec))
+            {
+                errors.Add($"missing runtime spec '{key}'");
+            }
+            else if (!string.Equals(spec.Key, key, StringComparison.Ordinal))
+            {
+                errors.Add($"runtime key '{spec.Key}' must use catalog spelling '{key}'");
+            }
+        }
+
+        foreach (string key in specsByKey.Keys)
+        {
+            if (!catalogKeys.Contains(key))
+            {
+                errors.Add($"unexpected runtime spec '{key}'");
+            }
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"CreatureManager modifier catalog invariant failure; the {CreatureModifierCatalog.Keys.Count} runtime specs, mask bits, and HUD groups must stay aligned: {string.Join(", ", errors)}.");
+        }
+
+        return specsByKey;
+    }
+
     private static bool TryGetModifierSpec(string modifier, out ModifierSpec spec)
     {
         if (ModifierSpecsByKey.TryGetValue(modifier.Trim(), out ModifierSpec found))
@@ -1913,6 +2100,7 @@ internal static class CreatureModifierManager
         character.m_nview.Register<Vector3>(
             VortexHitEffectRequestRpc,
             (sender, position) => RPC_VortexHitEffectRequest(character, sender, position));
+        InitializeServerReflectionObservation(character);
     }
 
     internal static void ForgetCharacter(Character character)
@@ -1940,11 +2128,17 @@ internal static class CreatureModifierManager
         ZDOID characterId = character.GetZDOID();
         if (characterId != ZDOID.None)
         {
-            ServerReflectionRequestStates.Remove(characterId);
+            RemoveServerReflectionState(characterId);
             ServerVortexEffectNextAllowedTimes.Remove(characterId);
             ServerKnockbackNextAllowedTimes.Remove(characterId);
-            ServerAuthorizedReapingDeaths.Remove(characterId);
-            ServerPendingReapingRequests.RemoveWhere(request => request.Reaper.Equals(characterId));
+            RemoveReapingAuthorizationsForReaper(characterId);
+            foreach (ReapingRequestKey request in ServerPendingReapingRequests.Keys
+                         .Where(request => request.Reaper.Equals(characterId))
+                         .ToArray())
+            {
+                ReleasePendingReapingRequest(request);
+            }
+
             ServerPendingReapingRespawns.Remove(characterId);
             ClearReapingDeathAuthorization(characterId);
         }
@@ -1963,6 +2157,12 @@ internal static class CreatureModifierManager
 
     internal static void ResetRuntimeState()
     {
+        unchecked
+        {
+            ReflectionRequestEpoch++;
+            ReapingDeathEpoch++;
+        }
+
         ActivePlayerDebuffs.Clear();
         ActivePlayerRuntimeDebuffs.Clear();
         PlayerControlDebuffWakeIds.Clear();
@@ -2004,11 +2204,22 @@ internal static class CreatureModifierManager
         ServerBlamerKarmaStates.Clear();
         NextBlamerRejectionLogTimes.Clear();
         ServerReflectionRequestStates.Clear();
+        ServerPendingReflectionRequests.Clear();
+        ServerPendingReflectionRequestCounts.Clear();
+        ServerReflectionNextAllowedTimes.Clear();
         ServerVortexEffectNextAllowedTimes.Clear();
+        ServerVortexPeerNextAllowedTimes.Clear();
         ServerKnockbackNextAllowedTimes.Clear();
         ServerPendingReapingRequests.Clear();
+        ServerPendingReapingRequestCounts.Clear();
+        ServerReapingPeerRateStates.Clear();
         ServerPendingReapingRespawns.Clear();
         ServerAuthorizedReapingDeaths.Clear();
+        ServerAuthorizedReapingDeathPruneQueue.Clear();
+        ServerQueuedReapingDeathAuthorizations.Clear();
+        ExpiredServerRequestCharacterIds.Clear();
+        ExpiredServerRequestPeerIds.Clear();
+        ServerAuthorizedReapingDeathCount = 0;
         NextBlamerKarmaRequestId = 0;
         NextBlamerGlobalRejectionLogTime = 0f;
         NextReflectionRequestId = DateTime.UtcNow.Ticks;
@@ -2048,6 +2259,147 @@ internal static class CreatureModifierManager
 
             ServerBlamerKarmaStates.Remove(characterId);
             NextBlamerRejectionLogTimes.Remove(characterId);
+        }
+
+        float now = GetNetworkTimeSeconds();
+        double preciseNow = GetNetworkTimeSecondsDouble();
+        foreach (KeyValuePair<ZDOID, ServerReflectionRequestState> entry in ServerReflectionRequestStates.ToArray())
+        {
+            ZDO zdo = ZDOMan.instance.GetZDO(entry.Key);
+            float health = zdo != null
+                ? zdo.GetFloat(ZDOVars.s_health, float.NaN)
+                : float.NaN;
+            if (zdo != null &&
+                !zdo.GetBool(ZDOVars.s_dead, false) &&
+                (float.IsNaN(health) || !float.IsInfinity(health) && health > 0f))
+            {
+                float fallbackHealth = TryFindCharacter(entry.Key, out Character source)
+                    ? source.GetHealth()
+                    : float.NaN;
+                ObserveServerReflectionHealth(zdo, entry.Value, now, fallbackHealth);
+                continue;
+            }
+
+            RemoveServerReflectionState(entry.Key);
+        }
+
+        foreach (ReflectionRequestKey request in ServerReflectionNextAllowedTimes
+                     .Where(entry => entry.Value <= preciseNow)
+                     .Select(entry => entry.Key)
+                     .ToArray())
+        {
+            ServerReflectionNextAllowedTimes.Remove(request);
+        }
+
+        PruneExpiredModifierRequestTimes(preciseNow);
+        PruneAuthorizedReapingDeaths();
+    }
+
+    private static void PruneExpiredModifierRequestTimes(double now)
+    {
+        ExpiredServerRequestCharacterIds.Clear();
+        foreach (KeyValuePair<ZDOID, double> entry in ServerVortexEffectNextAllowedTimes)
+        {
+            if (entry.Value <= now)
+            {
+                ExpiredServerRequestCharacterIds.Add(entry.Key);
+            }
+        }
+
+        foreach (ZDOID characterId in ExpiredServerRequestCharacterIds)
+        {
+            ServerVortexEffectNextAllowedTimes.Remove(characterId);
+        }
+
+        ExpiredServerRequestCharacterIds.Clear();
+        foreach (KeyValuePair<ZDOID, double> entry in ServerKnockbackNextAllowedTimes)
+        {
+            if (entry.Value <= now)
+            {
+                ExpiredServerRequestCharacterIds.Add(entry.Key);
+            }
+        }
+
+        foreach (ZDOID characterId in ExpiredServerRequestCharacterIds)
+        {
+            ServerKnockbackNextAllowedTimes.Remove(characterId);
+        }
+
+        ExpiredServerRequestCharacterIds.Clear();
+        ExpiredServerRequestPeerIds.Clear();
+        foreach (KeyValuePair<long, double> entry in ServerVortexPeerNextAllowedTimes)
+        {
+            if (entry.Value <= now)
+            {
+                ExpiredServerRequestPeerIds.Add(entry.Key);
+            }
+        }
+
+        foreach (long peerId in ExpiredServerRequestPeerIds)
+        {
+            ServerVortexPeerNextAllowedTimes.Remove(peerId);
+        }
+
+        ExpiredServerRequestPeerIds.Clear();
+        foreach (KeyValuePair<long, ReapingPeerRateState> entry in ServerReapingPeerRateStates)
+        {
+            if (now < entry.Value.WindowStart ||
+                now - entry.Value.WindowStart >= ReapingPeerRequestWindowSeconds)
+            {
+                ExpiredServerRequestPeerIds.Add(entry.Key);
+            }
+        }
+
+        foreach (long peerId in ExpiredServerRequestPeerIds)
+        {
+            ServerReapingPeerRateStates.Remove(peerId);
+        }
+
+        ExpiredServerRequestPeerIds.Clear();
+    }
+
+    private static void PruneAuthorizedReapingDeaths()
+    {
+        if (ZDOMan.instance == null || ServerAuthorizedReapingDeathPruneQueue.Count == 0)
+        {
+            return;
+        }
+
+        int checks = Math.Min(
+            MaximumReapingAuthorizationPruneChecksPerTick,
+            ServerAuthorizedReapingDeathPruneQueue.Count);
+        while (checks-- > 0)
+        {
+            ReapingRequestKey authorization = ServerAuthorizedReapingDeathPruneQueue.Dequeue();
+            ServerQueuedReapingDeathAuthorizations.Remove(authorization);
+            if (!ServerAuthorizedReapingDeaths.TryGetValue(
+                    authorization.Reaper,
+                    out HashSet<ZDOID> authorizedDeaths) ||
+                !authorizedDeaths.Contains(authorization.Dead))
+            {
+                continue;
+            }
+
+            if (ZDOMan.instance.GetZDO(authorization.Dead) == null)
+            {
+                if (authorizedDeaths.Remove(authorization.Dead))
+                {
+                    ServerAuthorizedReapingDeathCount =
+                        Math.Max(0, ServerAuthorizedReapingDeathCount - 1);
+                }
+
+                if (authorizedDeaths.Count == 0)
+                {
+                    ServerAuthorizedReapingDeaths.Remove(authorization.Reaper);
+                }
+
+                continue;
+            }
+
+            if (ServerQueuedReapingDeathAuthorizations.Add(authorization))
+            {
+                ServerAuthorizedReapingDeathPruneQueue.Enqueue(authorization);
+            }
         }
     }
 
@@ -2091,6 +2443,11 @@ internal static class CreatureModifierManager
 
         if (!CreatureLevelManager.ShouldRollModifiers(character))
         {
+            if (CreatureLevelManager.BlocksModifierRoll(character))
+            {
+                StoreInitialModifierState(character, zdo, ModifierMask.None, new ModifierPowerDefinition());
+            }
+
             return;
         }
 
@@ -3505,7 +3862,7 @@ internal static class CreatureModifierManager
             IsProjectileHit(hit) ||
             !IsHostileAttacker(target, attacker) ||
             !TryGetProcModifierState(target, ModifierMask.Reflection, ReflectionChanceKey, out ZDO zdo, out float procChance) ||
-            UnityEngine.Random.Range(0f, 100f) >= procChance)
+            procChance <= 0f)
         {
             return;
         }
@@ -3516,7 +3873,7 @@ internal static class CreatureModifierManager
             return;
         }
 
-        PendingReflectionDamage[hit] = new ReflectionDamageContext(attacker, target, power, hit.m_point);
+        PendingReflectionDamage[hit] = new ReflectionDamageContext(attacker, target, power);
     }
 
     private static bool IsHostileAttacker(Character target, Character attacker)
@@ -3640,13 +3997,20 @@ internal static class CreatureModifierManager
             return;
         }
 
-        float now = Time.unscaledTime;
-        if (ServerVortexEffectNextAllowedTimes.TryGetValue(targetId, out float nextAllowedTime) &&
+        double now = GetNetworkTimeSecondsDouble();
+        if (ServerVortexPeerNextAllowedTimes.TryGetValue(sender, out double peerNextAllowedTime) &&
+            now < peerNextAllowedTime)
+        {
+            return;
+        }
+
+        if (ServerVortexEffectNextAllowedTimes.TryGetValue(targetId, out double nextAllowedTime) &&
             now < nextAllowedTime)
         {
             return;
         }
 
+        ServerVortexPeerNextAllowedTimes[sender] = now + VortexEffectServerMinimumRequestInterval;
         ServerVortexEffectNextAllowedTimes[targetId] = now + VortexEffectServerMinimumRequestInterval;
         BroadcastVortexHitEffects(position, targetId);
     }
@@ -4109,6 +4473,7 @@ internal static class CreatureModifierManager
     {
         if (ZNet.instance == null ||
             !ZNet.instance.IsServer() ||
+            ZDOMan.instance == null ||
             ZRoutedRpc.instance == null ||
             source == null ||
             source.IsPlayer() ||
@@ -4119,25 +4484,26 @@ internal static class CreatureModifierManager
             amount <= 0f ||
             float.IsNaN(amount) ||
             float.IsInfinity(amount) ||
-            !TryGetZdo(source, out ZDO sourceZdo) ||
-            sourceZdo.GetOwner() != sender ||
-            !TryGetModifierPower(
+            !TryGetProcModifierState(
                 source,
                 ModifierMask.Reflection,
-                ReflectionPowerKey,
-                ReflectionDefaultPower,
-                out float reflectionPower) ||
+                ReflectionChanceKey,
+                out ZDO sourceZdo,
+                out float procChance) ||
+            sourceZdo.GetOwner() != sender ||
             !TryFindCharacter(targetId, out Character target) ||
             target == source ||
             target.IsDead() ||
             !IsHostileAttacker(source, target) ||
-            Vector3.Distance(source.transform.position, target.transform.position) > ModifierRequestValidationRange)
+            Vector3.Distance(source.transform.position, target.transform.position) > ModifierRequestValidationRange ||
+            !IsServerObservedReflectionMelee(source, targetId))
         {
             return;
         }
 
         ZDOID sourceId = source.GetZDOID();
-        if (sourceId == ZDOID.None)
+        float reflectionPower = Mathf.Clamp01(sourceZdo.GetFloat(ReflectionPowerKey, ReflectionDefaultPower));
+        if (sourceId == ZDOID.None || reflectionPower <= 0f)
         {
             return;
         }
@@ -4158,29 +4524,305 @@ internal static class CreatureModifierManager
         {
             requestState = new ServerReflectionRequestState();
             ServerReflectionRequestStates[sourceId] = requestState;
+            ObserveServerReflectionHealth(
+                sourceZdo,
+                requestState,
+                GetNetworkTimeSeconds(),
+                source.GetHealth());
         }
 
-        if (requestState.RequestOwner != sender)
+        if (!requestState.RequestOwnerInitialized)
         {
+            requestState.RequestOwnerInitialized = true;
+            requestState.RequestOwner = sender;
+        }
+        else if (requestState.RequestOwner != sender)
+        {
+            ReleasePendingReflectionRequestsForSource(sourceId);
             requestState.RequestOwner = sender;
             requestState.LastRequestId = 0;
-            requestState.NextAllowedTime = 0f;
+            ResetServerReflectionObservation(sourceZdo, requestState);
         }
 
-        if (requestId <= requestState.LastRequestId)
+        if (requestId <= requestState.LastRequestId ||
+            ServerPendingReflectionRequests.Count >= MaximumPendingReflectionRequests ||
+            (ServerPendingReflectionRequestCounts.TryGetValue(sender, out int senderPending) &&
+             senderPending >= MaximumPendingReflectionRequestsPerPeer))
         {
             return;
         }
 
         requestState.LastRequestId = requestId;
-        float now = GetNetworkTimeSeconds();
-        if (now < requestState.NextAllowedTime)
+        ReflectionPendingRequestKey pendingRequest = new(sourceId, targetId, requestId);
+        ServerPendingReflectionRequests.Add(pendingRequest, sender);
+        ServerPendingReflectionRequestCounts[sender] = senderPending + 1;
+        ZDOMan authority = ZDOMan.instance;
+        uint epoch = ReflectionRequestEpoch;
+        try
+        {
+            ZNet.instance.StartCoroutine(
+                AuthorizeReflectionAfterHealthSync(
+                    source,
+                    target,
+                    sender,
+                    sourceId,
+                    targetId,
+                    Mathf.Min(amount, maximumAmount),
+                    reflectionPower,
+                    procChance,
+                    requestState,
+                    pendingRequest,
+                    authority,
+                    epoch));
+        }
+        catch
+        {
+            ReleasePendingReflectionRequest(pendingRequest);
+            throw;
+        }
+    }
+
+    private static IEnumerator AuthorizeReflectionAfterHealthSync(
+        Character source,
+        Character target,
+        long sender,
+        ZDOID sourceId,
+        ZDOID targetId,
+        float amount,
+        float reflectionPower,
+        float procChance,
+        ServerReflectionRequestState requestState,
+        ReflectionPendingRequestKey pendingRequest,
+        ZDOMan authority,
+        uint epoch)
+    {
+        float deadline = Time.realtimeSinceStartup + ReflectionHealthSyncTimeout;
+        try
+        {
+            while (Time.realtimeSinceStartup <= deadline)
+            {
+                if (!ReferenceEquals(ZDOMan.instance, authority) ||
+                    epoch != ReflectionRequestEpoch ||
+                    !ServerReflectionRequestStates.TryGetValue(sourceId, out ServerReflectionRequestState currentState) ||
+                    !ReferenceEquals(currentState, requestState) ||
+                    requestState.RequestOwner != sender ||
+                    !ServerPendingReflectionRequests.TryGetValue(pendingRequest, out long pendingSender) ||
+                    pendingSender != sender ||
+                    source == null ||
+                    source.GetZDOID() != sourceId ||
+                    source.m_nview == null ||
+                    !source.m_nview.IsValid() ||
+                    target == null ||
+                    target.GetZDOID() != targetId ||
+                    target.IsDead() ||
+                    target.m_nview == null ||
+                    !target.m_nview.IsValid() ||
+                    !IsHostileAttacker(source, target) ||
+                    Vector3.Distance(source.transform.position, target.transform.position) >
+                    ModifierRequestValidationRange)
+                {
+                    yield break;
+                }
+
+                ZDO sourceZdo = authority.GetZDO(sourceId);
+                if (sourceZdo == null || sourceZdo.GetOwner() != sender)
+                {
+                    yield break;
+                }
+
+                float now = GetNetworkTimeSeconds();
+                ObserveServerReflectionHealth(sourceZdo, requestState, now, source.GetHealth());
+                float actualDamage = amount / reflectionPower;
+                if (TryConsumeServerReflectionDamage(requestState, actualDamage, now))
+                {
+                    ReflectionRequestKey request = new(sourceId, targetId);
+                    double preciseNow = GetNetworkTimeSecondsDouble();
+                    bool throttled = ServerReflectionNextAllowedTimes.TryGetValue(request, out double nextAllowedTime) &&
+                                     preciseNow < nextAllowedTime;
+                    ServerReflectionNextAllowedTimes[request] =
+                        preciseNow + ReflectionServerMinimumRequestInterval;
+                    if (throttled || UnityEngine.Random.Range(0f, 100f) >= procChance)
+                    {
+                        yield break;
+                    }
+
+                    ZNetView targetView = target.m_nview;
+                    PlayReflectionEffects(source, target, source.GetCenterPoint());
+                    targetView.InvokeRPC(ReflectionDamageRpc, sourceId, amount);
+                    yield break;
+                }
+
+                yield return null;
+            }
+        }
+        finally
+        {
+            ReleasePendingReflectionRequest(pendingRequest);
+        }
+    }
+
+    private static bool IsServerObservedReflectionMelee(Character source, ZDOID targetId)
+    {
+        ZNetView? nview = source.m_nview;
+        if (nview == null || !nview.IsValid() || !nview.IsOwner())
+        {
+            // Remote ZDO owners execute Character.RPC_Damage. The server can still authorize
+            // their one-shot request from the synchronized health loss below, but it has no
+            // authoritative HitData instance with which to strengthen this target check.
+            return true;
+        }
+
+        HitData? lastHit = source.m_lastHit;
+        return lastHit != null &&
+               !IsProjectileHit(lastHit) &&
+               lastHit.m_attacker != ZDOID.None &&
+               lastHit.m_attacker == targetId;
+    }
+
+    private static bool TryConsumeServerReflectionDamage(
+        ServerReflectionRequestState requestState,
+        float actualDamage,
+        float now)
+    {
+        if (actualDamage <= 0f ||
+            float.IsNaN(actualDamage) ||
+            float.IsInfinity(actualDamage) ||
+            requestState.UnclaimedDamageUntil < now ||
+            requestState.UnclaimedDamage <= 0f ||
+            requestState.UnclaimedDamage + ReflectionDamageAuthorizationTolerance < actualDamage)
+        {
+            return false;
+        }
+
+        requestState.UnclaimedDamage = Mathf.Max(0f, requestState.UnclaimedDamage - actualDamage);
+        if (requestState.UnclaimedDamage <= ReflectionDamageAuthorizationTolerance)
+        {
+            requestState.UnclaimedDamage = 0f;
+            requestState.UnclaimedDamageUntil = 0f;
+        }
+
+        return true;
+    }
+
+    private static void InitializeServerReflectionObservation(Character source)
+    {
+        if (source != null && TryGetZdo(source, out ZDO zdo))
+        {
+            InitializeServerReflectionObservation(source, zdo);
+        }
+    }
+
+    private static void InitializeServerReflectionObservation(Character source, ZDO zdo)
+    {
+        if (ZNet.instance == null || !ZNet.instance.IsServer() || source == null || source.IsPlayer() || zdo == null)
         {
             return;
         }
 
-        requestState.NextAllowedTime = now + ReflectionServerMinimumRequestInterval;
-        targetView.InvokeRPC(ReflectionDamageRpc, sourceId, Mathf.Min(amount, maximumAmount));
+        ZDOID sourceId = source.GetZDOID();
+        if (sourceId == ZDOID.None)
+        {
+            return;
+        }
+
+        if (!HasModifier(zdo, ModifierMask.Reflection))
+        {
+            RemoveServerReflectionState(sourceId);
+            return;
+        }
+
+        if (!ServerReflectionRequestStates.TryGetValue(sourceId, out ServerReflectionRequestState requestState))
+        {
+            requestState = new ServerReflectionRequestState();
+            ServerReflectionRequestStates[sourceId] = requestState;
+        }
+
+        ObserveServerReflectionHealth(zdo, requestState, GetNetworkTimeSeconds(), source.GetHealth());
+    }
+
+    private static void ObserveServerReflectionHealth(
+        ZDO sourceZdo,
+        ServerReflectionRequestState requestState,
+        float now,
+        float fallbackHealth = float.NaN)
+    {
+        if (requestState.UnclaimedDamageUntil < now)
+        {
+            requestState.UnclaimedDamage = 0f;
+            requestState.UnclaimedDamageUntil = 0f;
+        }
+
+        float health = sourceZdo.GetFloat(ZDOVars.s_health, fallbackHealth);
+        if (float.IsNaN(health) || float.IsInfinity(health) || health < 0f)
+        {
+            return;
+        }
+
+        float previousHealth = requestState.LastObservedHealth;
+        if (!float.IsNaN(previousHealth) &&
+            !float.IsInfinity(previousHealth) &&
+            health + ReflectionDamageAuthorizationTolerance < previousHealth)
+        {
+            requestState.UnclaimedDamage += previousHealth - health;
+            requestState.UnclaimedDamageUntil = now + ReflectionDamageAuthorizationLifetime;
+        }
+
+        requestState.LastObservedHealth = health;
+    }
+
+    private static void ResetServerReflectionObservation(
+        ZDO sourceZdo,
+        ServerReflectionRequestState requestState)
+    {
+        requestState.LastObservedHealth = float.NaN;
+        requestState.UnclaimedDamage = 0f;
+        requestState.UnclaimedDamageUntil = 0f;
+        ObserveServerReflectionHealth(sourceZdo, requestState, GetNetworkTimeSeconds());
+    }
+
+    private static void RemoveServerReflectionState(ZDOID characterId)
+    {
+        ServerReflectionRequestStates.Remove(characterId);
+        foreach (ReflectionPendingRequestKey request in ServerPendingReflectionRequests.Keys
+                     .Where(request => request.Source.Equals(characterId) || request.Target.Equals(characterId))
+                     .ToArray())
+        {
+            ReleasePendingReflectionRequest(request);
+        }
+
+        foreach (ReflectionRequestKey request in ServerReflectionNextAllowedTimes.Keys
+                     .Where(request => request.Source.Equals(characterId) || request.Target.Equals(characterId))
+                     .ToArray())
+        {
+            ServerReflectionNextAllowedTimes.Remove(request);
+        }
+    }
+
+    private static void ReleasePendingReflectionRequestsForSource(ZDOID sourceId)
+    {
+        foreach (ReflectionPendingRequestKey request in ServerPendingReflectionRequests.Keys
+                     .Where(request => request.Source.Equals(sourceId))
+                     .ToArray())
+        {
+            ReleasePendingReflectionRequest(request);
+        }
+    }
+
+    private static void ReleasePendingReflectionRequest(ReflectionPendingRequestKey request)
+    {
+        if (!ServerPendingReflectionRequests.TryGetValue(request, out long sender) ||
+            !ServerPendingReflectionRequests.Remove(request))
+        {
+            return;
+        }
+
+        if (!ServerPendingReflectionRequestCounts.TryGetValue(sender, out int count) || count <= 1)
+        {
+            ServerPendingReflectionRequestCounts.Remove(sender);
+            return;
+        }
+
+        ServerPendingReflectionRequestCounts[sender] = count - 1;
     }
 
     private static void ApplyAuthorizedReflectionDamage(
@@ -4376,6 +5018,7 @@ internal static class CreatureModifierManager
             character.IsPlayer() ||
             character.IsTamed() ||
             !TryGetHotPathModifierZdo(character, ModifierMask.Blamer, out ZDO zdo) ||
+            !zdo.GetBool(BlamerActiveKey, false) ||
             !HasBlamerKarmaRemaining(zdo) ||
             !IsBlamerFleeTargetValid(character, monsterAI!, zdo))
         {
@@ -5097,7 +5740,6 @@ internal static class CreatureModifierManager
 
         Character? reflectionAttacker = null;
         float reflectionPower = 0f;
-        Vector3 reflectionHitPoint = Vector3.zero;
         if (PendingReflectionDamage.TryGetValue(hit, out ReflectionDamageContext reflectionContext))
         {
             PendingReflectionDamage.Remove(hit);
@@ -5105,7 +5747,6 @@ internal static class CreatureModifierManager
             {
                 reflectionAttacker = reflectionContext.Attacker;
                 reflectionPower = reflectionContext.Power;
-                reflectionHitPoint = reflectionContext.HitPoint;
             }
         }
 
@@ -5119,7 +5760,6 @@ internal static class CreatureModifierManager
             vampiricPower,
             reflectionAttacker,
             reflectionPower,
-            reflectionHitPoint,
             Mathf.Max(0f, target.GetHealth()));
     }
 
@@ -5144,7 +5784,6 @@ internal static class CreatureModifierManager
 
         if (state.HasReflection && state.ReflectionAttacker != null)
         {
-            PlayReflectionEffects(target, state.ReflectionAttacker, state.ReflectionHitPoint);
             SendExactReflectionDamage(
                 state.ReflectionAttacker,
                 target,
@@ -5211,8 +5850,9 @@ internal static class CreatureModifierManager
 
         int attackerId = attacker.GetInstanceID();
         float now = GetNetworkTimeSeconds();
+        double preciseNow = GetNetworkTimeSecondsDouble();
         if (zdo.GetFloat(KnockbackNextReadyTimeKey, 0f) > now ||
-            (LocalKnockbackReadyTimes.TryGetValue(attackerId, out float localReady) && localReady > now) ||
+            (LocalKnockbackReadyTimes.TryGetValue(attackerId, out double localReady) && localReady > preciseNow) ||
             PendingKnockbackReservations.ContainsKey(attackerId) ||
             PendingKnockbackHits.ContainsKey(hit))
         {
@@ -5239,7 +5879,8 @@ internal static class CreatureModifierManager
 
         PendingKnockbackHits.Remove(hit);
         ReleaseKnockbackReservation(context, hit);
-        LocalKnockbackReadyTimes[context.AttackerId] = GetNetworkTimeSeconds() + context.Cooldown;
+        LocalKnockbackReadyTimes[context.AttackerId] =
+            GetNetworkTimeSecondsDouble() + context.Cooldown;
         if (context.Attacker != null &&
             context.Attacker.m_nview != null &&
             context.Attacker.m_nview.IsValid() &&
@@ -5280,9 +5921,11 @@ internal static class CreatureModifierManager
 
         ZDOID attackerId = attacker.GetZDOID();
         float now = GetNetworkTimeSeconds();
+        double preciseNow = GetNetworkTimeSecondsDouble();
         if (attackerId == ZDOID.None ||
             attackerZdo.GetFloat(KnockbackNextReadyTimeKey, 0f) > now ||
-            (ServerKnockbackNextAllowedTimes.TryGetValue(attackerId, out float nextAllowed) && nextAllowed > now))
+            (ServerKnockbackNextAllowedTimes.TryGetValue(attackerId, out double nextAllowed) &&
+             nextAllowed > preciseNow))
         {
             return;
         }
@@ -5290,7 +5933,8 @@ internal static class CreatureModifierManager
         float cooldown = ResolveKnockbackCooldown(
             attackerZdo.GetFloat(KnockbackCooldownKey, KnockbackDefaultCooldown));
         float nextReadyTime = now + cooldown;
-        ServerKnockbackNextAllowedTimes[attackerId] = nextReadyTime;
+        ServerKnockbackNextAllowedTimes[attackerId] =
+            preciseNow + Mathf.Max(cooldown, KnockbackNetworkMinimumRequestInterval);
         attacker.m_nview.InvokeRPC(KnockbackCooldownRpc, nextReadyTime);
     }
 
@@ -5907,6 +6551,12 @@ internal static class CreatureModifierManager
         float jumpMultiplier = 1f - jumpPower;
         player.m_jumpForce *= jumpMultiplier;
         player.m_jumpForceForward *= jumpMultiplier;
+        runtime.AppliedCrouchSpeed = player.m_crouchSpeed;
+        runtime.AppliedWalkSpeed = player.m_walkSpeed;
+        runtime.AppliedSpeed = player.m_speed;
+        runtime.AppliedRunSpeed = player.m_runSpeed;
+        runtime.AppliedJumpForce = player.m_jumpForce;
+        runtime.AppliedJumpForceForward = player.m_jumpForceForward;
     }
 
     private static void RestoreCrippling(Player player, PlayerRuntimeDebuffs runtime)
@@ -5916,15 +6566,27 @@ internal static class CreatureModifierManager
             return;
         }
 
-        player.m_crouchSpeed = runtime.OriginalCrouchSpeed;
-        player.m_walkSpeed = runtime.OriginalWalkSpeed;
-        player.m_speed = runtime.OriginalSpeed;
-        player.m_runSpeed = runtime.OriginalRunSpeed;
-        player.m_jumpForce = runtime.OriginalJumpForce;
-        player.m_jumpForceForward = runtime.OriginalJumpForceForward;
+        RestoreCripplingValue(ref player.m_crouchSpeed, runtime.AppliedCrouchSpeed, runtime.OriginalCrouchSpeed);
+        RestoreCripplingValue(ref player.m_walkSpeed, runtime.AppliedWalkSpeed, runtime.OriginalWalkSpeed);
+        RestoreCripplingValue(ref player.m_speed, runtime.AppliedSpeed, runtime.OriginalSpeed);
+        RestoreCripplingValue(ref player.m_runSpeed, runtime.AppliedRunSpeed, runtime.OriginalRunSpeed);
+        RestoreCripplingValue(ref player.m_jumpForce, runtime.AppliedJumpForce, runtime.OriginalJumpForce);
+        RestoreCripplingValue(
+            ref player.m_jumpForceForward,
+            runtime.AppliedJumpForceForward,
+            runtime.OriginalJumpForceForward);
+
         runtime.MovementApplied = false;
         runtime.MovementPower = 0f;
         runtime.JumpPower = 0f;
+    }
+
+    private static void RestoreCripplingValue(ref float current, float applied, float original)
+    {
+        if (Mathf.Approximately(current, applied))
+        {
+            current = original;
+        }
     }
 
     private static void ApplyDisruptive(Player player, PlayerRuntimeDebuffs runtime, float staminaPower, float eitrPower)
@@ -6310,6 +6972,11 @@ internal static class CreatureModifierManager
         return ZNet.instance != null ? (float)ZNet.instance.GetTimeSeconds() : Time.time;
     }
 
+    private static double GetNetworkTimeSecondsDouble()
+    {
+        return ZNet.instance != null ? ZNet.instance.GetTimeSeconds() : Time.time;
+    }
+
     internal static float ResolveFinalDeathwardDamage(Character target, HitData hit, float finalDamage)
     {
         if (target == null ||
@@ -6600,6 +7267,13 @@ internal static class CreatureModifierManager
             return;
         }
 
+        if (addResult == BlamerKarmaAddResult.Saturated)
+        {
+            schedule.NextBlamer = now + BlamerSaturatedRetryInterval;
+            SetBlamerActive(character, zdo, false);
+            return;
+        }
+
         CommitBlamerKarma(character, zdo, confirmedAccumulated, true);
     }
 
@@ -6613,26 +7287,29 @@ internal static class CreatureModifierManager
         confirmedAccumulated = current;
         if (ZNet.instance == null)
         {
-            if (!CreatureKarmaManager.TryAddBlamerKarma(character.transform.position, amount))
+            switch (CreatureKarmaManager.TryAddBlamerKarma(character.transform.position, amount))
             {
-                return BlamerKarmaAddResult.Failed;
+                case CreatureKarmaManager.KarmaAddResult.Added:
+                    confirmedAccumulated = current + amount;
+                    return BlamerKarmaAddResult.Added;
+                case CreatureKarmaManager.KarmaAddResult.Saturated:
+                    return BlamerKarmaAddResult.Saturated;
+                default:
+                    return BlamerKarmaAddResult.Failed;
             }
-
-            confirmedAccumulated = current + amount;
-            return BlamerKarmaAddResult.Added;
         }
 
         if (ZNet.instance.IsServer())
         {
-            bool granted = TryGrantServerBlamerKarma(
+            BlamerKarmaAddResult result = TryGrantServerBlamerKarma(
                 zdo,
                 out confirmedAccumulated,
                 out ServerBlamerKarmaState state);
             state.RequestOwner = zdo.GetOwner();
             state.HasCachedResponse = false;
-            return granted || confirmedAccumulated > current
+            return result == BlamerKarmaAddResult.Added || confirmedAccumulated > current
                 ? BlamerKarmaAddResult.Added
-                : BlamerKarmaAddResult.Failed;
+                : result;
         }
 
         ZNetView? nview = character.m_nview;
@@ -6756,11 +7433,11 @@ internal static class CreatureModifierManager
         ZDO zdo = ZDOMan.instance.GetZDO(creatureId);
         if (zdo == null)
         {
-            SendBlamerKarmaResponse(sender, creatureId, requestId, false, 0f);
+            SendBlamerKarmaResponse(sender, creatureId, requestId, BlamerKarmaAddResult.Failed, 0f);
             return;
         }
 
-        bool accepted = false;
+        BlamerKarmaAddResult result = BlamerKarmaAddResult.Failed;
         float observed = GetBlamerAccumulatedKarma(zdo);
 
         if (zdo.GetOwner() != sender)
@@ -6769,7 +7446,12 @@ internal static class CreatureModifierManager
                 zdo,
                 sender,
                 $"ZDO owner {zdo.GetOwner()} does not match the request sender");
-            SendBlamerKarmaResponse(sender, creatureId, requestId, false, Mathf.Max(0f, observed));
+            SendBlamerKarmaResponse(
+                sender,
+                creatureId,
+                requestId,
+                BlamerKarmaAddResult.Failed,
+                Mathf.Max(0f, observed));
             return;
         }
 
@@ -6786,21 +7468,26 @@ internal static class CreatureModifierManager
                 sender,
                 creatureId,
                 requestId,
-                state.LastAccepted,
+                state.LastResult,
                 state.LastResponseAccumulated);
             return;
         }
 
         if (state.HasCachedResponse && requestId < state.LastRequestId)
         {
-            SendBlamerKarmaResponse(sender, creatureId, requestId, false, state.Accumulated);
+            SendBlamerKarmaResponse(
+                sender,
+                creatureId,
+                requestId,
+                BlamerKarmaAddResult.Failed,
+                state.Accumulated);
             return;
         }
 
         if (IsServerBlamerRequestValid(zdo, targetId, out string rejectionReason))
         {
-            accepted = TryGrantServerBlamerKarma(zdo, out _, out state);
-            if (!accepted && Time.unscaledTime >= state.NextAllowedTime)
+            result = TryGrantServerBlamerKarma(zdo, out _, out state);
+            if (result == BlamerKarmaAddResult.Failed && Time.unscaledTime >= state.NextAllowedTime)
             {
                 LogBlamerRequestRejection(zdo, sender, "the authoritative Karma grant was unavailable");
             }
@@ -6812,9 +7499,9 @@ internal static class CreatureModifierManager
 
         state.LastRequestId = requestId;
         state.HasCachedResponse = true;
-        state.LastAccepted = accepted;
+        state.LastResult = result;
         state.LastResponseAccumulated = state.Accumulated;
-        SendBlamerKarmaResponse(sender, creatureId, requestId, accepted, state.Accumulated);
+        SendBlamerKarmaResponse(sender, creatureId, requestId, result, state.Accumulated);
     }
 
     private static bool IsServerBlamerRequestValid(
@@ -7036,7 +7723,7 @@ internal static class CreatureModifierManager
         return state;
     }
 
-    private static bool TryGrantServerBlamerKarma(
+    private static BlamerKarmaAddResult TryGrantServerBlamerKarma(
         ZDO zdo,
         out float accumulated,
         out ServerBlamerKarmaState state)
@@ -7046,7 +7733,7 @@ internal static class CreatureModifierManager
         float now = Time.unscaledTime;
         if (now < state.NextAllowedTime)
         {
-            return false;
+            return BlamerKarmaAddResult.Failed;
         }
 
         float power = ResolveBlamerKarmaPerSecond(zdo.GetFloat(BlamerKarmaPerSecondKey, BlamerDefaultKarmaPerSecond));
@@ -7056,7 +7743,7 @@ internal static class CreatureModifierManager
             : power;
         if (grant <= 0f || float.IsNaN(grant) || float.IsInfinity(grant))
         {
-            return false;
+            return BlamerKarmaAddResult.Failed;
         }
 
         float nextAccumulated = cap > 0f
@@ -7064,19 +7751,31 @@ internal static class CreatureModifierManager
             : state.Accumulated + grant;
         if (float.IsNaN(nextAccumulated) || float.IsInfinity(nextAccumulated))
         {
-            return false;
+            return BlamerKarmaAddResult.Failed;
         }
 
         Vector3 position = zdo.GetPosition();
-        if (!IsFinite(position) || !CreatureKarmaManager.TryAddBlamerKarma(position, grant))
+        if (!IsFinite(position))
         {
-            return false;
+            return BlamerKarmaAddResult.Failed;
+        }
+
+        CreatureKarmaManager.KarmaAddResult karmaResult =
+            CreatureKarmaManager.TryAddBlamerKarma(position, grant);
+        if (karmaResult == CreatureKarmaManager.KarmaAddResult.Saturated)
+        {
+            return BlamerKarmaAddResult.Saturated;
+        }
+
+        if (karmaResult != CreatureKarmaManager.KarmaAddResult.Added)
+        {
+            return BlamerKarmaAddResult.Failed;
         }
 
         state.Accumulated = nextAccumulated;
         state.NextAllowedTime = now + BlamerServerMinimumRequestInterval;
         accumulated = state.Accumulated;
-        return true;
+        return BlamerKarmaAddResult.Added;
     }
 
     private static bool IsFinite(Vector3 value)
@@ -7090,7 +7789,7 @@ internal static class CreatureModifierManager
         long target,
         ZDOID creatureId,
         long requestId,
-        bool accepted,
+        BlamerKarmaAddResult result,
         float accumulated)
     {
         if (ZRoutedRpc.instance == null)
@@ -7103,7 +7802,7 @@ internal static class CreatureModifierManager
             ZPackage response = new();
             response.Write(creatureId);
             response.Write(requestId);
-            response.Write(accepted);
+            response.Write((int)result);
             response.Write(accumulated);
             ZRoutedRpc.instance.InvokeRoutedRPC(target, BlamerKarmaResponseRpc, response);
         }
@@ -7124,13 +7823,20 @@ internal static class CreatureModifierManager
 
         ZDOID creatureId;
         long requestId;
-        bool accepted;
+        BlamerKarmaAddResult result;
         float accumulated;
         try
         {
             creatureId = package.ReadZDOID();
             requestId = package.ReadLong();
-            accepted = package.ReadBool();
+            int resultValue = package.ReadInt();
+            if (resultValue < (int)BlamerKarmaAddResult.Failed ||
+                resultValue > (int)BlamerKarmaAddResult.Pending)
+            {
+                return;
+            }
+
+            result = (BlamerKarmaAddResult)resultValue;
             accumulated = package.ReadSingle();
         }
         catch
@@ -7175,7 +7881,16 @@ internal static class CreatureModifierManager
                                     !CreatureKarmaManager.IsKarmaSummonedCreature(character) &&
                                     character.GetBaseAI() is MonsterAI monsterAI &&
                                     IsBlamerFleeTargetValid(character, monsterAI, zdo);
-        if (accepted || accumulated > GetBlamerAccumulatedKarma(zdo))
+        if (result == BlamerKarmaAddResult.Saturated)
+        {
+            if (PassiveModifierSchedules.TryGetValue(characterId, out PassiveModifierSchedule schedule))
+            {
+                schedule.NextBlamer = Time.time + BlamerSaturatedRetryInterval;
+            }
+
+            SetBlamerActive(character, zdo, false);
+        }
+        else if (result == BlamerKarmaAddResult.Added || accumulated > GetBlamerAccumulatedKarma(zdo))
         {
             CommitBlamerKarma(character, zdo, accumulated, conditionsStillValid);
         }
@@ -7574,6 +8289,12 @@ internal static class CreatureModifierManager
             return;
         }
 
+        if (!TryConsumeReapingPeerRequest(sender) ||
+            ServerAuthorizedReapingDeathCount >= MaximumAuthorizedReapingDeaths)
+        {
+            return;
+        }
+
         ZDO deadZdo = ZDOMan.instance.GetZDO(deadId);
         if (deadZdo == null ||
             deadZdo.GetOwner() != sender ||
@@ -7589,13 +8310,35 @@ internal static class CreatureModifierManager
         if (reaperId == ZDOID.None ||
             (ServerAuthorizedReapingDeaths.TryGetValue(reaperId, out HashSet<ZDOID> authorizedDeaths) &&
              authorizedDeaths.Contains(deadId)) ||
-            !ServerPendingReapingRequests.Add(request))
+            ServerPendingReapingRequests.ContainsKey(request) ||
+            ServerPendingReapingRequests.Count >= MaximumPendingReapingDeaths ||
+            (ServerPendingReapingRequestCounts.TryGetValue(sender, out int senderPending) &&
+             senderPending >= MaximumPendingReapingDeathsPerPeer))
         {
             return;
         }
 
-        ZNet.instance.StartCoroutine(
-            AuthorizeReapingAfterDeathSync(reaper, sender, deadId, deathPosition, request));
+        ServerPendingReapingRequests.Add(request, sender);
+        ServerPendingReapingRequestCounts[sender] = senderPending + 1;
+        ZDOMan authority = ZDOMan.instance;
+        uint epoch = ReapingDeathEpoch;
+        try
+        {
+            ZNet.instance.StartCoroutine(
+                AuthorizeReapingAfterDeathSync(
+                    reaper,
+                    sender,
+                    deadId,
+                    deathPosition,
+                    request,
+                    authority,
+                    epoch));
+        }
+        catch
+        {
+            ReleasePendingReapingRequest(request);
+            throw;
+        }
     }
 
     private static void RPC_ReapingRespawnRequest(Character character, long sender)
@@ -7664,11 +8407,13 @@ internal static class CreatureModifierManager
         long sender,
         ZDOID deadId,
         Vector3 deathPosition,
-        ReapingRequestKey request)
+        ReapingRequestKey request,
+        ZDOMan authority,
+        uint epoch)
     {
         if (!IsFinite(deathPosition))
         {
-            ServerPendingReapingRequests.Remove(request);
+            ReleasePendingReapingRequest(request);
             yield break;
         }
 
@@ -7677,18 +8422,26 @@ internal static class CreatureModifierManager
         {
             while (Time.realtimeSinceStartup <= deadline)
             {
-                if (reaper == null ||
+                if (!ReferenceEquals(ZDOMan.instance, authority) ||
+                    epoch != ReapingDeathEpoch ||
+                    reaper == null ||
+                    reaper.GetZDOID() != request.Reaper ||
                     reaper.m_nview == null ||
                     !reaper.m_nview.IsValid() ||
-                    !IsFinite(reaper.transform.position) ||
-                    ZDOMan.instance == null)
+                    !IsFinite(reaper.transform.position))
                 {
                     yield break;
                 }
 
-                ZDO deadZdo = ZDOMan.instance.GetZDO(deadId);
-                if (deadZdo == null ||
-                    deadZdo.GetOwner() != sender ||
+                ZDO deadZdo = authority.GetZDO(deadId);
+                if (deadZdo == null)
+                {
+                    // Deletion/despawn does not prove that the creature died. Without a live
+                    // authoritative ZDO there is no safe way to distinguish death from unload.
+                    yield break;
+                }
+
+                if (deadZdo.GetOwner() != sender ||
                     !IsFinite(deadZdo.GetPosition()) ||
                     (deadZdo.GetPosition() - deathPosition).sqrMagnitude >
                     ReapingDeathPositionTolerance * ReapingDeathPositionTolerance)
@@ -7714,8 +8467,25 @@ internal static class CreatureModifierManager
         }
         finally
         {
-            ServerPendingReapingRequests.Remove(request);
+            ReleasePendingReapingRequest(request);
         }
+    }
+
+    private static void ReleasePendingReapingRequest(ReapingRequestKey request)
+    {
+        if (!ServerPendingReapingRequests.TryGetValue(request, out long sender) ||
+            !ServerPendingReapingRequests.Remove(request))
+        {
+            return;
+        }
+
+        if (!ServerPendingReapingRequestCounts.TryGetValue(sender, out int count) || count <= 1)
+        {
+            ServerPendingReapingRequestCounts.Remove(sender);
+            return;
+        }
+
+        ServerPendingReapingRequestCounts[sender] = count - 1;
     }
 
     private static void AuthorizeReapingGain(Character reaper, ZDOID deadId, Vector3 deathPosition)
@@ -7735,7 +8505,7 @@ internal static class CreatureModifierManager
 
         ZDOID reaperId = reaper.GetZDOID();
         if (reaperId == ZDOID.None ||
-            !GetReapingDeathLedger(reaperId).Add(deadId))
+            !TryAddReapingDeathAuthorization(reaperId, deadId))
         {
             return;
         }
@@ -7783,22 +8553,126 @@ internal static class CreatureModifierManager
         }
     }
 
-    private static HashSet<ZDOID> GetReapingDeathLedger(ZDOID reaperId)
+    private static bool TryConsumeReapingPeerRequest(long sender)
     {
-        if (!ServerAuthorizedReapingDeaths.TryGetValue(reaperId, out HashSet<ZDOID> ledger))
+        double now = GetNetworkTimeSecondsDouble();
+        if (!ServerReapingPeerRateStates.TryGetValue(sender, out ReapingPeerRateState state))
         {
-            ledger = new HashSet<ZDOID>();
+            ServerReapingPeerRateStates[sender] = new ReapingPeerRateState
+            {
+                WindowStart = now,
+                RequestCount = 1
+            };
+            return true;
+        }
+
+        if (now < state.WindowStart || now - state.WindowStart >= ReapingPeerRequestWindowSeconds)
+        {
+            state.WindowStart = now;
+            state.RequestCount = 1;
+            return true;
+        }
+
+        if (state.RequestCount >= MaximumReapingRequestsPerPeerWindow)
+        {
+            return false;
+        }
+
+        state.RequestCount++;
+        return true;
+    }
+
+    private static bool TryAddReapingDeathAuthorization(ZDOID reaperId, ZDOID deadId)
+    {
+        if (ServerAuthorizedReapingDeathCount >= MaximumAuthorizedReapingDeaths)
+        {
+            return false;
+        }
+
+        ReapingRequestKey authorization = new(reaperId, deadId);
+        if (ServerAuthorizedReapingDeaths.TryGetValue(reaperId, out HashSet<ZDOID> existingLedger) &&
+            existingLedger.Contains(deadId))
+        {
+            return false;
+        }
+
+        bool alreadyQueued = ServerQueuedReapingDeathAuthorizations.Contains(authorization);
+        if (!alreadyQueued &&
+            ServerAuthorizedReapingDeathPruneQueue.Count >= MaximumQueuedReapingAuthorizations)
+        {
+            CompactReapingAuthorizationQueue();
+            alreadyQueued = ServerQueuedReapingDeathAuthorizations.Contains(authorization);
+            if (!alreadyQueued &&
+                ServerAuthorizedReapingDeathPruneQueue.Count >= MaximumQueuedReapingAuthorizations)
+            {
+                return false;
+            }
+        }
+
+        HashSet<ZDOID> ledger = existingLedger ?? new HashSet<ZDOID>();
+        if (!ledger.Add(deadId))
+        {
+            return false;
+        }
+
+        if (existingLedger == null)
+        {
             ServerAuthorizedReapingDeaths[reaperId] = ledger;
         }
 
-        return ledger;
+        ServerAuthorizedReapingDeathCount++;
+        if (ServerQueuedReapingDeathAuthorizations.Add(authorization))
+        {
+            ServerAuthorizedReapingDeathPruneQueue.Enqueue(authorization);
+        }
+
+        return true;
+    }
+
+    private static void CompactReapingAuthorizationQueue()
+    {
+        int queued = ServerAuthorizedReapingDeathPruneQueue.Count;
+        ServerQueuedReapingDeathAuthorizations.Clear();
+        for (int index = 0; index < queued; index++)
+        {
+            ReapingRequestKey authorization = ServerAuthorizedReapingDeathPruneQueue.Dequeue();
+            if (ServerAuthorizedReapingDeaths.TryGetValue(
+                    authorization.Reaper,
+                    out HashSet<ZDOID> ledger) &&
+                ledger.Contains(authorization.Dead) &&
+                ServerQueuedReapingDeathAuthorizations.Add(authorization))
+            {
+                ServerAuthorizedReapingDeathPruneQueue.Enqueue(authorization);
+            }
+        }
+    }
+
+    private static void RemoveReapingAuthorizationsForReaper(ZDOID reaperId)
+    {
+        if (!ServerAuthorizedReapingDeaths.TryGetValue(reaperId, out HashSet<ZDOID> ledger))
+        {
+            return;
+        }
+
+        ServerAuthorizedReapingDeaths.Remove(reaperId);
+        ServerAuthorizedReapingDeathCount =
+            Math.Max(0, ServerAuthorizedReapingDeathCount - ledger.Count);
     }
 
     private static void ClearReapingDeathAuthorization(ZDOID deadId)
     {
-        foreach (HashSet<ZDOID> ledger in ServerAuthorizedReapingDeaths.Values)
+        foreach (KeyValuePair<ZDOID, HashSet<ZDOID>> entry in ServerAuthorizedReapingDeaths.ToArray())
         {
-            ledger.Remove(deadId);
+            if (entry.Value.Remove(deadId))
+            {
+                ServerAuthorizedReapingDeathCount =
+                    Math.Max(0, ServerAuthorizedReapingDeathCount - 1);
+            }
+
+            if (entry.Value.Count == 0)
+            {
+                ServerAuthorizedReapingDeaths.Remove(entry.Key);
+            }
         }
     }
 
@@ -8162,6 +9036,7 @@ internal static class CreatureModifierManager
     private static void ApplyRuntimeModifierStats(Character character, ZDO zdo)
     {
         TrackRuntimeModifiers(character, zdo);
+        InitializeServerReflectionObservation(character, zdo);
         ApplyStoredReapingHealth(character, zdo);
         ApplyStoredReapingScale(character, zdo);
     }
@@ -10259,1066 +11134,181 @@ internal static class CreatureModifierManager
         };
     }
 
-    private static Sprite GetArmoredSprite()
+    private static Sprite GetArmoredSprite() =>
+        GetModifierIconSprite(ref ArmoredSprite, "armored");
+
+    private static Sprite GetEnragedSprite() =>
+        GetModifierIconSprite(ref EnragedSprite, "enraged");
+
+    private static Sprite GetDeathwardSprite() =>
+        GetModifierIconSprite(ref DeathwardSprite, "deathward");
+
+    private static Sprite GetSwiftSprite() =>
+        GetModifierIconSprite(ref SwiftSprite, "swift");
+
+    private static Sprite GetRegeneratingSprite() =>
+        GetModifierIconSprite(ref RegeneratingSprite, "regenerating");
+
+    private static Sprite GetVampiricSprite() =>
+        GetModifierIconSprite(ref VampiricSprite, "vampiric");
+
+    private static Sprite GetFireSprite() =>
+        GetModifierIconSprite(ref FireSprite, "fire");
+
+    private static Sprite GetFrostSprite() =>
+        GetModifierIconSprite(ref FrostSprite, "frost");
+
+    private static Sprite GetLightningSprite() =>
+        GetModifierIconSprite(ref LightningSprite, "lightning");
+
+    private static Sprite GetSpiritSprite() =>
+        GetModifierIconSprite(ref SpiritSprite, "spirit");
+
+    private static Sprite GetToxicDeathSprite() =>
+        GetModifierIconSprite(ref ToxicDeathSprite, "toxicDeath");
+
+    private static Sprite GetArmorPiercingSprite() =>
+        GetModifierIconSprite(ref ArmorPiercingSprite, "armorPiercing");
+
+    private static Sprite GetStaggeringSprite() =>
+        GetModifierIconSprite(ref StaggeringSprite, "staggering");
+
+    private static Sprite GetUndodgeableSprite() =>
+        GetModifierIconSprite(ref UndodgeableSprite, "undodgeable");
+
+    private static Sprite GetAttackSpeedSprite() =>
+        GetModifierIconSprite(ref AttackSpeedSprite, "attackSpeed");
+
+    private static Sprite GetExposedSprite() =>
+        GetModifierIconSprite(ref ExposedSprite, "exposed");
+
+    private static Sprite GetWeakenedSprite() =>
+        GetModifierIconSprite(ref WeakenedSprite, "weakened");
+
+    private static Sprite GetWitheredSprite() =>
+        GetModifierIconSprite(ref WitheredSprite, "withered");
+
+    private static Sprite GetReflectionSprite() =>
+        GetModifierIconSprite(ref ReflectionSprite, "reflection");
+
+    private static Sprite GetVortexSprite() =>
+        GetModifierIconSprite(ref VortexSprite, "vortex");
+
+    private static Sprite GetCripplingSprite() =>
+        GetModifierIconSprite(ref CripplingSprite, "crippling");
+
+    private static Sprite GetDisruptiveSprite() =>
+        GetModifierIconSprite(ref DisruptiveSprite, "disruptive");
+
+    private static Sprite GetAdrenalineDrainSprite() =>
+        GetModifierIconSprite(ref AdrenalineDrainSprite, "adrenalineDrain");
+
+    private static Sprite GetCorrosiveSprite() =>
+        GetModifierIconSprite(ref CorrosiveSprite, "corrosive");
+
+    private static Sprite GetAdaptiveSprite() =>
+        GetModifierIconSprite(ref AdaptiveSprite, "adaptive");
+
+    private static Sprite GetUnflinchingSprite() =>
+        GetModifierIconSprite(ref UnflinchingSprite, "unflinching");
+
+    private static Sprite GetChameleonSprite() =>
+        GetModifierIconSprite(ref ChameleonSprite, "chameleon");
+
+    private static Sprite GetOmenSprite() =>
+        GetModifierIconSprite(ref OmenSprite, "omen");
+
+    private static Sprite GetReapingSprite() =>
+        GetModifierIconSprite(ref ReapingSprite, "reaping");
+
+    private static Sprite GetBlinkSprite() =>
+        GetModifierIconSprite(ref BlinkSprite, "blink");
+
+    private static Sprite GetKnockbackSprite() =>
+        GetModifierIconSprite(ref KnockbackSprite, "juggernaut");
+
+    private static Sprite GetBlamerSprite() =>
+        GetModifierIconSprite(ref BlamerSprite, "blamer");
+
+    private static Sprite GetModifierIconSprite(ref Sprite? cached, string key)
     {
-        ArmoredSprite ??= CreateSolidIcon(
-            "CreatureManager_ArmoredIcon",
-            IsCuirassPixel,
-            new Color(0.08f, 0.28f, 0.68f, 1f));
-        return ArmoredSprite!;
+        cached ??= CreateModifierIconSprite(key);
+        return cached!;
     }
 
-    private static Sprite GetEnragedSprite()
+    private static Sprite CreateModifierIconSprite(string key)
     {
-        EnragedSprite ??= CreateSolidIcon("CreatureManager_EnragedIcon", IsSwordPixel, new Color(1f, 0.23f, 0.12f, 1f));
-        return EnragedSprite!;
-    }
-
-    private static Sprite GetDeathwardSprite()
-    {
-        DeathwardSprite ??= CreateThreeToneIcon(
-            "CreatureManager_DeathwardIcon",
-            GetDeathwardTone,
-            new Color(0.36f, 0.12f, 0.62f, 1f),
-            new Color(0.94f, 0.85f, 1f, 1f),
-            new Color(0.18f, 0.04f, 0.32f, 1f));
-        return DeathwardSprite!;
-    }
-
-    private static Sprite GetSwiftSprite()
-    {
-        SwiftSprite ??= CreateSolidIcon("CreatureManager_SwiftIcon", IsChevronPixel, new Color(0.25f, 0.95f, 0.55f, 1f));
-        return SwiftSprite!;
-    }
-
-    private static Sprite GetRegeneratingSprite()
-    {
-        RegeneratingSprite ??= CreateSolidIcon("CreatureManager_RegeneratingIcon", IsCrossPixel, new Color(0.2f, 0.95f, 0.25f, 1f));
-        return RegeneratingSprite!;
-    }
-
-    private static Sprite GetVampiricSprite()
-    {
-        VampiricSprite ??= CreateThreeToneIcon(
-            "CreatureManager_VampiricIcon",
-            GetVampiricTone,
-            new Color(0.96f, 0.97f, 1f, 1f),
-            new Color(0.92f, 0.94f, 1f, 1f),
-            new Color(0.98f, 0.03f, 0.07f, 1f));
-        return VampiricSprite!;
-    }
-
-    private static Sprite GetFireSprite()
-    {
-        FireSprite ??= CreateTwoToneIcon(
-            "CreatureManager_FireIcon",
-            IsFlamePixel,
-            new Color(1f, 0.2f, 0.02f, 1f),
-            new Color(1f, 0.82f, 0.08f, 1f));
-        return FireSprite!;
-    }
-
-    private static Sprite GetFrostSprite()
-    {
-        FrostSprite ??= CreateSolidIcon("CreatureManager_FrostIcon", IsSnowPixel, new Color(0.35f, 0.85f, 1f, 1f));
-        return FrostSprite!;
-    }
-
-    private static Sprite GetLightningSprite()
-    {
-        LightningSprite ??= CreateSolidIcon("CreatureManager_LightningIcon", IsBoltPixel, new Color(1f, 0.9f, 0.08f, 1f));
-        return LightningSprite!;
-    }
-
-    private static Sprite GetSpiritSprite()
-    {
-        SpiritSprite ??= CreateThreeToneIcon(
-            "CreatureManager_SpiritIcon",
-            GetSpiritTone,
-            new Color(1f, 0.68f, 0.05f, 1f),
-            new Color(1f, 0.95f, 0.6f, 1f),
-            new Color(0.85f, 0.15f, 0.08f, 1f));
-        return SpiritSprite!;
-    }
-
-    private static Sprite GetToxicDeathSprite()
-    {
-        ToxicDeathSprite ??= CreateSolidIcon("CreatureManager_ToxicDeathIcon", IsSkullPixel, new Color(0.45f, 1f, 0.18f, 1f));
-        return ToxicDeathSprite!;
-    }
-
-    private static Sprite GetArmorPiercingSprite()
-    {
-        ArmorPiercingSprite ??= CreateThreeToneIcon(
-            "CreatureManager_ArmorPiercingIcon",
-            GetArmorPiercingTone,
-            new Color(0.48f, 0.75f, 1f, 1f),
-            new Color(0.2f, 0.25f, 0.55f, 1f),
-            new Color(1f, 0.52f, 0.08f, 1f));
-        return ArmorPiercingSprite!;
-    }
-
-    private static Sprite GetStaggeringSprite()
-    {
-        StaggeringSprite ??= CreateThreeToneIcon(
-            "CreatureManager_StaggeringIcon",
-            GetStaggeringTone,
-            new Color(1f, 0.55f, 0.02f, 1f),
-            new Color(1f, 0.86f, 0.12f, 1f),
-            new Color(1f, 0.95f, 0.28f, 1f));
-        return StaggeringSprite!;
-    }
-
-    private static Sprite GetUndodgeableSprite()
-    {
-        UndodgeableSprite ??= CreateTwoToneIcon(
-            "CreatureManager_UndodgeableIcon",
-            IsUndodgeablePixel,
-            new Color(1f, 0.96f, 0.9f, 1f),
-            new Color(1f, 0.12f, 0.08f, 1f));
-        return UndodgeableSprite!;
-    }
-
-    private static Sprite GetAttackSpeedSprite()
-    {
-        AttackSpeedSprite ??= CreateSolidIcon("CreatureManager_AttackSpeedIcon", IsHourglassPixel, new Color(1f, 0.62f, 0.08f, 1f));
-        return AttackSpeedSprite!;
-    }
-
-    private static Sprite GetExposedSprite()
-    {
-        ExposedSprite ??= CreateTwoToneIcon(
-            "CreatureManager_ExposedIcon",
-            IsBrokenShieldPixel,
-            new Color(0.42f, 0.82f, 0.98f, 1f),
-            new Color(0.72f, 0.96f, 1f, 1f));
-        return ExposedSprite!;
-    }
-
-    private static Sprite GetWeakenedSprite()
-    {
-        WeakenedSprite ??= CreateThreeToneIcon(
-            "CreatureManager_WeakenedIcon",
-            GetWeakenedTone,
-            new Color(0.82f, 0.84f, 0.85f, 1f),
-            new Color(0.32f, 0.11f, 0.15f, 1f),
-            new Color(0.96f, 0.68f, 0.24f, 1f));
-        return WeakenedSprite!;
-    }
-
-    private static Sprite GetWitheredSprite()
-    {
-        WitheredSprite ??= CreateSolidIcon("CreatureManager_WitheredIcon", IsWiltedLeafPixel, new Color(0.66f, 0.78f, 0.22f, 1f));
-        return WitheredSprite!;
-    }
-
-    private static Sprite GetReflectionSprite()
-    {
-        ReflectionSprite ??= CreateThreeToneIcon(
-            "CreatureManager_ReflectionIcon",
-            GetReflectionTone,
-            new Color(0.56f, 0.84f, 0.92f, 1f),
-            new Color(0.32f, 0.68f, 1f, 1f),
-            new Color(0.96f, 1f, 1f, 1f));
-        return ReflectionSprite!;
-    }
-
-    private static Sprite GetVortexSprite()
-    {
-        VortexSprite ??= CreateTwoToneIcon(
-            "CreatureManager_VortexIcon",
-            IsSpiralPixel,
-            new Color(0.58f, 0.72f, 0.82f, 1f),
-            new Color(0.36f, 0.55f, 0.68f, 1f));
-        return VortexSprite!;
-    }
-
-    private static Sprite GetCripplingSprite()
-    {
-        CripplingSprite ??= CreateSolidIcon("CreatureManager_CripplingIcon", IsSnarePixel, new Color(0.78f, 0.45f, 1f, 1f));
-        return CripplingSprite!;
-    }
-
-    private static Sprite GetDisruptiveSprite()
-    {
-        DisruptiveSprite ??= CreateSolidIcon("CreatureManager_DisruptiveIcon", IsInterferencePixel, new Color(0.14f, 1f, 0.86f, 1f));
-        return DisruptiveSprite!;
-    }
-
-    private static Sprite GetAdrenalineDrainSprite()
-    {
-        AdrenalineDrainSprite ??= CreateSolidIcon("CreatureManager_AdrenalineDrainIcon", IsAdrenalineDrainPixel, new Color(1f, 0.35f, 0.42f, 1f));
-        return AdrenalineDrainSprite!;
-    }
-
-    private static Sprite GetCorrosiveSprite()
-    {
-        CorrosiveSprite ??= CreateThreeToneIcon(
-            "CreatureManager_CorrosiveIcon",
-            GetCorrosiveTone,
-            new Color(0.72f, 0.78f, 0.81f, 1f),
-            new Color(0.34f, 0.43f, 0.48f, 1f),
-            new Color(0.95f, 0.32f, 0.06f, 1f));
-        return CorrosiveSprite!;
-    }
-
-    private static Sprite GetAdaptiveSprite()
-    {
-        AdaptiveSprite ??= CreateTwoToneIcon(
-            "CreatureManager_AdaptiveIcon",
-            IsAdaptivePixel,
-            new Color(0.7f, 1f, 0.28f, 1f),
-            new Color(0.92f, 1f, 0.58f, 1f));
-        return AdaptiveSprite!;
-    }
-
-    private static Sprite GetUnflinchingSprite()
-    {
-        UnflinchingSprite ??= CreateTwoToneIcon(
-            "CreatureManager_UnflinchingIcon",
-            IsUnflinchingPixel,
-            new Color(0.92f, 0.82f, 0.55f, 1f),
-            new Color(1f, 0.62f, 0.11f, 1f));
-        return UnflinchingSprite!;
-    }
-
-    private static Sprite GetChameleonSprite()
-    {
-        ChameleonSprite ??= CreateTwoToneIcon(
-            "CreatureManager_ChameleonIcon",
-            IsChameleonPixel,
-            new Color(0.1f, 0.78f, 0.62f, 1f),
-            new Color(0.82f, 1f, 0.18f, 1f));
-        return ChameleonSprite!;
-    }
-
-    private static Sprite GetOmenSprite()
-    {
-        OmenSprite ??= CreateTwoToneIcon(
-            "CreatureManager_OmenIcon",
-            IsEyePixel,
-            new Color(0.78f, 0.49f, 1f, 1f),
-            new Color(1f, 0.188f, 0.157f, 1f));
-        return OmenSprite!;
-    }
-
-    private static Sprite GetReapingSprite()
-    {
-        ReapingSprite ??= CreateThreeToneIcon(
-            "CreatureManager_ReapingIcon",
-            GetReapingTone,
-            new Color(0.36f, 0.08f, 0.16f, 1f),
-            new Color(0.48f, 0.28f, 0.13f, 1f),
-            new Color(0.82f, 0.88f, 0.93f, 1f));
-        return ReapingSprite!;
-    }
-
-    private static Sprite GetBlinkSprite()
-    {
-        BlinkSprite ??= CreateTwoToneIcon(
-            "CreatureManager_BlinkIcon",
-            IsBlinkPixel,
-            new Color(0.28f, 0.88f, 1f, 1f),
-            new Color(0.58f, 0.36f, 1f, 1f));
-        return BlinkSprite!;
-    }
-
-    private static Sprite GetKnockbackSprite()
-    {
-        KnockbackSprite ??= CreateSolidIcon("CreatureManager_JuggernautIcon", IsAnchorPixel, new Color(0.82f, 0.72f, 0.48f, 1f));
-        return KnockbackSprite!;
-    }
-
-    private static Sprite GetBlamerSprite()
-    {
-        BlamerSprite ??= CreateThreeToneIcon(
-            "CreatureManager_BlamerIcon",
-            GetBlamerTone,
-            new Color(0.78f, 0.52f, 0.15f, 1f),
-            new Color(0.34f, 0.22f, 0.07f, 1f),
-            new Color(1f, 0.78f, 0.22f, 1f));
-        return BlamerSprite!;
-    }
-
-    private static Sprite GetFallbackStarSprite()
-    {
-        FallbackStarSprite ??= CreateSolidIcon(
-            "CreatureManager_FallbackStarSprite",
-            IsFallbackStarPixel,
-            new Color(1f, 0.78f, 0.22f, 1f));
-        return FallbackStarSprite!;
-    }
-
-    private static Sprite CreateSolidIcon(string name, IconShape shape, Color filled)
-    {
-        return CreateTwoToneIcon(name, shape, filled, filled);
-    }
-
-    private static Sprite CreateTwoToneIcon(string name, IconShape shape, Color filled, Color accent)
-    {
-        Texture2D texture = CreateTexture(name);
+        ModifierIconSpec icon = ModifierIconSource.Get(key);
+        string textureName =
+            "CreatureManager_" + char.ToUpperInvariant(key[0]) + key.Substring(1) + "Icon";
+        Texture2D texture = CreateIconTexture(textureName);
         Color clear = new(0f, 0f, 0f, 0f);
 
         for (int y = 0; y < texture.height; y++)
         {
             for (int x = 0; x < texture.width; x++)
             {
-                bool active = shape(x, y, out bool useAccent);
-                texture.SetPixel(x, y, active ? useAccent ? accent : filled : clear);
-            }
-        }
-
-        texture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
-        return Sprite.Create(texture, new Rect(0f, 0f, texture.width, texture.height), new Vector2(0.5f, 0.5f), texture.width);
-    }
-
-    private static Sprite CreateThreeToneIcon(
-        string name,
-        IconToneShape shape,
-        Color primary,
-        Color secondary,
-        Color accent)
-    {
-        Texture2D texture = CreateTexture(name);
-        Color clear = new(0f, 0f, 0f, 0f);
-
-        for (int y = 0; y < texture.height; y++)
-        {
-            for (int x = 0; x < texture.width; x++)
-            {
-                Color color = shape(x, y) switch
-                {
-                    IconTone.Primary => primary,
-                    IconTone.Secondary => secondary,
-                    IconTone.Accent => accent,
-                    _ => clear
-                };
+                ModifierIconTone tone = icon.GetTone(x, y);
+                Color color = tone == ModifierIconTone.Clear
+                    ? clear
+                    : ToUnityColor(icon.GetColor(tone));
                 texture.SetPixel(x, y, color);
             }
         }
 
         texture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
-        return Sprite.Create(texture, new Rect(0f, 0f, texture.width, texture.height), new Vector2(0.5f, 0.5f), texture.width);
+        return Sprite.Create(
+            texture,
+            new Rect(0f, 0f, texture.width, texture.height),
+            new Vector2(0.5f, 0.5f),
+            texture.width);
     }
 
-    private static Texture2D CreateTexture(string name)
+    private static Color ToUnityColor(ModifierIconColor color)
     {
-        Texture2D texture = new(64, 64, TextureFormat.RGBA32, mipChain: false)
+        return new Color32(color.Red, color.Green, color.Blue, byte.MaxValue);
+    }
+
+    private static Sprite GetFallbackStarSprite()
+    {
+        if (FallbackStarSprite != null)
+        {
+            return FallbackStarSprite;
+        }
+
+        Texture2D texture = CreateIconTexture("CreatureManager_FallbackStarSprite");
+        Color filled = new(1f, 0.78f, 0.22f, 1f);
+        Color clear = new(0f, 0f, 0f, 0f);
+        for (int y = 0; y < texture.height; y++)
+        {
+            for (int x = 0; x < texture.width; x++)
+            {
+                bool active = IsFallbackStarPixel(x, y);
+                texture.SetPixel(x, y, active ? filled : clear);
+            }
+        }
+
+        texture.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+        FallbackStarSprite = Sprite.Create(
+            texture,
+            new Rect(0f, 0f, texture.width, texture.height),
+            new Vector2(0.5f, 0.5f),
+            texture.width);
+        return FallbackStarSprite;
+    }
+
+    private static Texture2D CreateIconTexture(string name)
+    {
+        return new Texture2D(
+            ModifierIconSource.Size,
+            ModifierIconSource.Size,
+            TextureFormat.RGBA32,
+            mipChain: false)
         {
             name = name,
             filterMode = FilterMode.Bilinear,
             wrapMode = TextureWrapMode.Clamp
         };
-        return texture;
-    }
-
-    private static readonly Vector2[] CuirassOuterPolygon =
-    {
-        new(10f, 58f), new(23f, 61f), new(41f, 61f), new(54f, 58f), new(52f, 48f),
-        new(57f, 39f), new(52f, 32f), new(49f, 11f), new(32f, 5f), new(15f, 11f),
-        new(12f, 32f), new(7f, 39f), new(12f, 48f)
-    };
-    private static readonly Vector2[] VampiricLeftOuterFangPolygon =
-    {
-        new(7f, 49f), new(20f, 49f), new(22f, 46f), new(21f, 34f), new(18f, 12f),
-        new(14f, 21f), new(9f, 36f)
-    };
-    private static readonly Vector2[] VampiricRightOuterFangPolygon =
-    {
-        new(44f, 49f), new(57f, 49f), new(55f, 36f), new(50f, 12f), new(46f, 21f),
-        new(43f, 34f), new(42f, 46f)
-    };
-    private static readonly Vector2[] VampiricLeftInnerToothPolygon =
-    {
-        new(23f, 49f), new(31f, 49f), new(31f, 31f), new(29f, 27f), new(25f, 27f), new(23f, 31f)
-    };
-    private static readonly Vector2[] VampiricRightInnerToothPolygon =
-    {
-        new(33f, 49f), new(41f, 49f), new(41f, 31f), new(39f, 27f), new(35f, 27f), new(33f, 31f)
-    };
-    private static readonly Vector2[] VampiricDropPolygon =
-    {
-        new(32f, 23f), new(27f, 14f), new(28f, 8f), new(32f, 5f), new(36f, 8f), new(37f, 14f)
-    };
-    private static readonly Vector2[] FlameOuterPolygon =
-    {
-        new(34f, 61f), new(40f, 52f), new(43f, 44f), new(49f, 35f), new(53f, 26f),
-        new(51f, 16f), new(45f, 8f), new(36f, 4f), new(27f, 5f), new(18f, 10f),
-        new(12f, 18f), new(9f, 28f), new(11f, 39f), new(17f, 49f), new(25f, 56f)
-    };
-    private static readonly Vector2[] FlameInnerPolygon =
-    {
-        new(32f, 40f), new(38f, 32f), new(41f, 24f), new(39f, 16f),
-        new(33f, 11f), new(27f, 14f), new(23f, 21f), new(24f, 29f)
-    };
-    private static readonly Vector2[] BoltPolygon =
-    {
-        new(36f, 58f), new(16f, 29f), new(29f, 29f), new(24f, 6f), new(49f, 38f), new(35f, 38f)
-    };
-    private static readonly Vector2[] StaggeringCenterStarPolygon =
-    {
-        new(30f, 57f), new(35f, 41f), new(51f, 36f), new(35f, 31f),
-        new(30f, 15f), new(25f, 31f), new(10f, 36f), new(25f, 41f)
-    };
-    private static readonly Vector2[] StaggeringSmallStarPolygon =
-    {
-        new(14f, 61f), new(17f, 54f), new(24f, 51f), new(17f, 48f),
-        new(14f, 41f), new(11f, 48f), new(4f, 51f), new(11f, 54f)
-    };
-    private static readonly Vector2[] AdaptiveCorePolygon =
-    {
-        new(31.5f, 40f), new(39f, 35.5f), new(39f, 27.5f),
-        new(31.5f, 23f), new(24f, 27.5f), new(24f, 35.5f)
-    };
-    private static readonly Vector2[] ReapingHoodPolygon =
-    {
-        new(32f, 55f), new(23f, 46f), new(21f, 37f), new(26f, 31f),
-        new(38f, 31f), new(43f, 38f), new(40f, 48f)
-    };
-    private static readonly Vector2[] ReapingRobePolygon =
-    {
-        new(25f, 34f), new(39f, 34f), new(43f, 25f), new(40f, 18f),
-        new(46f, 7f), new(18f, 7f), new(24f, 20f), new(21f, 28f)
-    };
-    private static readonly Vector2[] ReapingBladePolygon =
-    {
-        new(9f, 49f), new(14f, 59f), new(28f, 62f), new(43f, 60f), new(57f, 52f),
-        new(49f, 53f), new(38f, 55f), new(28f, 55f), new(18f, 52f), new(13f, 44f)
-    };
-    private static readonly Vector2[] BrokenShieldPolygon =
-    {
-        new(11f, 53f), new(53f, 53f), new(53f, 32f), new(49f, 20f), new(41f, 12f),
-        new(31.5f, 6f), new(23f, 12f), new(15f, 20f), new(11f, 32f)
-    };
-    private static readonly Vector2[] ArmorPiercingShieldPolygon =
-    {
-        new(13f, 53f), new(48f, 56f), new(54f, 48f), new(53f, 31f), new(48f, 19f),
-        new(34f, 7f), new(20f, 13f), new(12f, 26f), new(10f, 42f)
-    };
-    private static readonly Vector2[] ArmorPiercingCrackPolygon =
-    {
-        new(29f, 48f), new(35f, 42f), new(33f, 38f), new(40f, 35f), new(36f, 31f),
-        new(43f, 27f), new(38f, 22f), new(34f, 24f), new(29f, 18f), new(26f, 24f),
-        new(22f, 21f), new(23f, 28f), new(18f, 31f), new(24f, 35f), new(21f, 39f),
-        new(27f, 41f), new(26f, 46f)
-    };
-    private static readonly Vector2[] ArmorPiercingArrowHeadPolygon =
-    {
-        new(4f, 4f), new(8f, 22f), new(13f, 17f), new(20f, 20f), new(17f, 13f), new(22f, 8f)
-    };
-    private static readonly Vector2[] UndodgeableOuterPolygon =
-    {
-        new(32f, 45f), new(45f, 32f), new(32f, 19f), new(19f, 32f)
-    };
-    private static readonly Vector2[] UndodgeableInnerPolygon =
-    {
-        new(32f, 38f), new(38f, 32f), new(32f, 26f), new(26f, 32f)
-    };
-    private static readonly Vector2[] WeakenedAttachedBladePolygon =
-    {
-        new(21f, 36f), new(29f, 39f), new(42f, 19f), new(39f, 14f),
-        new(36f, 16f), new(32f, 12f), new(27f, 20f)
-    };
-    private static readonly Vector2[] WeakenedTipBladePolygon =
-    {
-        new(44f, 25f), new(53f, 33f), new(61f, 51f), new(48f, 46f), new(41f, 37f), new(47f, 33f)
-    };
-    private static readonly Vector2[] WeakenedAttachedGoldEdgePolygon =
-    {
-        new(19f, 36f), new(22f, 35f), new(29f, 18f), new(33f, 11f), new(31f, 9f), new(26f, 17f)
-    };
-    private static readonly Vector2[] WeakenedTipGoldEdgePolygon =
-    {
-        new(43f, 24f), new(53f, 32f), new(62f, 51f), new(59f, 46f), new(51f, 34f), new(46f, 27f)
-    };
-    private static readonly Vector2[] WeakenedGuardPolygon =
-    {
-        new(7f, 34f), new(14f, 35f), new(22f, 39f), new(31f, 47f),
-        new(32f, 51f), new(27f, 47f), new(20f, 42f), new(12f, 38f)
-    };
-    private static readonly Vector2[] WiltedLeafLeftPolygon =
-    {
-        new(31f, 33f), new(9f, 48f), new(26f, 55f)
-    };
-    private static readonly Vector2[] WiltedLeafRightPolygon =
-    {
-        new(34f, 27f), new(55f, 40f), new(39f, 49f)
-    };
-    private static readonly Vector2[] ReflectionShieldPolygon =
-    {
-        new(34f, 55f), new(54f, 50f), new(54f, 32f), new(50f, 20f),
-        new(41f, 11f), new(33f, 16f), new(28f, 26f), new(27f, 40f)
-    };
-    private static readonly Vector2[] ReflectionArrowHeadPolygon =
-    {
-        new(6f, 5f), new(10f, 21f), new(21f, 10f)
-    };
-    private static readonly Vector2[] AdrenalineDrainArrowPolygon =
-    {
-        new(37f, 25f), new(61f, 25f), new(49f, 10f)
-    };
-    private static readonly Vector2[] CorrosiveOuterPolygon =
-    {
-        new(14f, 54f), new(43f, 54f), new(56f, 34f), new(47f, 11f), new(18f, 10f), new(6f, 31f)
-    };
-    private static readonly Vector2[] BlinkArrowPolygon =
-    {
-        new(43f, 32f), new(30f, 22f), new(30f, 42f)
-    };
-    private static readonly Vector2[] AnchorLeftFlukePolygon =
-    {
-        new(6f, 15f), new(22f, 12f), new(18f, 3f)
-    };
-    private static readonly Vector2[] AnchorUpperFlukePolygon =
-    {
-        new(50f, 59f), new(54f, 41f), new(63f, 43f)
-    };
-    private static readonly Vector2[] BlamerBellPolygon =
-    {
-        new(32f, 57f), new(24f, 55f), new(19f, 50f), new(17f, 43f), new(17f, 31f),
-        new(15f, 24f), new(11f, 18f), new(10f, 14f), new(13f, 11f), new(51f, 11f),
-        new(54f, 14f), new(53f, 18f), new(49f, 24f), new(47f, 31f), new(47f, 43f),
-        new(45f, 50f), new(40f, 55f)
-    };
-
-    private static bool IsCuirassPixel(int x, int y, out bool isAccent)
-    {
-        isAccent = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool outer = IsPointInPolygon(point, CuirassOuterPolygon);
-        bool neck = Vector2.Distance(point, new Vector2(32f, 62f)) <= 10.5f;
-        bool leftArmhole = Vector2.Distance(point, new Vector2(4f, 49f)) <= 11.5f;
-        bool rightArmhole = Vector2.Distance(point, new Vector2(60f, 49f)) <= 11.5f;
-        return outer && !neck && !leftArmhole && !rightArmhole;
-    }
-
-    private static bool IsSwordPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-
-        if (IsSwordBladePixel(point, out isBorder))
-        {
-            return true;
-        }
-
-        if (IsSwordGuardPixel(point, out isBorder))
-        {
-            return true;
-        }
-
-        return IsSwordGripPixel(point, out isBorder);
-    }
-
-    private static IconTone GetDeathwardTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool body = point.x >= 15f && point.x <= 49f && point.y >= 14f && point.y <= 43f;
-        bool arch = Vector2.Distance(point, new Vector2(32f, 43f)) <= 17f && point.y >= 43f;
-        bool tombstone = body || arch;
-        bool cross = tombstone &&
-                     (Mathf.Abs(point.x - 32f) <= 3.5f && point.y >= 23f && point.y <= 48f ||
-                      Mathf.Abs(point.y - 37f) <= 3.5f && point.x >= 23f && point.x <= 41f);
-        bool baseStone = point.x >= 10f && point.x <= 54f && point.y >= 7f && point.y <= 14f;
-
-        if (cross)
-        {
-            return IconTone.Secondary;
-        }
-
-        if (baseStone)
-        {
-            return IconTone.Accent;
-        }
-
-        return tombstone ? IconTone.Primary : IconTone.Clear;
-    }
-
-    private static bool IsChevronPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool first = IsThickLine(point, new Vector2(10f, 16f), new Vector2(31f, 32f), 5f) ||
-                     IsThickLine(point, new Vector2(31f, 32f), new Vector2(10f, 48f), 5f);
-        bool second = IsThickLine(point, new Vector2(28f, 16f), new Vector2(49f, 32f), 5f) ||
-                      IsThickLine(point, new Vector2(49f, 32f), new Vector2(28f, 48f), 5f);
-        return first || second;
-    }
-
-    private static bool IsCrossPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        return (x >= 25 && x <= 38 && y >= 9 && y <= 55) ||
-               (x >= 9 && x <= 55 && y >= 25 && y <= 38);
-    }
-
-    private static IconTone GetVampiricTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool outerFangs = IsPointInPolygon(point, VampiricLeftOuterFangPolygon) ||
-                          IsPointInPolygon(point, VampiricRightOuterFangPolygon);
-        bool innerTeeth = IsPointInPolygon(point, VampiricLeftInnerToothPolygon) ||
-                          IsPointInPolygon(point, VampiricRightInnerToothPolygon);
-        bool drop = IsPointInPolygon(point, VampiricDropPolygon);
-
-        if (drop)
-        {
-            return IconTone.Accent;
-        }
-
-        if (innerTeeth)
-        {
-            return IconTone.Secondary;
-        }
-
-        return outerFangs ? IconTone.Primary : IconTone.Clear;
-    }
-
-    private static bool IsFlamePixel(int x, int y, out bool isBorder)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool outer = IsPointInPolygon(point, FlameOuterPolygon);
-        bool inner = IsPointInPolygon(point, FlameInnerPolygon);
-        isBorder = outer && inner;
-        return outer;
-    }
-
-    private static bool IsSnowPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        return IsThickLine(point, new Vector2(10f, 32f), new Vector2(54f, 32f), 2.5f) ||
-               IsThickLine(point, new Vector2(32f, 10f), new Vector2(32f, 54f), 2.5f) ||
-               IsThickLine(point, new Vector2(16f, 16f), new Vector2(48f, 48f), 2.5f) ||
-               IsThickLine(point, new Vector2(16f, 48f), new Vector2(48f, 16f), 2.5f);
-    }
-
-    private static bool IsBoltPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        return IsPointInPolygon(point, BoltPolygon);
-    }
-
-    private static bool IsSkullPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool head = Vector2.Distance(point, new Vector2(31.5f, 36f)) <= 20f;
-        bool jaw = x >= 21 && x <= 42 && y >= 10 && y <= 28;
-        bool eyeLeft = Vector2.Distance(point, new Vector2(24f, 39f)) <= 4f;
-        bool eyeRight = Vector2.Distance(point, new Vector2(39f, 39f)) <= 4f;
-        bool nose = Mathf.Abs(point.x - 31.5f) + Mathf.Abs(point.y - 28f) <= 5f;
-        return (head || jaw) && !eyeLeft && !eyeRight && !nose;
-    }
-
-    private static IconTone GetStaggeringTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        const float radians = 20f * Mathf.Deg2Rad;
-        float dx = point.x - 32f;
-        float dy = point.y - 31f;
-        float orbitX = dx * Mathf.Cos(radians) + dy * Mathf.Sin(radians);
-        float orbitY = -dx * Mathf.Sin(radians) + dy * Mathf.Cos(radians);
-        float outer = orbitX * orbitX / (29f * 29f) + orbitY * orbitY / (17f * 17f);
-        float inner = orbitX * orbitX / (23f * 23f) + orbitY * orbitY / (11f * 11f);
-        bool orbit = outer <= 1f && inner >= 1f;
-        bool centerStar = IsPointInPolygon(point, StaggeringCenterStarPolygon);
-        bool smallStar = IsPointInPolygon(point, StaggeringSmallStarPolygon);
-
-        if (centerStar)
-        {
-            return IconTone.Accent;
-        }
-
-        if (smallStar)
-        {
-            return IconTone.Secondary;
-        }
-
-        return orbit ? IconTone.Primary : IconTone.Clear;
-    }
-
-    private static bool IsHourglassPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool top = IsThickLine(point, new Vector2(18f, 52f), new Vector2(46f, 52f), 3f);
-        bool bottom = IsThickLine(point, new Vector2(18f, 12f), new Vector2(46f, 12f), 3f);
-        bool left = IsThickLine(point, new Vector2(20f, 49f), new Vector2(31.5f, 32f), 3.5f) ||
-                    IsThickLine(point, new Vector2(31.5f, 32f), new Vector2(20f, 15f), 3.5f);
-        bool right = IsThickLine(point, new Vector2(44f, 49f), new Vector2(31.5f, 32f), 3.5f) ||
-                     IsThickLine(point, new Vector2(31.5f, 32f), new Vector2(44f, 15f), 3.5f);
-        bool sand = Mathf.Abs(point.x - 31.5f) <= 5f && point.y >= 27f && point.y <= 37f;
-        return top || bottom || left || right || sand;
-    }
-
-    private static bool IsSpiralPixel(int x, int y, out bool isBorder)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        Vector2 center = new(31.5f, 31.5f);
-        Vector2 delta = point - center;
-        float radius = delta.magnitude;
-        const float innerRadius = 5f;
-        const float outerRadius = 28f;
-        if (radius < innerRadius || radius > outerRadius)
-        {
-            isBorder = false;
-            return false;
-        }
-
-        float angle = -Mathf.Atan2(delta.y, delta.x);
-        float radialProgress = Mathf.InverseLerp(innerRadius, outerRadius, radius);
-        const float sectorAngle = Mathf.PI * 2f / 5f;
-        float bladeCenter = Mathf.Lerp(0.08f, 0.83f, radialProgress);
-        float bladeOffset = Mathf.Repeat(angle - bladeCenter + sectorAngle * 0.5f, sectorAngle) - sectorAngle * 0.5f;
-        float halfWidth = 0.035f + 0.38f * Mathf.Pow(Mathf.Sin(Mathf.PI * radialProgress), 0.7f);
-        bool blade = Mathf.Abs(bladeOffset) <= halfWidth;
-        isBorder = blade && bladeOffset < -halfWidth * 0.42f;
-        return blade;
-    }
-
-    private static bool IsSnarePixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool shackle = Vector2.Distance(point, new Vector2(31.5f, 38f)) <= 17f &&
-                       Vector2.Distance(point, new Vector2(31.5f, 38f)) >= 10f &&
-                       point.y >= 28f;
-        bool chain = IsThickLine(point, new Vector2(20f, 24f), new Vector2(44f, 14f), 3f) ||
-                     IsThickLine(point, new Vector2(26f, 17f), new Vector2(38f, 28f), 3f);
-        bool foot = IsThickLine(point, new Vector2(19f, 10f), new Vector2(49f, 10f), 3f);
-        return shackle || chain || foot;
-    }
-
-    private static bool IsAdaptivePixel(int x, int y, out bool isCore)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        Vector2 center = new(31.5f, 31.5f);
-        Vector2 delta = point - center;
-        float radius = delta.magnitude;
-        float angle = Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg;
-        float localAngle = Mathf.Repeat(angle + 360f, 120f);
-        bool arrowBody = radius is >= 19f and <= 24.5f && localAngle is >= 8f and <= 86f;
-        bool arrowHead = IsAdaptiveArrowHead(point, center, 88f) ||
-                         IsAdaptiveArrowHead(point, center, 208f) ||
-                         IsAdaptiveArrowHead(point, center, 328f);
-
-        isCore = IsPointInPolygon(point, AdaptiveCorePolygon);
-        return arrowBody || arrowHead || isCore;
-    }
-
-    private static bool IsAdaptiveArrowHead(Vector2 point, Vector2 center, float angleDegrees)
-    {
-        float radians = angleDegrees * Mathf.Deg2Rad;
-        Vector2 radial = new(Mathf.Cos(radians), Mathf.Sin(radians));
-        Vector2 tangent = new(-radial.y, radial.x);
-        Vector2 relative = point - (center + radial * 21.75f);
-        float forward = Vector2.Dot(relative, tangent);
-        if (forward < -3.5f || forward > 8f)
-        {
-            return false;
-        }
-
-        float halfWidth = Mathf.Lerp(6.5f, 0f, (forward + 3.5f) / 11.5f);
-        return Mathf.Abs(Vector2.Dot(relative, radial)) <= halfWidth;
-    }
-
-    private static bool IsEyePixel(int x, int y, out bool isPupil)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        Vector2 center = new(31.5f, 31.5f);
-        float dx = Mathf.Abs(point.x - center.x);
-        float dy = Mathf.Abs(point.y - center.y);
-        bool eye = dx / 27f + dy / 18f <= 1f;
-        bool pupil = Vector2.Distance(point, center) <= 8.5f;
-        bool border = eye && dx / 20f + dy / 11f >= 1f;
-        isPupil = pupil;
-        return border || pupil;
-    }
-
-    private static IconTone GetReapingTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool hood = IsPointInPolygon(point, ReapingHoodPolygon);
-        bool robe = IsPointInPolygon(point, ReapingRobePolygon);
-        bool faceOpening = Vector2.Distance(point, new Vector2(32f, 41.5f)) <= 5.2f;
-        bool figure = (hood || robe) && !faceOpening;
-
-        bool handle = IsThickLine(point, new Vector2(13f, 49f), new Vector2(22f, 35f), 2.4f) ||
-                      IsThickLine(point, new Vector2(22f, 35f), new Vector2(49f, 7f), 2.4f);
-        bool blade = IsPointInPolygon(point, ReapingBladePolygon);
-
-        if (blade)
-        {
-            return IconTone.Accent;
-        }
-
-        if (handle)
-        {
-            return IconTone.Secondary;
-        }
-
-        return figure ? IconTone.Primary : IconTone.Clear;
-    }
-
-    private static IconTone GetSpiritTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 4.5f);
-        float loopX = (point.x - 32f) / 10f;
-        float loopY = (point.y - 46f) / 13f;
-        float innerX = (point.x - 32f) / 4.5f;
-        float innerY = (point.y - 46f) / 7f;
-        bool loop = loopX * loopX + loopY * loopY <= 1f && innerX * innerX + innerY * innerY >= 1f;
-        bool stem = Mathf.Abs(point.x - 32f) <= 3.5f && point.y >= 9f && point.y <= 38f;
-        bool cross = Mathf.Abs(point.y - 31f) <= 3.5f && point.x >= 17f && point.x <= 47f;
-        bool ankh = loop || stem || cross;
-        bool jewel = Vector2.Distance(point, new Vector2(32f, 31f)) <= 3.2f;
-
-        if (jewel)
-        {
-            return IconTone.Accent;
-        }
-
-        if (ankh)
-        {
-            return IconTone.Primary;
-        }
-
-        return IconTone.Clear;
-    }
-
-    private static bool IsBrokenShieldPixel(int x, int y, out bool isRightHalf)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool crack = IsThickLine(point, new Vector2(31f, 5f), new Vector2(36f, 14f), 3.2f) ||
-                     IsThickLine(point, new Vector2(36f, 14f), new Vector2(28f, 25f), 3.2f) ||
-                     IsThickLine(point, new Vector2(28f, 25f), new Vector2(36f, 35f), 3.2f) ||
-                     IsThickLine(point, new Vector2(36f, 35f), new Vector2(27f, 45f), 3.2f) ||
-                     IsThickLine(point, new Vector2(27f, 45f), new Vector2(34f, 55f), 3.2f);
-        isRightHalf = point.x > GetBrokenShieldCrackX(point.y);
-        return IsPointInPolygon(point, BrokenShieldPolygon) && !crack;
-    }
-
-    private static float GetBrokenShieldCrackX(float y)
-    {
-        if (y <= 14f) return Mathf.Lerp(31f, 36f, Mathf.InverseLerp(5f, 14f, y));
-        if (y <= 25f) return Mathf.Lerp(36f, 28f, Mathf.InverseLerp(14f, 25f, y));
-        if (y <= 35f) return Mathf.Lerp(28f, 36f, Mathf.InverseLerp(25f, 35f, y));
-        if (y <= 45f) return Mathf.Lerp(36f, 27f, Mathf.InverseLerp(35f, 45f, y));
-        return Mathf.Lerp(27f, 34f, Mathf.InverseLerp(45f, 55f, y));
-    }
-
-    private static IconTone GetArmorPiercingTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool shield = IsPointInPolygon(point, ArmorPiercingShieldPolygon);
-        bool crack = shield && IsPointInPolygon(point, ArmorPiercingCrackPolygon);
-        bool arrowShaft = IsThickLine(point, new Vector2(30f, 30f), new Vector2(56f, 56f), 4.8f);
-        bool arrowHead = IsPointInPolygon(point, ArmorPiercingArrowHeadPolygon);
-
-        if (arrowShaft || arrowHead)
-        {
-            return IconTone.Accent;
-        }
-
-        if (crack)
-        {
-            return IconTone.Secondary;
-        }
-
-        if (shield)
-        {
-            return IconTone.Primary;
-        }
-
-        return IconTone.Clear;
-    }
-
-    private static bool IsUndodgeablePixel(int x, int y, out bool isMiddleDiamond)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool corners =
-            IsThickLine(point, new Vector2(8f, 54f), new Vector2(23f, 54f), 2.5f) ||
-            IsThickLine(point, new Vector2(8f, 54f), new Vector2(8f, 39f), 2.5f) ||
-            IsThickLine(point, new Vector2(41f, 54f), new Vector2(56f, 54f), 2.5f) ||
-            IsThickLine(point, new Vector2(56f, 54f), new Vector2(56f, 39f), 2.5f) ||
-            IsThickLine(point, new Vector2(8f, 10f), new Vector2(23f, 10f), 2.5f) ||
-            IsThickLine(point, new Vector2(8f, 10f), new Vector2(8f, 25f), 2.5f) ||
-            IsThickLine(point, new Vector2(41f, 10f), new Vector2(56f, 10f), 2.5f) ||
-            IsThickLine(point, new Vector2(56f, 10f), new Vector2(56f, 25f), 2.5f);
-        bool outer = IsPointInPolygon(point, UndodgeableOuterPolygon);
-        bool inner = IsPointInPolygon(point, UndodgeableInnerPolygon);
-        bool diamond = outer && !inner;
-        bool center = Vector2.Distance(point, new Vector2(32f, 32f)) <= 3.5f;
-        isMiddleDiamond = diamond;
-        return corners || diamond || center;
-    }
-
-    private static IconTone GetWeakenedTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool attachedBlade = IsPointInPolygon(point, WeakenedAttachedBladePolygon);
-        bool tipBlade = IsPointInPolygon(point, WeakenedTipBladePolygon);
-        bool attachedGoldEdge = IsPointInPolygon(point, WeakenedAttachedGoldEdgePolygon);
-        bool tipGoldEdge = IsPointInPolygon(point, WeakenedTipGoldEdgePolygon);
-        bool grip = IsThickLine(point, new Vector2(14f, 53f), new Vector2(23f, 42f), 4.2f);
-        bool guard = IsPointInPolygon(point, WeakenedGuardPolygon);
-        bool pommel = Vector2.Distance(point, new Vector2(11f, 57f)) <= 5f;
-
-        if (grip || guard)
-        {
-            return IconTone.Secondary;
-        }
-
-        if (pommel || attachedGoldEdge || tipGoldEdge)
-        {
-            return IconTone.Accent;
-        }
-
-        return attachedBlade || tipBlade ? IconTone.Primary : IconTone.Clear;
-    }
-
-    private static bool IsWiltedLeafPixel(int x, int y, out bool isBorder)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool stem = IsThickLine(point, new Vector2(27f, 8f), new Vector2(38f, 56f), 2.6f);
-        bool leafLeft = IsPointInPolygon(point, WiltedLeafLeftPolygon);
-        bool leafRight = IsPointInPolygon(point, WiltedLeafRightPolygon);
-        bool droop = IsThickLine(point, new Vector2(35f, 20f), new Vector2(50f, 12f), 3f);
-        isBorder = stem || droop;
-        return stem || leafLeft || leafRight || droop;
-    }
-
-    private static IconTone GetReflectionTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool shield = IsPointInPolygon(point, ReflectionShieldPolygon);
-        bool reflectedPath = IsThickLine(point, new Vector2(7f, 54f), new Vector2(34f, 34f), 3.4f) ||
-                             IsThickLine(point, new Vector2(34f, 31f), new Vector2(10f, 8f), 3.6f) ||
-                             IsPointInPolygon(point, ReflectionArrowHeadPolygon);
-        bool impact = IsFivePointStarPixel(point, new Vector2(34f, 33f), 10f, 4.3f);
-
-        if (impact)
-        {
-            return IconTone.Accent;
-        }
-
-        if (reflectedPath)
-        {
-            return IconTone.Secondary;
-        }
-
-        return shield ? IconTone.Primary : IconTone.Clear;
-    }
-
-    private static bool IsInterferencePixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool wave1 = point.x >= 8f &&
-                     point.x <= 56f &&
-                     Mathf.Abs(point.y - (22f + 5f * Mathf.Sin((point.x - 8f) * 0.22f))) <= 2.3f;
-        bool wave2 = point.x >= 8f &&
-                     point.x <= 56f &&
-                     Mathf.Abs(point.y - (36f + 5f * Mathf.Sin((point.x - 8f) * 0.22f + Mathf.PI))) <= 2.3f;
-        return wave1 || wave2;
-    }
-
-    private static bool IsAdrenalineDrainPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool pulse = IsThickLine(point, new Vector2(6f, 40f), new Vector2(18f, 40f), 2.5f) ||
-                     IsThickLine(point, new Vector2(18f, 40f), new Vector2(24f, 50f), 2.5f) ||
-                     IsThickLine(point, new Vector2(24f, 50f), new Vector2(31f, 28f), 2.5f) ||
-                     IsThickLine(point, new Vector2(31f, 28f), new Vector2(38f, 40f), 2.5f) ||
-                     IsThickLine(point, new Vector2(38f, 40f), new Vector2(49f, 40f), 2.5f);
-        bool shaft = IsThickLine(point, new Vector2(49f, 52f), new Vector2(49f, 20f), 3f);
-        bool arrow = IsPointInPolygon(point, AdrenalineDrainArrowPolygon);
-        return pulse || shaft || arrow;
-    }
-
-    private static IconTone GetCorrosiveTone(int x, int y)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        bool outer = IsPointInPolygon(point, CorrosiveOuterPolygon);
-        bool centerHole = Vector2.Distance(point, new Vector2(31f, 32f)) <= 13f;
-        bool brokenEdge = Vector2.Distance(point, new Vector2(54f, 33f)) <= 6.5f ||
-                          Vector2.Distance(point, new Vector2(48f, 50f)) <= 4.5f ||
-                          Vector2.Distance(point, new Vector2(49f, 14f)) <= 4.5f;
-        bool body = outer && !centerHole && !brokenEdge;
-        if (!body)
-        {
-            return IconTone.Clear;
-        }
-
-        bool oxide = Vector2.Distance(point, new Vector2(43f, 47f)) <= 2.5f ||
-                     Vector2.Distance(point, new Vector2(48f, 40f)) <= 2.5f ||
-                     Vector2.Distance(point, new Vector2(43f, 20f)) <= 2.5f ||
-                     Vector2.Distance(point, new Vector2(47f, 16f)) <= 2.2f;
-        if (oxide)
-        {
-            return IconTone.Secondary;
-        }
-
-        bool rust = Vector2.Distance(point, new Vector2(44f, 44f)) <= 9f ||
-                    Vector2.Distance(point, new Vector2(45f, 19f)) <= 8f ||
-                    point.x >= 49f;
-        if (rust)
-        {
-            return IconTone.Accent;
-        }
-
-        return IconTone.Primary;
-    }
-
-    private static bool IsBlinkPixel(int x, int y, out bool isPortal)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        Vector2 center = new(32f, 32f);
-        float radius = Vector2.Distance(point, center);
-        bool portal = radius >= 17f && radius <= 23f && point.x >= 14f;
-        bool dash = IsThickLine(point, new Vector2(8f, 32f), new Vector2(35f, 32f), 3.5f);
-        bool arrow = IsPointInPolygon(point, BlinkArrowPolygon);
-        isPortal = portal;
-        return portal || dash || arrow;
-    }
-
-    private static bool IsThickLine(Vector2 point, Vector2 start, Vector2 end, float width)
-    {
-        Vector2 axis = end - start;
-        float length = axis.magnitude;
-        if (length <= 0f)
-        {
-            return false;
-        }
-
-        Vector2 direction = axis / length;
-        Vector2 delta = point - start;
-        float along = Vector2.Dot(delta, direction);
-        if (along < 0f || along > length)
-        {
-            return false;
-        }
-
-        float distance = Mathf.Abs(Vector2.Dot(delta, new Vector2(-direction.y, direction.x)));
-        return distance <= width;
-    }
-
-    private static bool IsUnflinchingPixel(int x, int y, out bool isStar)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        Vector2 center = new(31.5f, 32f);
-        Vector2 ellipsePoint = new(point.x - center.x, (point.y - center.y) * 1.5f);
-        float ellipseRadius = ellipsePoint.magnitude;
-        float angle = Mathf.Atan2(ellipsePoint.y, ellipsePoint.x) * Mathf.Rad2Deg;
-        bool upperArc = ellipseRadius is >= 20.5f and <= 27.5f && angle is >= 18f and <= 162f;
-        bool lowerArc = ellipseRadius is >= 20.5f and <= 27.5f && angle is >= -162f and <= -18f;
-        bool stars = IsFivePointStarPixel(point, new Vector2(18f, 21f), 10f, 4.5f) ||
-                     IsFivePointStarPixel(point, new Vector2(45f, 46f), 9f, 4f);
-        isStar = stars;
-        return upperArc || lowerArc || stars;
     }
 
     private static bool IsFivePointStarPixel(Vector2 point, Vector2 center, float outerRadius, float innerRadius)
@@ -11341,9 +11331,8 @@ internal static class CreatureModifierManager
         return inside;
     }
 
-    private static bool IsFallbackStarPixel(int x, int y, out bool isAccent)
+    private static bool IsFallbackStarPixel(int x, int y)
     {
-        isAccent = false;
         return IsFivePointStarPixel(new Vector2(x + 0.5f, y + 0.5f), new Vector2(32f, 32f), 27f, 12f);
     }
 
@@ -11358,160 +11347,4 @@ internal static class CreatureModifierManager
         return center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
     }
 
-    private static bool IsAnchorPixel(int x, int y, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        Vector2 ringCenter = new(13f, 51f);
-        float ringRadius = Vector2.Distance(point, ringCenter);
-        bool ring = ringRadius is >= 5.5f and <= 10f;
-        bool shaft = IsThickLine(point, new Vector2(18f, 45f), new Vector2(46f, 17f), 3.8f);
-        bool crossbar = IsThickLine(point, new Vector2(15f, 29f), new Vector2(35f, 49f), 3.6f);
-        bool curvedArms = IsThickLine(point, new Vector2(17f, 9f), new Vector2(28f, 6f), 4f) ||
-                          IsThickLine(point, new Vector2(28f, 6f), new Vector2(40f, 7f), 4f) ||
-                          IsThickLine(point, new Vector2(40f, 7f), new Vector2(50f, 14f), 4f) ||
-                          IsThickLine(point, new Vector2(50f, 14f), new Vector2(56f, 25f), 4f) ||
-                          IsThickLine(point, new Vector2(56f, 25f), new Vector2(58f, 38f), 4f) ||
-                          IsThickLine(point, new Vector2(58f, 38f), new Vector2(56f, 47f), 4f);
-        bool leftFluke = IsPointInPolygon(point, AnchorLeftFlukePolygon);
-        bool upperFluke = IsPointInPolygon(point, AnchorUpperFlukePolygon);
-        return ring || shaft || crossbar || curvedArms || leftFluke || upperFluke;
-    }
-
-    private static bool IsChameleonPixel(int x, int y, out bool isAccent)
-    {
-        Vector2 point = new(x + 0.5f, y + 0.5f);
-        Vector2 tailCenter = new(17f, 31f);
-        float tailRadius = Vector2.Distance(point, tailCenter);
-        float tailAngle = Mathf.Atan2(point.y - tailCenter.y, point.x - tailCenter.x);
-        float tailTarget = 4f + Mathf.Repeat(tailAngle + Mathf.PI, Mathf.PI * 2f) / (Mathf.PI * 2f) * 10f;
-        bool tail = tailRadius is >= 3f and <= 16f && Mathf.Abs(tailRadius - tailTarget) <= 2.8f;
-        bool body = IsThickLine(point, new Vector2(21f, 33f), new Vector2(43f, 37f), 5.5f);
-        bool head = Vector2.Distance(point, new Vector2(49f, 39f)) <= 8f;
-        bool frontLeg = IsThickLine(point, new Vector2(39f, 34f), new Vector2(47f, 23f), 2.5f);
-        bool backLeg = IsThickLine(point, new Vector2(28f, 32f), new Vector2(22f, 21f), 2.5f);
-        bool eye = Vector2.Distance(point, new Vector2(51f, 42f)) <= 2.6f;
-        isAccent = eye || tail;
-        return tail || body || head || frontLeg || backLeg || eye;
-    }
-
-    private static IconTone GetBlamerTone(int x, int y)
-    {
-        const float scale = 0.82f;
-        Vector2 point = new(
-            32f + (x + 0.5f - 32f) / scale,
-            32f + (y + 0.5f - 32f) / scale);
-        bool bell = IsPointInPolygon(point, BlamerBellPolygon) ||
-                    point.x is >= 29f and <= 35f && point.y is >= 55f and <= 63f;
-        bool rim = point.x is >= 11f and <= 53f && point.y is >= 10f and <= 15f;
-        bool clapper = Vector2.Distance(point, new Vector2(32f, 7f)) <= 5f;
-        float waveY = point.y - 36f;
-        float waveX = Mathf.Abs(point.x - 32f);
-        float innerWave = waveX * waveX / (26f * 26f) + waveY * waveY / (23f * 23f);
-        float outerWave = waveX * waveX / (34f * 34f) + waveY * waveY / (30f * 30f);
-        bool waves = waveX >= 21f && innerWave is >= 0.82f and <= 1.14f ||
-                     waveX >= 28f && outerWave is >= 0.82f and <= 1.14f;
-
-        if (waves)
-        {
-            return IconTone.Accent;
-        }
-
-        if (rim || clapper)
-        {
-            return IconTone.Secondary;
-        }
-
-        return bell ? IconTone.Primary : IconTone.Clear;
-    }
-
-    private static bool IsPointInPolygon(Vector2 point, IReadOnlyList<Vector2> polygon)
-    {
-        bool inside = false;
-        for (int current = 0, previous = polygon.Count - 1; current < polygon.Count; previous = current++)
-        {
-            Vector2 a = polygon[current];
-            Vector2 b = polygon[previous];
-            if ((a.y > point.y) != (b.y > point.y) &&
-                point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x)
-            {
-                inside = !inside;
-            }
-        }
-
-        return inside;
-    }
-
-    private static bool IsSwordBladePixel(Vector2 point, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 start = new(18f, 16f);
-        Vector2 tip = new(53f, 51f);
-        Vector2 axis = tip - start;
-        float length = axis.magnitude;
-        Vector2 direction = axis / length;
-        Vector2 normal = new(-direction.y, direction.x);
-        Vector2 delta = point - start;
-        float along = Vector2.Dot(delta, direction);
-        if (along < 0f || along > length)
-        {
-            return false;
-        }
-
-        float width = along > length - 8f
-            ? Mathf.Lerp(5f, 0.5f, (along - (length - 8f)) / 8f)
-            : 5f;
-        float side = Mathf.Abs(Vector2.Dot(delta, normal));
-        if (side > width)
-        {
-            return false;
-        }
-
-        isBorder = side > width - 1.6f || along > length - 4f;
-        return true;
-    }
-
-    private static bool IsSwordGuardPixel(Vector2 point, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 center = new(18f, 16f);
-        Vector2 axis = new Vector2(1f, 1f).normalized;
-        Vector2 normal = new(-axis.y, axis.x);
-        Vector2 delta = point - center;
-        float along = Vector2.Dot(delta, normal);
-        float across = Vector2.Dot(delta, axis);
-        if (Mathf.Abs(along) > 13f || Mathf.Abs(across) > 2.6f)
-        {
-            return false;
-        }
-
-        isBorder = Mathf.Abs(along) > 10.8f || Mathf.Abs(across) > 1.2f;
-        return true;
-    }
-
-    private static bool IsSwordGripPixel(Vector2 point, out bool isBorder)
-    {
-        isBorder = false;
-        Vector2 start = new(7f, 5f);
-        Vector2 end = new(18f, 16f);
-        Vector2 axis = end - start;
-        float length = axis.magnitude;
-        Vector2 direction = axis / length;
-        Vector2 normal = new(-direction.y, direction.x);
-        Vector2 delta = point - start;
-        float along = Vector2.Dot(delta, direction);
-        if (along < 0f || along > length)
-        {
-            return false;
-        }
-
-        float side = Mathf.Abs(Vector2.Dot(delta, normal));
-        if (side > 3.4f)
-        {
-            return false;
-        }
-
-        isBorder = side > 1.8f || along < 1.8f;
-        return true;
-    }
 }

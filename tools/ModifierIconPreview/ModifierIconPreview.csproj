@@ -7,4 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\ModifierIconSource.cs" Link="ModifierIconSource.cs" />
+  </ItemGroup>
 </Project>
