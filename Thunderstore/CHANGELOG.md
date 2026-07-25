@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.9
+
+- Limit Karma-level and Enforcer spawn/death center messages to connected, living players in the affected Karma region instead of broadcasting them to the entire world, including authoritative dedicated-server targeting and listen-host deduplication.
+- Keep dungeon Enforcers inside usable dungeon space by rejecting surface and unrelated vertical-layer spawners, snapping candidates to nearby floors, validating prefab-specific full paths, and using a same-room line-of-sight fallback while NavMesh data is cold.
+- Validate boss and minion capsule clearance with bounded retries, skip only minions that have no safe position, refresh dungeon spawner caches for Omen summons, and avoid consuming Karma or starting cooldown when no safe boss position exists.
+
 ## 1.0.8
 
 - Fix startup with Norsemen and other mods that extend `Character.Faction` at runtime by pairing injected enum names with their actual values instead of passing them back through `Enum.Parse`.

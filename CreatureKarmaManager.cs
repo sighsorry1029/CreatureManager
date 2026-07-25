@@ -54,6 +54,14 @@ internal static class CreatureKarmaManager
     private const string EnforcerNameSuffix = "$cm_suffix_enforcer";
     private const string EnforcerMinionSuffix = "$cm_suffix_minion";
     private const int ZoneRadius = 1;
+    private const int DungeonComponentPositionAttempts = 12;
+    private const int DungeonBossRandomPositionAttempts = 10;
+    private const int DungeonMinionPositionAttempts = 8;
+    private const float DungeonBossRandomRadiusMin = 6f;
+    private const float DungeonBossRandomRadiusMax = 12f;
+    private const float DungeonComponentVerticalTolerance = 6f;
+    private const float DungeonSpawnFloorTolerance = 4f;
+    private const float DungeonSpawnClearanceInset = 0.05f;
     private static readonly HashSet<string> KarmaFields = new(StringComparer.OrdinalIgnoreCase)
     {
         "thresholds", "decay", "gain", "prefabs"
@@ -122,6 +130,22 @@ internal static class CreatureKarmaManager
     private static float NextSectorPruneTime;
     private static float NextSectorCapacityWarningTime;
     private static readonly Dictionary<string, List<Vector3>> DungeonComponentPositionCache = new(StringComparer.Ordinal);
+    private static readonly List<Vector3> DungeonSpawnPath = new();
+    private static readonly int DungeonSpawnStaticMask = LayerMask.GetMask(
+        "Default",
+        "static_solid",
+        "Default_small",
+        "piece",
+        "terrain",
+        "blocker",
+        "vehicle");
+    private static readonly int DungeonSpawnCollisionMask =
+        DungeonSpawnStaticMask |
+        LayerMask.GetMask(
+            "character",
+            "character_net",
+            "character_noenv",
+            "character_ghost");
     private static float NextKarmaStatusRequestTime;
     private static int NextKarmaStatusRequestId;
     private static int LastKarmaStatusResponseId = -1;
@@ -302,6 +326,7 @@ internal static class CreatureKarmaManager
         ServerProcessedCreatureDeaths.Clear();
         StaleProcessedCreatureDeaths.Clear();
         DungeonComponentPositionCache.Clear();
+        DungeonSpawnPath.Clear();
         // Registration follows the ZRoutedRpc instance lifetime. It has no unregister API and Register uses Dictionary.Add.
         NextSummonCheckTime = 0f;
         NextSectorPruneTime = 0f;
@@ -868,7 +893,7 @@ AshLands:
         deadZdo?.Set(CountedDeathKey, true);
         if (context.Enforcer)
         {
-            BroadcastCenterQuote(EnforcerDeathQuotes);
+            BroadcastRegionalCenterQuote(EnforcerDeathQuotes, context.Position);
         }
 
         if (context.KarmaSummoned)
@@ -1504,6 +1529,11 @@ AshLands:
             return false;
         }
 
+        if (IsLikelyDungeonPosition(player.Position))
+        {
+            DungeonComponentPositionCache.Clear();
+        }
+
         bool ignoreCooldown =
             CreatureManagerPlugin.BlockOmenEnforcerDuringCooldown?.Value == CreatureManagerPlugin.Toggle.Off;
 
@@ -2094,7 +2124,13 @@ AshLands:
             return false;
         }
 
-        if (!TryFindSummonPosition(playerPosition, resolvedSettings, out Vector3 spawnPosition))
+        if (!TryGetCreaturePrefab(summon.Boss, out GameObject bossPrefab))
+        {
+            failure = EnforcerSummonFailure.SpawnFailed;
+            return false;
+        }
+
+        if (!TryFindSummonPosition(bossPrefab, playerPosition, resolvedSettings, out Vector3 spawnPosition))
         {
             failure = EnforcerSummonFailure.NoSpawnPosition;
             CreatureManagerPlugin.Log.LogDebug($"Karma Enforcer summon skipped: no spawn position near {playerPosition}.");
@@ -2110,7 +2146,7 @@ AshLands:
             }
         }
 
-        if (!TrySpawnCreature(summon.Boss, spawnPosition, playerPosition, markEnforcer: true, EnforcerNameSuffix, resolvedSettings, candidate.Loot, out Character boss))
+        if (!TrySpawnCreature(summon.Boss, bossPrefab, spawnPosition, playerPosition, markEnforcer: true, EnforcerNameSuffix, resolvedSettings, candidate.Loot, out Character boss))
         {
             failure = EnforcerSummonFailure.SpawnFailed;
             return false;
@@ -2118,11 +2154,50 @@ AshLands:
 
         foreach (EnforcerMinionDefinition minion in summon.Minions)
         {
+            if (!TryGetCreaturePrefab(minion.Prefab, out GameObject minionPrefab))
+            {
+                continue;
+            }
+
+            int skippedMinions = 0;
             for (int i = 0; i < minion.Count; i++)
             {
-                Vector2 offset = GetMinionOffset(dungeonSummon);
-                Vector3 minionPosition = spawnPosition + new Vector3(offset.x, 0f, offset.y);
-                TrySpawnCreature(minion.Prefab, minionPosition, playerPosition, markEnforcer: false, EnforcerMinionSuffix, resolvedSettings, null, out _);
+                Vector3 minionPosition;
+                if (dungeonSummon)
+                {
+                    if (!TryFindDungeonMinionPosition(
+                            minionPrefab,
+                            boss,
+                            playerPosition,
+                            out minionPosition))
+                    {
+                        skippedMinions++;
+                        continue;
+                    }
+                }
+                else
+                {
+                    Vector2 offset = GetRandomHorizontalOffset(0f, 3f);
+                    minionPosition = spawnPosition + new Vector3(offset.x, 0f, offset.y);
+                }
+
+                TrySpawnCreature(
+                    minion.Prefab,
+                    minionPrefab,
+                    minionPosition,
+                    playerPosition,
+                    markEnforcer: false,
+                    EnforcerMinionSuffix,
+                    resolvedSettings,
+                    null,
+                    out _);
+            }
+
+            if (skippedMinions > 0)
+            {
+                CreatureManagerPlugin.Log.LogDebug(
+                    $"Karma Enforcer minion '{minion.Prefab}' skipped {skippedMinions}/{minion.Count}: " +
+                    "no safe dungeon spawn position.");
             }
         }
 
@@ -2133,12 +2208,12 @@ AshLands:
         }
 
         CreatureManagerPlugin.Log.LogInfo($"Karma Enforcer summoned: {GetPrefabName(boss)} zone={sectorKey} karma={karma:0.#}->{remainingKarma:0.#} forced={ignoreCooldown || ignoreChance || ignoreRequiredKarma}");
-        BroadcastCenterQuote(EnforcerSpawnQuotes);
+        BroadcastRegionalCenterQuote(EnforcerSpawnQuotes, statePosition, regionZoneKeys);
 
         return true;
     }
 
-    private static Vector2 GetMinionOffset(bool dungeonSummon)
+    private static Vector2 GetRandomHorizontalOffset(float minRadius, float maxRadius)
     {
         Vector2 direction = UnityEngine.Random.insideUnitCircle;
         if (direction.sqrMagnitude < 0.01f)
@@ -2147,7 +2222,9 @@ AshLands:
         }
 
         direction.Normalize();
-        float radius = dungeonSummon ? UnityEngine.Random.Range(1f, 2f) : UnityEngine.Random.Range(0f, 3f);
+        float radius = UnityEngine.Random.Range(
+            Mathf.Max(0f, minRadius),
+            Mathf.Max(minRadius, maxRadius));
         return direction * radius;
     }
 
@@ -2471,45 +2548,56 @@ AshLands:
     }
 
     private static bool TryFindSummonPosition(
+        GameObject prefab,
         Vector3 playerPosition,
         ResolvedEnforcerSettings settings,
         out Vector3 position)
     {
         if (IsLikelyDungeonPosition(playerPosition))
         {
-            if (TryFindNearestComponentPosition<CreatureSpawner>(playerPosition, Settings.Enforcer.DungeonSpawnerSearchRadius, out position))
+            if (TryFindValidDungeonComponentPosition<CreatureSpawner>(
+                    prefab,
+                    playerPosition,
+                    Settings.Enforcer.DungeonSpawnerSearchRadius,
+                    out position))
             {
                 return true;
             }
 
-            if (TryFindNearestComponentPosition<SpawnArea>(playerPosition, Settings.Enforcer.DungeonSpawnerSearchRadius, out position))
+            if (TryFindValidDungeonComponentPosition<SpawnArea>(
+                    prefab,
+                    playerPosition,
+                    Settings.Enforcer.DungeonSpawnerSearchRadius,
+                    out position))
             {
                 return true;
             }
 
-            Vector2 dungeonOffset = UnityEngine.Random.insideUnitCircle;
-            if (dungeonOffset.sqrMagnitude < 0.01f)
+            for (int attempt = 0; attempt < DungeonBossRandomPositionAttempts; attempt++)
             {
-                dungeonOffset = Vector2.right;
+                Vector2 offset = GetRandomHorizontalOffset(
+                    DungeonBossRandomRadiusMin,
+                    DungeonBossRandomRadiusMax);
+                Vector3 dungeonCandidate = playerPosition + new Vector3(offset.x, 0f, offset.y);
+                if (TryValidateDungeonSpawnPosition(
+                        prefab,
+                        playerPosition,
+                        playerPosition,
+                        dungeonCandidate,
+                        out position))
+                {
+                    return true;
+                }
             }
 
-            dungeonOffset.Normalize();
-            dungeonOffset *= UnityEngine.Random.Range(6f, 12f);
-            position = playerPosition + new Vector3(dungeonOffset.x, 0f, dungeonOffset.y);
-            return true;
+            position = playerPosition;
+            return false;
         }
 
         float minRadius = Mathf.Max(2f, settings.SpawnRadiusMin);
         float maxRadius = Mathf.Max(minRadius, settings.SpawnRadiusMax);
-        Vector2 direction = UnityEngine.Random.insideUnitCircle;
-        if (direction.sqrMagnitude < 0.01f)
-        {
-            direction = Vector2.right;
-        }
-
-        direction.Normalize();
-        float radius = UnityEngine.Random.Range(minRadius, maxRadius);
-        Vector3 candidate = playerPosition + new Vector3(direction.x * radius, 0f, direction.y * radius);
+        Vector2 outdoorOffset = GetRandomHorizontalOffset(minRadius, maxRadius);
+        Vector3 candidate = playerPosition + new Vector3(outdoorOffset.x, 0f, outdoorOffset.y);
         float groundHeight = candidate.y;
         if (ZoneSystem.instance != null)
         {
@@ -2525,34 +2613,37 @@ AshLands:
         return true;
     }
 
-    private static bool TryFindNearestComponentPosition<T>(Vector3 origin, float radius, out Vector3 position) where T : Component
+    private static bool TryFindValidDungeonComponentPosition<T>(
+        GameObject prefab,
+        Vector3 origin,
+        float radius,
+        out Vector3 position)
+        where T : Component
     {
         Vector2i originZone = ZoneSystem.GetZone(origin);
         List<Vector3> candidates = GetCachedComponentPositions<T>(originZone);
-        float bestDistance = Mathf.Max(0f, radius);
-        Vector3 best = origin;
-        bool found = false;
-        foreach (Vector3 candidate in candidates)
+        float searchRadius = Mathf.Max(0f, radius);
+        foreach (Vector3 candidate in candidates
+                     .Where(candidate =>
+                         IsLikelyDungeonPosition(candidate) &&
+                         Utils.DistanceXZ(candidate, origin) <= searchRadius &&
+                         Mathf.Abs(candidate.y - origin.y) <= DungeonComponentVerticalTolerance)
+                     .OrderBy(candidate => (candidate - origin).sqrMagnitude)
+                     .Take(DungeonComponentPositionAttempts))
         {
-            float distance = Utils.DistanceXZ(candidate, origin);
-            if (distance > bestDistance)
+            if (TryValidateDungeonSpawnPosition(
+                    prefab,
+                    origin,
+                    origin,
+                    candidate,
+                    out position))
             {
-                continue;
+                return true;
             }
-
-            bestDistance = distance;
-            best = candidate;
-            found = true;
         }
 
-        if (!found)
-        {
-            position = origin;
-            return false;
-        }
-
-        position = best;
-        return true;
+        position = origin;
+        return false;
     }
 
     private static List<Vector3> GetCachedComponentPositions<T>(Vector2i zone) where T : Component
@@ -2582,8 +2673,244 @@ AshLands:
         return other.x == zone.x && other.y == zone.y;
     }
 
+    private static bool TryFindDungeonMinionPosition(
+        GameObject prefab,
+        Character boss,
+        Vector3 targetPosition,
+        out Vector3 position)
+    {
+        Vector3 bossPosition = boss.transform.position;
+        float minionRadius = GetPrefabCapsuleRadius(prefab);
+        float minRadius = Mathf.Max(1f, boss.GetRadius() + minionRadius + 0.25f);
+        float maxRadius = minRadius + 1f;
+        for (int attempt = 0; attempt < DungeonMinionPositionAttempts; attempt++)
+        {
+            Vector2 offset = GetRandomHorizontalOffset(minRadius, maxRadius);
+            Vector3 candidate = bossPosition + new Vector3(offset.x, 0f, offset.y);
+            if (TryValidateDungeonSpawnPosition(
+                    prefab,
+                    bossPosition,
+                    targetPosition,
+                    candidate,
+                    out position))
+            {
+                return true;
+            }
+        }
+
+        position = bossPosition;
+        return false;
+    }
+
+    private static bool TryValidateDungeonSpawnPosition(
+        GameObject prefab,
+        Vector3 pathOrigin,
+        Vector3 facingTarget,
+        Vector3 candidate,
+        out Vector3 position)
+    {
+        position = candidate;
+        if (ZoneSystem.instance == null ||
+            !IsFinite(pathOrigin) ||
+            !IsFinite(candidate) ||
+            !IsLikelyDungeonPosition(candidate) ||
+            !ZoneSystem.instance.GetSolidHeight(candidate, out float floorHeight, 1) ||
+            Mathf.Abs(floorHeight - pathOrigin.y) > DungeonSpawnFloorTolerance)
+        {
+            return false;
+        }
+
+        candidate.y = floorHeight;
+        Quaternion candidateRotation = GetSpawnRotation(candidate, facingTarget);
+        if (!HasDungeonSpawnClearance(prefab, candidate, candidateRotation))
+        {
+            return false;
+        }
+
+        BaseAI? baseAI = prefab.GetComponent<BaseAI>();
+        Pathfinding.AgentType agentType = baseAI != null
+            ? baseAI.m_pathAgentType
+            : Pathfinding.AgentType.Humanoid;
+
+        try
+        {
+            Vector3 resolvedPosition = candidate;
+            bool hasFullPath = false;
+            DungeonSpawnPath.Clear();
+            if (Pathfinding.instance != null &&
+                Pathfinding.instance.GetPath(
+                    pathOrigin,
+                    candidate,
+                    DungeonSpawnPath,
+                    agentType,
+                    requireFullPath: true,
+                    cleanup: false,
+                    havePath: true) &&
+                DungeonSpawnPath.Count > 0)
+            {
+                Vector3 pathStart = DungeonSpawnPath[0];
+                Vector3 pathEnd = DungeonSpawnPath[DungeonSpawnPath.Count - 1];
+                hasFullPath =
+                    Vector3.Distance(pathStart, pathOrigin) <= 2f &&
+                    Vector3.Distance(pathEnd, candidate) <= 1.25f &&
+                    IsLikelyDungeonPosition(pathEnd) &&
+                    Mathf.Abs(pathEnd.y - pathOrigin.y) <= DungeonSpawnFloorTolerance + 1.25f;
+                if (hasFullPath)
+                {
+                    resolvedPosition = pathEnd;
+                }
+            }
+
+            if (!hasFullPath &&
+                Physics.Linecast(
+                    pathOrigin + Vector3.up * 0.8f,
+                    candidate + Vector3.up * 0.8f,
+                    DungeonSpawnStaticMask,
+                    QueryTriggerInteraction.Ignore))
+            {
+                return false;
+            }
+
+            Quaternion rotation = GetSpawnRotation(resolvedPosition, facingTarget);
+            if (!HasDungeonSpawnClearance(prefab, resolvedPosition, rotation))
+            {
+                return false;
+            }
+
+            position = resolvedPosition;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            CreatureManagerPlugin.Log.LogDebug(
+                $"Dungeon summon position validation failed for '{prefab.name}': {exception.Message}");
+            return false;
+        }
+        finally
+        {
+            DungeonSpawnPath.Clear();
+        }
+    }
+
+    private static bool HasDungeonSpawnClearance(
+        GameObject prefab,
+        Vector3 position,
+        Quaternion rotation)
+    {
+        CapsuleCollider? capsule = prefab.GetComponent<CapsuleCollider>();
+        if (capsule == null)
+        {
+            Vector3 bottom = position + Vector3.up * 0.45f;
+            Vector3 top = position + Vector3.up * 1.35f;
+            return !Physics.CheckCapsule(
+                bottom,
+                top,
+                0.35f,
+                DungeonSpawnCollisionMask,
+                QueryTriggerInteraction.Ignore);
+        }
+
+        Vector3 scale = prefab.transform.lossyScale;
+        int direction = Mathf.Clamp(capsule.direction, 0, 2);
+        float axisScale = Mathf.Abs(GetVectorAxis(scale, direction));
+        int radiusAxisA = direction == 0 ? 1 : 0;
+        int radiusAxisB = direction == 2 ? 1 : 2;
+        float radiusScale = Mathf.Max(
+            Mathf.Abs(GetVectorAxis(scale, radiusAxisA)),
+            Mathf.Abs(GetVectorAxis(scale, radiusAxisB)));
+        float worldRadius = Mathf.Max(0.05f, capsule.radius * radiusScale);
+        float worldHeight = Mathf.Max(capsule.height * axisScale, worldRadius * 2f);
+        float checkRadius = Mathf.Max(0.05f, worldRadius - DungeonSpawnClearanceInset);
+        float checkHeight = Mathf.Max(checkRadius * 2f, worldHeight - DungeonSpawnClearanceInset * 2f);
+        float segmentHalf = Mathf.Max(0f, checkHeight * 0.5f - checkRadius);
+        Vector3 localAxis = direction switch
+        {
+            0 => Vector3.right,
+            2 => Vector3.forward,
+            _ => Vector3.up
+        };
+        Vector3 worldAxis = rotation * localAxis;
+        Vector3 center = position +
+                         rotation * Vector3.Scale(capsule.center, scale) +
+                         Vector3.up * DungeonSpawnClearanceInset;
+        Vector3 point0 = center - worldAxis * segmentHalf;
+        Vector3 point1 = center + worldAxis * segmentHalf;
+        return !Physics.CheckCapsule(
+            point0,
+            point1,
+            checkRadius,
+            DungeonSpawnCollisionMask,
+            QueryTriggerInteraction.Ignore);
+    }
+
+    private static float GetPrefabCapsuleRadius(GameObject prefab)
+    {
+        CapsuleCollider? capsule = prefab.GetComponent<CapsuleCollider>();
+        if (capsule == null)
+        {
+            return 0.4f;
+        }
+
+        Vector3 scale = prefab.transform.lossyScale;
+        int direction = Mathf.Clamp(capsule.direction, 0, 2);
+        int radiusAxisA = direction == 0 ? 1 : 0;
+        int radiusAxisB = direction == 2 ? 1 : 2;
+        return Mathf.Max(
+            0.1f,
+            capsule.radius * Mathf.Max(
+                Mathf.Abs(GetVectorAxis(scale, radiusAxisA)),
+                Mathf.Abs(GetVectorAxis(scale, radiusAxisB))));
+    }
+
+    private static float GetVectorAxis(Vector3 vector, int axis)
+    {
+        return axis switch
+        {
+            0 => vector.x,
+            2 => vector.z,
+            _ => vector.y
+        };
+    }
+
+    private static Quaternion GetSpawnRotation(Vector3 position, Vector3 targetPosition)
+    {
+        Vector3 direction = targetPosition - position;
+        direction.y = 0f;
+        return direction.sqrMagnitude > 0.01f
+            ? Quaternion.LookRotation(direction.normalized)
+            : Quaternion.identity;
+    }
+
+    private static bool TryGetCreaturePrefab(string prefabName, out GameObject prefab)
+    {
+        prefab = null!;
+        if (ZNetScene.instance == null)
+        {
+            return false;
+        }
+
+        prefab = ZNetScene.instance.GetPrefab(prefabName);
+        if (prefab == null)
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Karma Enforcer summon skipped: missing prefab '{prefabName}'.");
+            return false;
+        }
+
+        if (prefab.GetComponent<Character>() == null || CreaturePrefabRegistry.IsPlayerPrefab(prefab))
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Karma Enforcer summon skipped: prefab '{prefabName}' is not a supported non-player Character.");
+            prefab = null!;
+            return false;
+        }
+
+        return true;
+    }
+
     private static bool TrySpawnCreature(
         string prefabName,
+        GameObject prefab,
         Vector3 position,
         Vector3 targetPosition,
         bool markEnforcer,
@@ -2593,30 +2920,7 @@ AshLands:
         out Character character)
     {
         character = null!;
-        if (ZNetScene.instance == null)
-        {
-            return false;
-        }
-
-        GameObject prefab = ZNetScene.instance.GetPrefab(prefabName);
-        if (prefab == null)
-        {
-            CreatureManagerPlugin.Log.LogWarning($"Karma Enforcer summon skipped: missing prefab '{prefabName}'.");
-            return false;
-        }
-
-        if (prefab.GetComponent<Character>() == null || CreaturePrefabRegistry.IsPlayerPrefab(prefab))
-        {
-            CreatureManagerPlugin.Log.LogWarning(
-                $"Karma Enforcer summon skipped: prefab '{prefabName}' is not a supported non-player Character.");
-            return false;
-        }
-
-        Vector3 direction = targetPosition - position;
-        direction.y = 0f;
-        Quaternion rotation = direction.sqrMagnitude > 0.01f
-            ? Quaternion.LookRotation(direction.normalized)
-            : Quaternion.identity;
+        Quaternion rotation = GetSpawnRotation(position, targetPosition);
 
         GameObject? spawned = null;
         try
@@ -3298,7 +3602,7 @@ AshLands:
 
         if (levelIncreased)
         {
-            BroadcastCenterQuote(KarmaLevelQuotes);
+            BroadcastRegionalCenterQuote(KarmaLevelQuotes, position);
         }
 
         if (karmaIncreased)
@@ -3550,40 +3854,85 @@ AshLands:
         return Utils.GetPrefabName(((Component)character).gameObject);
     }
 
-    private static void BroadcastCenterQuote(IReadOnlyList<string> quotes)
+    private static void BroadcastRegionalCenterQuote(
+        IReadOnlyList<string> quotes,
+        Vector3 position,
+        HashSet<string>? regionZoneKeys = null)
     {
-        if (quotes.Count == 0)
+        if (quotes.Count == 0 || !IsFinite(position))
         {
             return;
         }
 
         string message = quotes[UnityEngine.Random.Range(0, quotes.Count)];
+        HashSet<string> targetZoneKeys = regionZoneKeys ??
+                                         new HashSet<string>(GetSectorKeys(position), StringComparer.Ordinal);
         if (ZNet.instance != null &&
-            ZNet.instance.IsServer() &&
-            ZRoutedRpc.instance != null)
+            ZNet.instance.IsServer())
         {
-            try
+            Player? localPlayer = Player.m_localPlayer;
+            ZDO? localPlayerZdo = localPlayer?.m_nview != null && localPlayer.m_nview.IsValid()
+                ? localPlayer.m_nview.GetZDO()
+                : null;
+            ZDOID localCharacterId = localPlayerZdo?.m_uid ?? ZDOID.None;
+            HashSet<long> notifiedPeerUids = new();
+
+            foreach (ConnectedPlayerContext player in GetConnectedAlivePlayerContexts())
             {
-                ZPackage package = new();
-                package.Write(message);
-                ZRoutedRpc.instance.InvokeRoutedRPC(
-                    ZRoutedRpc.Everybody,
-                    CenterQuoteRpc,
-                    package);
-                return;
+                if (!targetZoneKeys.Contains(GetSectorKey(player.Position)) ||
+                    !notifiedPeerUids.Add(player.PeerUid))
+                {
+                    continue;
+                }
+
+                if (localPlayer != null && player.CharacterId == localCharacterId)
+                {
+                    ShowLocalCenterQuote(message);
+                    continue;
+                }
+
+                if (ZRoutedRpc.instance == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ZPackage package = new();
+                    package.Write(message);
+                    ZRoutedRpc.instance.InvokeRoutedRPC(
+                        player.PeerUid,
+                        CenterQuoteRpc,
+                        package);
+                }
+                catch (Exception exception)
+                {
+                    CreatureManagerPlugin.Log.LogDebug(
+                        $"Could not send regional Karma quote to peer {player.PeerUid}: {exception.Message}");
+                }
             }
-            catch
-            {
-                // Fall back to locally available players below.
-            }
+
+            return;
         }
 
-        foreach (Player player in Player.GetAllPlayers())
+        Player? fallbackPlayer = Player.m_localPlayer;
+        if (fallbackPlayer != null &&
+            !fallbackPlayer.IsDead() &&
+            targetZoneKeys.Contains(GetSectorKey(fallbackPlayer.transform.position)))
         {
-            if (player != null)
-            {
-                ((Character)player).Message(MessageHud.MessageType.Center, message, 0, null);
-            }
+            ShowLocalCenterQuote(message);
+        }
+    }
+
+    private static void ShowLocalCenterQuote(string message)
+    {
+        if (message.Length > 0 && Player.m_localPlayer != null)
+        {
+            ((Character)Player.m_localPlayer).Message(
+                MessageHud.MessageType.Center,
+                message,
+                0,
+                null);
         }
     }
 
@@ -3598,14 +3947,7 @@ AshLands:
         try
         {
             string message = package.ReadString();
-            if (message.Length > 0 && Player.m_localPlayer != null)
-            {
-                ((Character)Player.m_localPlayer).Message(
-                    MessageHud.MessageType.Center,
-                    message,
-                    0,
-                    null);
-            }
+            ShowLocalCenterQuote(message);
         }
         catch
         {
