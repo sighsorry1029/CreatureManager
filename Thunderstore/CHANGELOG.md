@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.8
+
+- Fix startup with Norsemen and other mods that extend `Character.Faction` at runtime by pairing injected enum names with their actual values instead of passing them back through `Enum.Parse`.
+- Resolve external faction names and IDs without taking ownership of their behavior; unmanaged factions now retain their original aggravatable and hostility logic unless they are explicitly defined in `factions.yml`.
+- Reject conflicting runtime faction IDs while keeping CreatureManager-managed vanilla and custom faction relationships unchanged.
+
 ## 1.0.7
 
 - Make synchronized YAML reloads transactional and last-known-good: reject invalid faction relationships, duplicate or multi-document mappings, broken clone graphs, stale clone references, and missing required prefab components before publishing, then restore prefab, faction, and clone state if application fails.

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -13,6 +14,7 @@ internal static class CreatureFactionManager
     private static readonly int FactionHash = StringExtensionMethods.GetStableHashCode("faction");
     private static readonly object Sync = new();
     private static Dictionary<string, Character.Faction> NameToFaction = new(StringComparer.OrdinalIgnoreCase);
+    private static Dictionary<string, Character.Faction> RuntimeNameToFaction = new(StringComparer.OrdinalIgnoreCase);
     private static Dictionary<Character.Faction, string> FactionToName = new();
     private static Dictionary<Character.Faction, FactionData> FactionDataByFaction = new();
     private static HashSet<Character.Faction> Aggravatable = new();
@@ -44,6 +46,7 @@ internal static class CreatureFactionManager
         lock (Sync)
         {
             NameToFaction = snapshot.NameToFaction;
+            RuntimeNameToFaction = snapshot.RuntimeNameToFaction;
             FactionToName = snapshot.FactionToName;
             FactionDataByFaction = snapshot.FactionDataByFaction;
             Aggravatable = snapshot.Aggravatable;
@@ -61,15 +64,11 @@ internal static class CreatureFactionManager
         errors = new List<string>();
         Dictionary<string, Character.Faction> names = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<Character.Faction, string> displayNames = new();
-        Dictionary<string, Character.Faction> vanillaFactions = Enum.GetNames(typeof(Character.Faction))
-            .ToDictionary(
-                name => name,
-                name => (Character.Faction)Enum.Parse(typeof(Character.Faction), name),
-                StringComparer.OrdinalIgnoreCase);
-        HashSet<int> vanillaIds = vanillaFactions.Values
+        Dictionary<string, Character.Faction> runtimeFactions = BuildRuntimeFactionMap();
+        HashSet<int> runtimeFactionIds = runtimeFactions.Values
             .Select(faction => (int)faction)
             .ToHashSet();
-        HashSet<int> reservedIds = new(vanillaIds);
+        HashSet<int> reservedIds = new(runtimeFactionIds);
 
         for (int index = 0; index < definitions.Count; index++)
         {
@@ -115,24 +114,24 @@ internal static class CreatureFactionManager
             }
 
             int id;
-            if (vanillaFactions.TryGetValue(name, out Character.Faction vanillaFaction))
+            if (runtimeFactions.TryGetValue(name, out Character.Faction runtimeFaction))
             {
-                id = (int)vanillaFaction;
+                id = (int)runtimeFaction;
                 if (definition.Id.HasValue && definition.Id.Value != id)
                 {
                     errors.Add(
-                        $"entry {index + 1} faction '{name}' is a vanilla faction and must use id {id}, not {definition.Id.Value}.");
+                        $"entry {index + 1} faction '{name}' is already registered at runtime and must use id {id}, not {definition.Id.Value}.");
                     continue;
                 }
             }
             else if (definition.Id.HasValue)
             {
                 id = definition.Id.Value;
-                if (vanillaIds.Contains(id))
+                if (runtimeFactionIds.Contains(id))
                 {
-                    string vanillaName = GetVanillaNameForId(vanillaFactions, id);
+                    string runtimeName = GetRuntimeNameForId(runtimeFactions, id);
                     errors.Add(
-                        $"entry {index + 1} custom faction '{name}' cannot alias vanilla faction id {id} ({vanillaName}).");
+                        $"entry {index + 1} custom faction '{name}' cannot alias runtime faction id {id} ({runtimeName}).");
                     continue;
                 }
             }
@@ -212,7 +211,7 @@ internal static class CreatureFactionManager
             }
         }
 
-        snapshot = new FactionSnapshot(names, displayNames, data, aggravatable);
+        snapshot = new FactionSnapshot(names, runtimeFactions, displayNames, data, aggravatable);
         return errors.Count == 0;
     }
 
@@ -231,30 +230,28 @@ internal static class CreatureFactionManager
             {
                 return true;
             }
+
+            if (RuntimeNameToFaction.TryGetValue(normalized, out faction))
+            {
+                return true;
+            }
         }
 
         if (int.TryParse(normalized, out int id))
         {
             lock (Sync)
             {
-                if (FactionToName.ContainsKey((Character.Faction)id))
+                Character.Faction numericFaction = (Character.Faction)id;
+                if (FactionToName.ContainsKey(numericFaction) ||
+                    RuntimeNameToFaction.ContainsValue(numericFaction))
                 {
-                    faction = (Character.Faction)id;
+                    faction = numericFaction;
                     return true;
                 }
             }
-
-            if (Enum.IsDefined(typeof(Character.Faction), id))
-            {
-                faction = (Character.Faction)id;
-                return true;
-            }
-
-            return false;
         }
 
-        return Enum.TryParse(normalized, true, out faction) &&
-               Enum.IsDefined(typeof(Character.Faction), faction);
+        return false;
     }
 
     internal static bool TryGetRegisteredFaction(
@@ -342,7 +339,11 @@ internal static class CreatureFactionManager
 
         lock (Sync)
         {
-            baseAi.m_aggravatable = Aggravatable.Contains(baseAi.m_character.m_faction);
+            Character.Faction faction = baseAi.m_character.m_faction;
+            if (FactionDataByFaction.ContainsKey(faction))
+            {
+                baseAi.m_aggravatable = Aggravatable.Contains(faction);
+            }
         }
     }
 
@@ -359,13 +360,17 @@ internal static class CreatureFactionManager
             return true;
         }
 
+        Character.Faction sourceFaction = a.GetFaction();
+        Character.Faction originalTargetFaction = b.GetFaction();
         FactionData? data;
+        bool targetFactionManaged;
         lock (Sync)
         {
-            FactionDataByFaction.TryGetValue(a.GetFaction(), out data);
+            FactionDataByFaction.TryGetValue(sourceFaction, out data);
+            targetFactionManaged = FactionDataByFaction.ContainsKey(originalTargetFaction);
         }
 
-        if (data == null)
+        if (data == null || !targetFactionManaged)
         {
             return false;
         }
@@ -546,11 +551,44 @@ internal static class CreatureFactionManager
         return valid;
     }
 
-    private static string GetVanillaNameForId(
-        IReadOnlyDictionary<string, Character.Faction> vanillaFactions,
+    private static Dictionary<string, Character.Faction> BuildRuntimeFactionMap()
+    {
+        Dictionary<string, Character.Faction> factions = new(StringComparer.OrdinalIgnoreCase);
+        foreach (FieldInfo field in typeof(Character.Faction).GetFields(BindingFlags.Public | BindingFlags.Static))
+        {
+            if (!field.IsLiteral || field.GetRawConstantValue() is not object rawValue)
+            {
+                continue;
+            }
+
+            factions[field.Name] = (Character.Faction)Convert.ToInt32(rawValue);
+        }
+
+        // Some mods append names and values through separate Enum Harmony patches without extending Enum.Parse.
+        // Pair the two runtime arrays just as those mods do, while the declared fields above remain a safe fallback.
+        string[] runtimeNames = Enum.GetNames(typeof(Character.Faction));
+        Array runtimeValues = Enum.GetValues(typeof(Character.Faction));
+        int pairedCount = Math.Min(runtimeNames.Length, runtimeValues.Length);
+        for (int index = 0; index < pairedCount; index++)
+        {
+            string? name = NormalizeName(runtimeNames[index]);
+            if (name == null || factions.ContainsKey(name) ||
+                runtimeValues.GetValue(index) is not Character.Faction faction)
+            {
+                continue;
+            }
+
+            factions[name] = faction;
+        }
+
+        return factions;
+    }
+
+    private static string GetRuntimeNameForId(
+        IReadOnlyDictionary<string, Character.Faction> runtimeFactions,
         int id)
     {
-        return vanillaFactions
+        return runtimeFactions
             .Where(entry => (int)entry.Value == id)
             .Select(entry => entry.Key)
             .FirstOrDefault() ?? "unknown";
@@ -670,17 +708,20 @@ internal static class CreatureFactionManager
     {
         public FactionSnapshot(
             Dictionary<string, Character.Faction> nameToFaction,
+            Dictionary<string, Character.Faction> runtimeNameToFaction,
             Dictionary<Character.Faction, string> factionToName,
             Dictionary<Character.Faction, FactionData> factionDataByFaction,
             HashSet<Character.Faction> aggravatable)
         {
             NameToFaction = nameToFaction;
+            RuntimeNameToFaction = runtimeNameToFaction;
             FactionToName = factionToName;
             FactionDataByFaction = factionDataByFaction;
             Aggravatable = aggravatable;
         }
 
         public Dictionary<string, Character.Faction> NameToFaction { get; }
+        public Dictionary<string, Character.Faction> RuntimeNameToFaction { get; }
         public Dictionary<Character.Faction, string> FactionToName { get; }
         public Dictionary<Character.Faction, FactionData> FactionDataByFaction { get; }
         public HashSet<Character.Faction> Aggravatable { get; }
