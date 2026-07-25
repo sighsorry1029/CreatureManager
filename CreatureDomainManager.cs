@@ -1134,6 +1134,7 @@ internal static class CreatureDomainManager
             templateApplyStarted = true;
 
             Dictionary<string, AiDefinition> aiDefinitionsByName = BuildAiDefinitionLookup(aiDefinitions);
+            HashSet<string> explicitCreatureAiTargets = BuildExplicitCreatureAiTargetSet(creatureDefinitions);
             foreach (ProjectileDefinition definition in projectileDefinitions)
             {
                 if (!definition.IsEnabled)
@@ -1188,8 +1189,31 @@ internal static class CreatureDomainManager
                 }
             }
 
+            // A same-name AI definition is a direct prefab override unless creatures.yml
+            // explicitly assigns another AI to that target.
+            foreach (KeyValuePair<string, AiDefinition> entry in aiDefinitionsByName
+                         .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!TryResolveSameNameAiTarget(entry.Key, out GameObject target) ||
+                    explicitCreatureAiTargets.Contains(target.name))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ApplyAi(target, entry.Key, aiDefinitionsByName);
+                }
+                catch (Exception ex)
+                {
+                    CreatureManagerPlugin.Log.LogError(
+                        $"Failed to apply same-name AI definition '{entry.Key}' directly to creature '{target.name}': {ex}");
+                    return false;
+                }
+            }
+
             applyCompleted = true;
-            UpdateSuccessfullyAppliedDefinitionTargets(snapshot);
+            UpdateSuccessfullyAppliedDefinitionTargets(snapshot, aiDefinitionsByName);
             return true;
         }
         finally
@@ -1291,9 +1315,19 @@ internal static class CreatureDomainManager
         }
     }
 
-    private static void UpdateSuccessfullyAppliedDefinitionTargets(DefinitionSnapshot snapshot)
+    private static void UpdateSuccessfullyAppliedDefinitionTargets(
+        DefinitionSnapshot snapshot,
+        IReadOnlyDictionary<string, AiDefinition> aiDefinitionsByName)
     {
         SuccessfullyAppliedDefinitionTargets.Clear();
+        foreach (string aiName in aiDefinitionsByName.Keys)
+        {
+            if (TryResolveSameNameAiTarget(aiName, out GameObject target))
+            {
+                AddSuccessfullyAppliedTarget(enabled: true, target.name);
+            }
+        }
+
         foreach (ProjectileDefinition definition in snapshot.Projectiles)
         {
             AddSuccessfullyAppliedTarget(definition.IsEnabled, definition.Prefab);
@@ -1614,6 +1648,25 @@ internal static class CreatureDomainManager
             .Where(definition => definition.IsEnabled && !string.IsNullOrWhiteSpace(definition.Ai))
             .GroupBy(definition => definition.Ai!.Trim(), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+        HashSet<string> explicitCreatureAiTargets = BuildExplicitCreatureAiTargetSet(snapshot.Creatures);
+
+        foreach (KeyValuePair<string, AiDefinition> entry in aiDefinitions)
+        {
+            if (!TryResolveSameNameAiTarget(entry.Key, out GameObject target) ||
+                explicitCreatureAiTargets.Contains(target.name))
+            {
+                continue;
+            }
+
+            if (IsStaleManagedClone(target, currentCloneTargets))
+            {
+                errors.Add(
+                    $"AI definition '{entry.Key}' resolves to a stale CreatureManager clone that is not defined by the current YAML bundle");
+                continue;
+            }
+
+            PreflightCreatureAiReference(target, entry.Key, aiDefinitions, currentCloneTargets, errors);
+        }
 
         foreach (ProjectileDefinition definition in snapshot.Projectiles.Where(definition => definition.IsEnabled))
         {
@@ -2105,13 +2158,46 @@ internal static class CreatureDomainManager
 
             if (!HasAnyAiPresetContent(definition))
             {
-                CreatureManagerPlugin.Log.LogWarning($"AI preset '{key}' has no baseAI, monsterAI, clonedFrom, or copyFrom fields. Check block names and indentation.");
+                CreatureManagerPlugin.Log.LogWarning($"AI definition '{key}' has no baseAI, monsterAI, clonedFrom, or copyFrom fields. Check block names and indentation.");
             }
 
             lookup[key] = definition;
         }
 
         return lookup;
+    }
+
+    private static HashSet<string> BuildExplicitCreatureAiTargetSet(IEnumerable<CreatureDefinition> definitions)
+    {
+        return definitions
+            .Where(definition =>
+                definition.IsEnabled &&
+                !string.IsNullOrWhiteSpace(definition.Prefab) &&
+                !string.IsNullOrWhiteSpace(definition.Ai))
+            .Select(definition => definition.Prefab!.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool TryResolveSameNameAiTarget(string aiName, out GameObject target)
+    {
+        target = null!;
+        string name = (aiName ?? "").Trim();
+        if (name.Length == 0)
+        {
+            return false;
+        }
+
+        GameObject? prefab = CreaturePrefabRegistry.GetPrefab(name);
+        if (prefab == null ||
+            CreaturePrefabRegistry.IsPlayerPrefab(prefab) ||
+            prefab.GetComponent<Character>() == null ||
+            (prefab.GetComponent<MonsterAI>() == null && prefab.GetComponent<AnimalAI>() == null))
+        {
+            return false;
+        }
+
+        target = prefab;
+        return true;
     }
 
     private static bool HasAnyAiPresetContent(AiDefinition definition)
@@ -2354,6 +2440,11 @@ internal static class CreatureDomainManager
 
     private static void CopySupportedMonsterAiFields(MonsterAI source, MonsterAI target)
     {
+        if (ReferenceEquals(source, target))
+        {
+            return;
+        }
+
         CreaturePrefabBaseline.Capture(
             target.gameObject,
             CreaturePrefabBaselineGroup.BaseAiAll | CreaturePrefabBaselineGroup.MonsterAiAll);
@@ -2417,6 +2508,11 @@ internal static class CreatureDomainManager
 
     private static void CopySupportedAnimalAiFields(AnimalAI source, AnimalAI target)
     {
+        if (ReferenceEquals(source, target))
+        {
+            return;
+        }
+
         CreaturePrefabBaseline.Capture(target.gameObject, CreaturePrefabBaselineGroup.BaseAiAll);
         CopySupportedBaseAiFields(source, target);
     }
@@ -5114,9 +5210,12 @@ internal static class CreatureDomainManager
     {
         StringBuilder builder = new();
         AppendTemplateComment(builder, "CreatureManager AI configuration.");
-        AppendTemplateComment(builder, "In creatures.yml, 'ai: existingPrefabName' can copy AI directly from that creature prefab.");
-        AppendTemplateComment(builder, "In ai.yml, a preset named like an existing prefab uses that prefab as its baseline unless copyFrom or clonedFrom is set.");
-        AppendTemplateComment(builder, "Copy entries from ai.reference.yml into ai.yml only when you want to create or edit a reusable preset.");
+        AppendTemplateComment(builder, "An enabled AI definition whose name matches a loaded MonsterAI or AnimalAI creature prefab is applied directly to that prefab.");
+        AppendTemplateComment(builder, "The same-name original prefab needs no creatures.yml 'ai:' field to receive those AI overrides.");
+        AppendTemplateComment(builder, "A creatures.yml clone with no 'ai:' and no same-name AI definition keeps its clonedFrom prefab's baseline AI from before CreatureManager overrides; set 'ai: sourcePrefabName' to inherit the configured source AI.");
+        AppendTemplateComment(builder, "A unique name that matches no supported AI creature prefab remains a reusable preset; use copyFrom or clonedFrom to choose its baseline.");
+        AppendTemplateComment(builder, "In creatures.yml, 'ai:' assigns a reusable preset or another creature prefab's AI; explicit assignments take priority over same-name direct application.");
+        AppendTemplateComment(builder, "Copy entries from ai.reference.yml into ai.yml to override that creature's AI directly, or rename them to create reusable presets.");
         AppendTemplateComment(builder, "Loaded files: ai.yml, ai.yaml, ai_*.yml, ai_*.yaml.");
         AppendTemplateComment(builder, "Hot reload updates AI templates used by later creature instances; loaded BaseAI and MonsterAI components keep their current values.");
         AppendTemplateComment(builder, "Omitted fields keep the baseline AI value. If no baseline is found, they keep the current target AI value.");
@@ -5124,8 +5223,8 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "Use baseAI for shared BaseAI fields. AnimalAI creatures use baseAI only; monsterAI adds MonsterAI-only fields.");
         AppendTemplateBlankLine(builder);
         AppendTemplateComment(builder, "Schema:");
-        AppendTemplateLine(builder, 0, "- ai: draugr_melee                    # reusable AI preset name.");
-        AppendTemplateLine(builder, 1, "enabled: true                         # false skips this AI preset.");
+        AppendTemplateLine(builder, 0, "- ai: draugr_melee                    # AI definition name; a same-name creature prefab is the direct target.");
+        AppendTemplateLine(builder, 1, "enabled: true                         # false skips both direct application and preset use.");
         AppendTemplateLine(builder, 1, "copyFrom: ''                          # optional parent AI preset or creature prefab applied before this entry.");
         AppendTemplateLine(builder, 1, "clonedFrom: Draugr                    # optional AI prefab baseline copied before overrides.");
         AppendTemplateLine(builder, 1, "baseAI:");
@@ -5150,18 +5249,18 @@ internal static class CreatureDomainManager
         AppendTemplateLine(builder, 2, "avoidLand: false");
         AppendTemplateBlankLine(builder);
         AppendTemplateComment(builder, "Examples:");
-        AppendTemplateLine(builder, 0, "- ai: Draugr                          # same as an existing prefab, so Draugr is the implicit baseline.");
+        AppendTemplateLine(builder, 0, "- ai: Draugr                          # same as an existing prefab, so this directly overrides Draugr.");
         AppendTemplateLine(builder, 1, "baseAI:");
         AppendTemplateLine(builder, 2, "senses: [40, 120, 999, false]");
         AppendTemplateLine(builder, 1, "monsterAI:");
         AppendTemplateLine(builder, 2, "chase: [0, 999, 400, 1]");
         AppendTemplateBlankLine(builder);
-        AppendTemplateLine(builder, 0, "- ai: vincent_archer                  # custom preset name, so copyFrom chooses the baseline.");
+        AppendTemplateLine(builder, 0, "- ai: vincent_archer                  # unique reusable preset name, so copyFrom chooses the baseline.");
         AppendTemplateLine(builder, 1, "copyFrom: GoblinArcher");
         AppendTemplateLine(builder, 1, "monsterAI:");
         AppendTemplateLine(builder, 2, "circle: [8, 6, 8]");
         AppendTemplateBlankLine(builder);
-        AppendTemplateLine(builder, 0, "- ai: Boar                            # AnimalAI uses baseAI only.");
+        AppendTemplateLine(builder, 0, "- ai: Boar                            # directly overrides Boar; AnimalAI uses baseAI only.");
         AppendTemplateLine(builder, 1, "baseAI:");
         AppendTemplateLine(builder, 2, "senses: [20, 90, 999, false]");
         AppendTemplateBlankLine(builder);

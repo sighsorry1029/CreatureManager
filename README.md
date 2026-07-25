@@ -204,7 +204,7 @@ The generated YAML headers are the schema reference. This README intentionally d
 | `creatures.sample.yml` | Inactive creature examples generated on the first launch. Copy selected entries into an active creature file, or rename it to `creatures_sample.yml` to activate it. |
 | `attacks.sample.yml` | Inactive attack examples generated on the first launch. Copy selected entries into an active attack file, or rename it to `attacks_sample.yml` to activate it. |
 | `projectile.yml` | Clone projectile prefabs and override supported on-hit or spawn-ability prefab references. |
-| `ai.yml` | Define reusable AI presets or overrides. |
+| `ai.yml` | Override same-name creature AI directly or define uniquely named reusable AI presets. |
 | `factions.yml` | Define and edit factions. This domain is intentionally single-file. |
 | `levels.yml` | Configure level weights, stat scaling, distance scaling, visuals, and modifiers. |
 | `karma.yml` | Configure regional Karma and Enforcer encounters. |
@@ -257,7 +257,7 @@ References refresh automatically after Valheim's prefab databases are ready and 
 
 ### Creatures, Attacks, and AI
 
-Creature definitions can modify an existing prefab or clone one with `clonedFrom`. Clones can use cloned attacks, reusable AI presets, AI borrowed from loaded creature prefabs, custom factions, humanoid equipment, and local texture overrides.
+Creature definitions can modify an existing prefab or clone one with `clonedFrom`. An AI definition named after a loaded `MonsterAI` or `AnimalAI` creature applies directly to that prefab; a unique AI name remains a reusable preset and can use `copyFrom` for its baseline. A creature-level `ai:` assignment is only needed to select a reusable preset or borrow another creature prefab's AI, and takes priority over same-name direct application. Clones can also use cloned attacks, custom factions, humanoid equipment, and local texture overrides.
 
 The supported surface is intentionally narrower than a full prefab database dump. It concentrates on fields useful for monsters and customizable NPCs while leaving drops, spawn tables, player prefabs, and large effect graphs to other domains or mods.
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- Apply enabled `ai.yml` definitions directly to same-name loaded `MonsterAI` or `AnimalAI` creature prefabs; rename an AI to a unique non-prefab name to keep it preset-only, while explicit creature-level `ai:` assignments remain the higher-priority choice.
+- Preflight and track same-name AI targets through the existing transactional baseline and clone-determinism safeguards, and avoid claiming every AI field when a definition uses its own prefab as the implicit baseline.
+- Clarify in generated AI and reference headers and the README that original prefabs receive same-name overrides without a creature entry, while `clonedFrom` creatures retain the source baseline AI unless a clone-level same-name definition or explicit `ai:` assignment selects configured AI.
+
 ## 1.0.9
 
 - Limit Karma-level and Enforcer spawn/death center messages to connected, living players in the affected Karma region instead of broadcasting them to the entire world, including authoritative dedicated-server targeting and listen-host deduplication.
