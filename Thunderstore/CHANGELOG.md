@@ -5,6 +5,7 @@
 - Preserve explicit creature levels supplied by vanilla spawn commands, World Edit Commands, and Server Devcommands on dedicated servers instead of rerolling them through CreatureManager level rules.
 - Make configured `damagePerLevel` replace Valheim's vanilla 50% monster damage growth per level against character targets, while leaving vanilla growth intact when `damagePerLevel` is omitted.
 - Persist and reapply the selected damage-growth mode across ownership and runtime state restoration, and clarify the generated `levels.yml` and README examples.
+- Apply Disruptive stamina and Eitr recovery reductions through direct resource adjustments instead of resource-use calls, avoiding unintended usage side effects while preserving the configured recovery reduction.
 
 ## 1.1.0
 

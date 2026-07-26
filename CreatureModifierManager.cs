@@ -6596,7 +6596,7 @@ internal static class CreatureModifierManager
         float stamina = player.GetStamina();
         if (runtime.LastStamina >= 0f && stamina > runtime.LastStamina)
         {
-            player.UseStamina((stamina - runtime.LastStamina) * staminaPower);
+            player.AddStamina(-(stamina - runtime.LastStamina) * staminaPower);
             stamina = player.GetStamina();
         }
 
@@ -6605,7 +6605,7 @@ internal static class CreatureModifierManager
         float eitr = player.GetEitr();
         if (runtime.LastEitr >= 0f && eitr > runtime.LastEitr)
         {
-            player.UseEitr((eitr - runtime.LastEitr) * eitrPower);
+            player.AddEitr(-(eitr - runtime.LastEitr) * eitrPower);
             eitr = player.GetEitr();
         }
 
