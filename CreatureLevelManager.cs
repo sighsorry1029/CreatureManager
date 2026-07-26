@@ -15,6 +15,7 @@ internal static class CreatureLevelManager
     private const string HealthMultiplierKey = "CreatureManager_LevelHealthMultiplier";
     private const string DamageAppliedKey = "CreatureManager_LevelDamageApplied";
     private const string DamageMultiplierKey = "CreatureManager_LevelDamageMultiplier";
+    private const string DamageReplacesVanillaKey = "CreatureManager_LevelDamageReplacesVanilla";
     private const string KarmaBonusRequestRpc = "CreatureManager_LevelKarmaBonusRequest";
     private const string KarmaBonusResponseRpc = "CreatureManager_LevelKarmaBonusResponse";
     private const float KarmaBonusRetryInterval = 0.5f;
@@ -373,9 +374,10 @@ internal static class CreatureLevelManager
         }
 
         if (!zdo.GetBool(DamageAppliedKey, false) &&
-            TrySelectDamageMultiplier(character, out float damageMultiplier))
+            TrySelectDamageMultiplier(character, out float damageMultiplier, out bool replacesVanillaLevelDamage))
         {
             zdo.Set(DamageMultiplierKey, damageMultiplier);
+            zdo.Set(DamageReplacesVanillaKey, replacesVanillaLevelDamage);
             zdo.Set(DamageAppliedKey, true);
         }
 
@@ -787,6 +789,37 @@ internal static class CreatureLevelManager
         return true;
     }
 
+    internal static bool TryAdoptCommandLevel(Character character, int level)
+    {
+        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer() || level < 1)
+        {
+            return false;
+        }
+
+        ZNetView? nview = character.m_nview;
+        if (nview == null || !nview.IsValid() || !nview.IsOwner())
+        {
+            return false;
+        }
+
+        ZDO zdo = nview.GetZDO();
+        if (zdo == null)
+        {
+            return false;
+        }
+
+        int externalLevel = Math.Max(1, level);
+        zdo.Set(DesiredLevelKey, externalLevel);
+        zdo.Set(DesiredLevelSourceKey, "spawn command");
+        zdo.Set(AppliedKey, true);
+        if (CreatureDomainManager.IsSynchronizedConfigurationReady())
+        {
+            ReapplyLevelDependentRuntimeState(character, zdo);
+        }
+
+        return true;
+    }
+
     internal static bool TryApplyRotatedLevelEffects(LevelEffects levelEffects, int level)
     {
         if (!IsLevelSystemEnabled() || levelEffects == null || levelEffects.m_levelSetups == null || levelEffects.m_levelSetups.Count == 0)
@@ -998,14 +1031,19 @@ internal static class CreatureLevelManager
             zdo.Set(HealthAppliedKey, false);
         }
 
-        if (TrySelectDamageMultiplier(character, out float damageMultiplier))
+        if (TrySelectDamageMultiplier(
+                character,
+                out float damageMultiplier,
+                out bool replacesVanillaLevelDamage))
         {
             zdo.Set(DamageMultiplierKey, damageMultiplier);
+            zdo.Set(DamageReplacesVanillaKey, replacesVanillaLevelDamage);
             zdo.Set(DamageAppliedKey, true);
         }
         else if (zdo.GetBool(DamageAppliedKey, false))
         {
             zdo.Set(DamageMultiplierKey, 1f);
+            zdo.Set(DamageReplacesVanillaKey, false);
             zdo.Set(DamageAppliedKey, false);
         }
     }
@@ -1044,6 +1082,9 @@ internal static class CreatureLevelManager
         {
             float damageMultiplier = Mathf.Max(0f, sourceZdo.GetFloat(DamageMultiplierKey, 1f));
             targetZdo.Set(DamageMultiplierKey, damageMultiplier);
+            targetZdo.Set(
+                DamageReplacesVanillaKey,
+                sourceZdo.GetBool(DamageReplacesVanillaKey, false));
             targetZdo.Set(DamageAppliedKey, true);
         }
     }
@@ -1433,9 +1474,13 @@ internal static class CreatureLevelManager
         return Mathf.Max(1, character.GetLevel());
     }
 
-    private static bool TrySelectDamageMultiplier(Character character, out float multiplier)
+    private static bool TrySelectDamageMultiplier(
+        Character character,
+        out float multiplier,
+        out bool replacesVanillaLevelDamage)
     {
         multiplier = 1f;
+        replacesVanillaLevelDamage = false;
         if (character == null || character.IsPlayer())
         {
             return false;
@@ -1458,6 +1503,7 @@ internal static class CreatureLevelManager
         if (TrySelectFloatValue(character, rule => rule.DamagePerLevel, out float selectedDamagePerLevel, scope))
         {
             damagePerLevel = Mathf.Max(0f, selectedDamagePerLevel);
+            replacesVanillaLevelDamage = true;
             hasEffect = true;
         }
 
@@ -1516,6 +1562,25 @@ internal static class CreatureLevelManager
 
         multiplier = Mathf.Max(0f, zdo.GetFloat(DamageMultiplierKey, 1f));
         return !Mathf.Approximately(multiplier, 1f);
+    }
+
+    internal static bool ReplacesVanillaLevelDamage(Character? character)
+    {
+        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer())
+        {
+            return false;
+        }
+
+        ZNetView? nview = character.m_nview;
+        if (nview == null || !nview.IsValid())
+        {
+            return false;
+        }
+
+        ZDO zdo = nview.GetZDO();
+        return zdo != null &&
+               zdo.GetBool(DamageAppliedKey, false) &&
+               zdo.GetBool(DamageReplacesVanillaKey, false);
     }
 
     internal static bool TrySelectModifierChances(Character character, out ModifierChanceDefinition chances)

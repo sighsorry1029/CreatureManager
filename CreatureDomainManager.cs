@@ -4979,8 +4979,8 @@ internal static class CreatureDomainManager
         builder.AppendLine("Global:");
         AppendIndented(builder, 1, "level: [80, 20]                       # Fallback level weights. [80, 20] = level 1 weight 80, level 2 weight 20.");
         AppendIndented(builder, 1, "scalePerLevel: 0.1                    # Visual LevelEffects scale per level above 1. Always skipped in dungeons; saddle-able creatures are controlled by config.");
-        AppendIndented(builder, 1, "damage: 1                            # Outgoing damage multiplier. Omit or keep 1 to keep baseline.");
-        AppendIndented(builder, 1, "damagePerLevel: 0.25                 # Extra outgoing damage per level above 1: damage * (1 + (level - 1) * value).");
+        AppendIndented(builder, 1, "damage: 1                            # Level-1 damage multiplier against Characters. Without damagePerLevel, vanilla level growth remains.");
+        AppendIndented(builder, 1, "damagePerLevel: 0.25                 # Replaces vanilla +50%/level against Characters: damage * (1 + (level - 1) * value).");
         AppendIndented(builder, 1, "health: 1                            # Base max-health multiplier. Omit or keep 1 to keep level 1 baseline.");
         AppendIndented(builder, 1, "healthPerLevel: 1                    # Max-health growth per level above 1, based on level 1 health. 1 keeps vanilla level growth.");
         AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # damagePerStep, healthPerStep, interval, maxSteps. maxSteps 0 = no cap.");
@@ -4991,8 +4991,8 @@ internal static class CreatureDomainManager
         builder.AppendLine("Boss:");
         AppendIndented(builder, 1, "level: [100]                           # Boss fallback level weights. Keeps bosses at level 1 unless overridden or Karma adds bonus levels.");
         AppendIndented(builder, 1, "scalePerLevel: 0.1                   # Boss level scale per level above 1. Enforcer boss summons use Global.scalePerLevel instead.");
-        AppendIndented(builder, 1, "damage: 1                            # Boss outgoing damage multiplier. Omit or keep 1 to keep baseline.");
-        AppendIndented(builder, 1, "damagePerLevel: 0.1                  # Boss outgoing damage bonus per level above 1.");
+        AppendIndented(builder, 1, "damage: 1                            # Boss level-1 damage multiplier against Characters. Without damagePerLevel, vanilla level growth remains.");
+        AppendIndented(builder, 1, "damagePerLevel: 0.1                  # Replaces vanilla boss +50%/level against Characters: damage * (1 + (level - 1) * value).");
         AppendIndented(builder, 1, "health: 1                            # Boss base max-health multiplier. Keep 1 to avoid changing level 1 bosses.");
         AppendIndented(builder, 1, "healthPerLevel: 0.5                  # Boss max-health growth per level above 1, based on level 1 health.");
         AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # Boss damage/health distance scaling tuple.");

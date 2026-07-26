@@ -265,7 +265,7 @@ The supported surface is intentionally narrower than a full prefab database dump
 
 Level rules can target broad defaults or narrow content: global rules, bosses, biomes, named groups, and individual prefabs. Built-in biome presets provide a starting point, while explicit YAML rules replace only the values you choose.
 
-Levels can control weighted star distribution, health, damage, visual scale, distance scaling, and modifier selection. Vanilla level visual states rotate when a creature exceeds the visual states supplied by its prefab.
+Levels can control weighted star distribution, health, damage, visual scale, distance scaling, and modifier selection. `damagePerLevel` replaces vanilla's 50% monster damage growth per level: for example, `damage: 1` and `damagePerLevel: 0.2` make a level 6 creature deal 2x level-1 damage to character targets before distance, multiplayer, and modifier scaling. Vanilla level visual states rotate when a creature exceeds the visual states supplied by its prefab.
 
 CreatureManager is spawn-aware. Natural hostile spawns receive the complete matching rule, while breeding, eggs, grow-up transitions, tamed restores, Blood Magic summons, and explicit console spawns preserve or restrict values according to their lifecycle instead of blindly rerolling every creature initialization.
 

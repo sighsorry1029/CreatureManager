@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+- Preserve explicit creature levels supplied by vanilla spawn commands, World Edit Commands, and Server Devcommands on dedicated servers instead of rerolling them through CreatureManager level rules.
+- Make configured `damagePerLevel` replace Valheim's vanilla 50% monster damage growth per level against character targets, while leaving vanilla growth intact when `damagePerLevel` is omitted.
+- Persist and reapply the selected damage-growth mode across ownership and runtime state restoration, and clarify the generated `levels.yml` and README examples.
+
 ## 1.1.0
 
 - Apply enabled `ai.yml` definitions directly to same-name loaded `MonsterAI` or `AnimalAI` creature prefabs; rename an AI to a unique non-prefab name to keep it preset-only, while explicit creature-level `ai:` assignments remain the higher-priority choice.

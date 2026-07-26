@@ -595,6 +595,8 @@ internal enum CreatureSpawnSourceKind
 [HarmonyPatch(typeof(Terminal), nameof(Terminal.TryRunCommand))]
 internal static class CreatureManagerTerminalTryRunCommandPatch
 {
+    [HarmonyPriority(Priority.First)]
+    [HarmonyBefore("server_devcommands")]
     private static void Prefix(string text, out bool __state)
     {
         __state = CreatureManagerSpawnLifecycle.ShouldTrackCommandSpawn(text);
@@ -636,9 +638,26 @@ internal static class CreatureManagerTerminalUpdateSearchPatch
 [HarmonyPatch(typeof(ZNet), "InternalCommand")]
 internal static class CreatureManagerZNetInternalCommandPatch
 {
-    private static bool Prefix(ZNet __instance, ZRpc rpc, string command)
+    [HarmonyPriority(Priority.First)]
+    private static bool Prefix(ZNet __instance, ZRpc rpc, string command, out bool __state)
     {
+        __state = CreatureManagerSpawnLifecycle.ShouldTrackCommandSpawn(command);
+        if (__state)
+        {
+            CreatureManagerSpawnLifecycle.BeginCommandSpawnContext();
+        }
+
         return !CreatureConsoleCommands.TryHandleAuthenticatedRemoteAdminCommand(__instance, rpc, command);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, bool __state)
+    {
+        if (__state)
+        {
+            CreatureManagerSpawnLifecycle.EndCommandSpawnContext();
+        }
+
+        return __exception;
     }
 }
 
@@ -1192,10 +1211,9 @@ internal static class CreatureManagerCharacterSetLevelPatch
     {
         if (CreatureManagerSpawnLifecycle.IsCommandSpawn(__instance))
         {
-            return;
+            CreatureLevelManager.TryAdoptCommandLevel(__instance, level);
         }
-
-        if (!CreatureLevelManager.TryAdoptContextualExternalLevel(__instance, level))
+        else if (!CreatureLevelManager.TryAdoptContextualExternalLevel(__instance, level))
         {
             CreatureLevelManager.RestoreConfiguredLevel(__instance, level);
         }
@@ -1217,6 +1235,32 @@ internal static class CreatureManagerLevelEffectsSetupLevelVisualizationPatch
     private static bool Prefix(LevelEffects __instance, int level)
     {
         return !CreatureLevelManager.TryApplyRotatedLevelEffects(__instance, level);
+    }
+}
+
+[HarmonyPatch]
+internal static class CreatureManagerAttackLevelDamageFactorPatch
+{
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        MethodInfo? method = CreatureHarmonyTargetResolver.FindDeclared(
+            typeof(Attack),
+            "GetLevelDamageFactor",
+            "CreatureManager level damage replacement",
+            Type.EmptyTypes);
+        if (method != null)
+        {
+            yield return method;
+        }
+    }
+
+    [HarmonyPriority(Priority.Last)]
+    private static void Postfix(Attack __instance, ref float __result)
+    {
+        if (CreatureLevelManager.ReplacesVanillaLevelDamage(__instance?.m_character))
+        {
+            __result = 1f;
+        }
     }
 }
 

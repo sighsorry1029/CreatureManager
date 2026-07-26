@@ -120,6 +120,7 @@ try
         {
             Target = "Boss",
             Damage = 1.5f,
+            DamagePerLevel = 0.2f,
             Modifiers = new Dictionary<string, ModifierDefinition>
             {
                 ["enraged"] = new ModifierDefinition { Chance = 20f, Power = 0.15f }
@@ -131,6 +132,7 @@ try
         {
             Require(definition.Target == "Boss", "Level target was not preserved.");
             Require(definition.Damage == 1.5f, "Level damage was not preserved.");
+            Require(definition.DamagePerLevel == 0.2f, "Level damagePerLevel was not preserved.");
             Require(definition.ModifiersCleared, "Level terminal-clear bookkeeping was not preserved.");
             Require(definition.IsPreset, "Level preset bookkeeping was not preserved.");
             Require(definition.Modifiers?.ContainsKey("ENRAGED") == true, "Level modifier comparer was not preserved.");
