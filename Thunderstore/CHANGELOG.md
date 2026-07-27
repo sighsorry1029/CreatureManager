@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.2
+
+- Make dedicated-server Karma level bonus responses use authoritative server ZDO position and Enforcer state without requiring requester ownership or a loaded creature prefab, while keeping client application owner-authoritative.
+- Back off unanswered Karma bonus requests to 30 seconds and aggregate client/server diagnostics, preventing per-creature warning spam while preserving pending level application until an authoritative response arrives.
+- Add configurable Enforcer abandonment cleanup: remove the main Enforcer after no living player remains within the fixed 64 m encounter range, retain summoned minions, and restore persisted Enforcer tracking from server ZDOs after restart.
+- Cap Regenerating healing at 20 health per second by default, support `0` as unlimited, and expose the effective cap in generated YAML, Compendium text, translations, and synchronized modifier state.
+- Allow every modifier tuple to omit a trailing suffix after its required chance value, inheriting omitted fields before using runtime defaults, while rejecting ambiguous empty positions and documenting the rule.
+
 ## 1.1.1
 
 - Preserve explicit creature levels supplied by vanilla spawn commands, World Edit Commands, and Server Devcommands on dedicated servers instead of rerolling them through CreatureManager level rules.

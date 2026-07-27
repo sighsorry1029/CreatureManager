@@ -27,6 +27,10 @@ internal static class CreatureKarmaManager
     private const string EnforcerIsBossKey = "CreatureManager_KarmaEnforcerIsBoss";
     private const string EnforcerBossHudKey = "CreatureManager_KarmaEnforcerBossHud";
     private const string EnforcerLootKey = "CreatureManager_KarmaEnforcerLoot";
+    private const string EnforcerPresenceAnchorStoredKey = "CreatureManager_KarmaEnforcerPresenceAnchorStored";
+    private const string EnforcerPresenceInteriorKey = "CreatureManager_KarmaEnforcerPresenceInterior";
+    private const string EnforcerPresenceZoneXKey = "CreatureManager_KarmaEnforcerPresenceZoneX";
+    private const string EnforcerPresenceZoneYKey = "CreatureManager_KarmaEnforcerPresenceZoneY";
     private const string PlayerDeathRpc = "CreatureManager_KarmaPlayerDeath";
     private const string CreatureDeathRpc = "CreatureManager_KarmaCreatureDeath";
     private const string BlockerObservationRpc = "CreatureManager_KarmaBlockerObservation";
@@ -48,6 +52,9 @@ internal static class CreatureKarmaManager
     private const int MaximumEnforcerPrefabNameLength = 128;
     private const int MaximumSerializedEnforcerLootLength = 8192;
     private const float SectorPruneInterval = 1f;
+    private const float EnforcerAbandonmentCheckInterval = 1f;
+    private const float EnforcerPresenceRange = 64f;
+    private const float EnforcerPresenceRangeSquared = EnforcerPresenceRange * EnforcerPresenceRange;
     private const int MaximumSectorScansPerPass = 256;
     private const int MaximumSectorStates = 32768;
     private const float SectorCapacityWarningInterval = 30f;
@@ -111,6 +118,12 @@ internal static class CreatureKarmaManager
     private static readonly Dictionary<int, List<EnforcerLootDefinition>> RuntimeEnforcerLoot = new();
     private static readonly HashSet<int> AppliedEnforcerLootIds = new();
     private static readonly HashSet<ZDOID> TrackedEnforcerZdoIds = new();
+    private static readonly Dictionary<ZDOID, float> EnforcerNoPlayerSince = new();
+    private static readonly List<EnforcerPlayerPresence> EnforcerPlayerPresenceBuffer = new();
+    private static readonly HashSet<ZDOID> EnforcerPlayerPresenceIds = new();
+    private static readonly List<ZDOID> StaleTrackedEnforcerIds = new();
+    private static readonly List<ZDOID> AbandonedEnforcerIds = new();
+    private static readonly List<ZDO> EnforcerBootstrapScanBuffer = new();
     private static readonly HashSet<ZDOID> TrackedBossZdoIds = new();
     private static readonly HashSet<ZDOID> ReportedBlockerZdoIds = new();
     private static readonly Dictionary<ZDOID, bool> ObservedPlayerDeathStates = new();
@@ -127,6 +140,9 @@ internal static class CreatureKarmaManager
     private static MethodInfo? ExpandWorldDataTryGetBiomeDisplayNameMethod;
     private static bool ExpandWorldDataBiomeMethodsResolved;
     private static float NextSummonCheckTime;
+    private static float NextEnforcerAbandonmentCheckTime;
+    private static int LastEnforcerAbandonmentDespawnSeconds = -1;
+    private static bool EnforcerBootstrapScanPending = true;
     private static float NextSectorPruneTime;
     private static float NextSectorCapacityWarningTime;
     private static readonly Dictionary<string, List<Vector3>> DungeonComponentPositionCache = new(StringComparer.Ordinal);
@@ -231,6 +247,11 @@ internal static class CreatureKarmaManager
         return Mathf.Max(1, CreatureManagerPlugin.MaximumEnforcersPerSector?.Value ?? 1);
     }
 
+    private static int GetEnforcerAbandonedDespawnSeconds()
+    {
+        return Mathf.Clamp(CreatureManagerPlugin.EnforcerAbandonedDespawnSeconds?.Value ?? 120, 0, 1500);
+    }
+
     private static bool ShouldBlockEnforcerWhileBossActive()
     {
         return CreatureManagerPlugin.BlockEnforcerWhileBossActive?.Value != CreatureManagerPlugin.Toggle.Off;
@@ -319,6 +340,12 @@ internal static class CreatureKarmaManager
         RuntimeEnforcerLoot.Clear();
         AppliedEnforcerLootIds.Clear();
         TrackedEnforcerZdoIds.Clear();
+        EnforcerNoPlayerSince.Clear();
+        EnforcerPlayerPresenceBuffer.Clear();
+        EnforcerPlayerPresenceIds.Clear();
+        StaleTrackedEnforcerIds.Clear();
+        AbandonedEnforcerIds.Clear();
+        EnforcerBootstrapScanBuffer.Clear();
         TrackedBossZdoIds.Clear();
         ReportedBlockerZdoIds.Clear();
         ServerPendingCreatureDeaths.Clear();
@@ -329,6 +356,9 @@ internal static class CreatureKarmaManager
         DungeonSpawnPath.Clear();
         // Registration follows the ZRoutedRpc instance lifetime. It has no unregister API and Register uses Dictionary.Add.
         NextSummonCheckTime = 0f;
+        NextEnforcerAbandonmentCheckTime = 0f;
+        LastEnforcerAbandonmentDespawnSeconds = -1;
+        EnforcerBootstrapScanPending = true;
         NextSectorPruneTime = 0f;
         NextSectorCapacityWarningTime = 0f;
         NextKarmaStatusRequestTime = 0f;
@@ -354,6 +384,9 @@ internal static class CreatureKarmaManager
 # Spawn-time Karma level bonuses, modifiers, loot, and Enforcer creature definitions affect later spawns, not existing Enforcers.
 # In any modifiers field, omission or {} keeps normal inheritance/fallback; [] is a terminal clear that blocks every lower modifier source.
 # A mapping overrides listed values only. Candidates inherit Enforcer.modifiers, and Enforcer.modifiers inherits omitted values from levels.yml.
+# Every modifier tuple requires chance% first. Trailing values may be omitted only from the right.
+# Omitted trailing values inherit per field, then use runtime defaults. Explicit 0 is a supplied value subject to normal validation; empty slots such as '10, , 5' are invalid.
+# Full tuples remain below so their effective default values are visible.
 # Safety limits per candidate: at most 16 minion entries/16 total minions and 32 loot entries/64 total loot items.
 
 karma:
@@ -375,7 +408,7 @@ karma:
 Enforcer:
   settings: [40, 30, 2]                  # [requiredKarma, consumeKarma, levelBonus].
   checks: [50, 1200, 60, 24~48]          # [chance% per connected-region check, cooldownSeconds, checkIntervalSeconds, outdoorSpawnRadius].
-  modifiers:                             # Partial Enforcer table. Omitted values inherit levels.yml; [] blocks that fallback.
+  modifiers:                             # Partial Enforcer table. Omitted entries and trailing values inherit levels.yml; [] blocks that fallback.
     # Offense: Enraged to Undodgeable
     enraged: 10, 0.15                    # chance%, outgoingDamageBonus.
     fire: 10, 0.2                        # chance%, addedFireDamage.
@@ -388,7 +421,7 @@ Enforcer:
     # Defense: Armored to Chameleon
     armored: 10, 0.3                     # chance%, damageReduction.
     deathward: 10, 0.2, 10, 3            # chance%, restoredHealth, cooldownSeconds, maxActivations.
-    regenerating: 10, 0.005              # chance%, maxHealthRegenPerSecond.
+    regenerating: 10, 0.005, 20          # chance%, maxHealthRatioPerSecond, healthPerSecondCap. 0 cap is unlimited.
     reflection: 10, 0.1, 0.5             # chance%, actualMeleeDamageReflected, procChance.
     vortex: 10, 0.5                      # chance%, projectileIgnoreProc.
     adaptive: 10, 0.5                    # chance%, rememberedTypeDamageReduction.
@@ -513,7 +546,11 @@ AshLands:
         try
         {
             KarmaSettings loaded = string.IsNullOrWhiteSpace(yaml) ? KarmaSettings.Default() : ReadSettings(yaml, source);
-            parsed = new ParsedConfiguration(() => Settings = loaded);
+            parsed = new ParsedConfiguration(() =>
+            {
+                Settings = loaded;
+                EnforcerBootstrapScanPending = true;
+            });
             return true;
         }
         catch (Exception ex)
@@ -1261,12 +1298,16 @@ AshLands:
         bool isServer = ZNet.instance != null && ZNet.instance.IsServer();
         if (isServer)
         {
+            float serverNow = Time.time;
             RefreshObservedPlayerDeathTransitions();
-            PruneSectorStates(Time.time);
+            PruneSectorStates(serverNow);
         }
 
         if (!IsEnforcerEnabled())
         {
+            EnforcerNoPlayerSince.Clear();
+            LastEnforcerAbandonmentDespawnSeconds = -1;
+            EnforcerBootstrapScanPending = true;
             return;
         }
 
@@ -1276,6 +1317,12 @@ AshLands:
         }
 
         float now = Time.time;
+        if (EnforcerBootstrapScanPending && TryBootstrapTrackedEnforcers())
+        {
+            EnforcerBootstrapScanPending = false;
+        }
+
+        UpdateAbandonedEnforcers(now);
         if (now < NextSummonCheckTime)
         {
             return;
@@ -1300,6 +1347,356 @@ AshLands:
                     $"(peer {representative.PeerUid}): reason={failure}.");
             }
         }
+    }
+
+    private static void UpdateAbandonedEnforcers(float now)
+    {
+        if (now < NextEnforcerAbandonmentCheckTime)
+        {
+            return;
+        }
+
+        NextEnforcerAbandonmentCheckTime = now + EnforcerAbandonmentCheckInterval;
+        int despawnSeconds = GetEnforcerAbandonedDespawnSeconds();
+        if (despawnSeconds != LastEnforcerAbandonmentDespawnSeconds)
+        {
+            EnforcerNoPlayerSince.Clear();
+            LastEnforcerAbandonmentDespawnSeconds = despawnSeconds;
+        }
+
+        if (despawnSeconds <= 0)
+        {
+            EnforcerNoPlayerSince.Clear();
+            return;
+        }
+
+        if (ZNet.instance == null ||
+            !ZNet.instance.IsServer() ||
+            ZDOMan.instance == null ||
+            ZoneSystem.instance == null)
+        {
+            return;
+        }
+
+        if (!CollectEnforcerPlayerPresences())
+        {
+            EnforcerNoPlayerSince.Clear();
+            return;
+        }
+
+        StaleTrackedEnforcerIds.Clear();
+        AbandonedEnforcerIds.Clear();
+
+        foreach (ZDOID enforcerId in TrackedEnforcerZdoIds)
+        {
+            ZDO enforcerZdo = ZDOMan.instance.GetZDO(enforcerId);
+            if (!IsTrackedCharacterZdoAlive(enforcerZdo) ||
+                !enforcerZdo.GetBool(EnforcerKey, false) ||
+                enforcerZdo.GetBool(ZDOVars.s_tamed, false))
+            {
+                StaleTrackedEnforcerIds.Add(enforcerId);
+                continue;
+            }
+
+            if (HasLivingPlayerInEnforcerRange(enforcerZdo))
+            {
+                EnforcerNoPlayerSince.Remove(enforcerId);
+                continue;
+            }
+
+            if (!EnforcerNoPlayerSince.TryGetValue(enforcerId, out float noPlayerSince))
+            {
+                EnforcerNoPlayerSince[enforcerId] = now;
+                continue;
+            }
+
+            if (now - noPlayerSince >= despawnSeconds)
+            {
+                AbandonedEnforcerIds.Add(enforcerId);
+            }
+        }
+
+        foreach (ZDOID staleId in StaleTrackedEnforcerIds)
+        {
+            TrackedEnforcerZdoIds.Remove(staleId);
+            EnforcerNoPlayerSince.Remove(staleId);
+        }
+
+        foreach (ZDOID abandonedId in AbandonedEnforcerIds)
+        {
+            ZDO enforcerZdo = ZDOMan.instance.GetZDO(abandonedId);
+            if (!IsTrackedCharacterZdoAlive(enforcerZdo) ||
+                !enforcerZdo.GetBool(EnforcerKey, false) ||
+                enforcerZdo.GetBool(ZDOVars.s_tamed, false) ||
+                HasLivingPlayerInEnforcerRange(enforcerZdo))
+            {
+                EnforcerNoPlayerSince.Remove(abandonedId);
+                continue;
+            }
+
+            DespawnAbandonedEnforcer(enforcerZdo);
+        }
+
+        StaleTrackedEnforcerIds.Clear();
+        AbandonedEnforcerIds.Clear();
+        EnforcerPlayerPresenceBuffer.Clear();
+        EnforcerPlayerPresenceIds.Clear();
+    }
+
+    private static bool CollectEnforcerPlayerPresences()
+    {
+        EnforcerPlayerPresenceBuffer.Clear();
+        EnforcerPlayerPresenceIds.Clear();
+        if (ZNet.instance == null)
+        {
+            return false;
+        }
+
+        Player? localPlayer = Player.m_localPlayer;
+        if (localPlayer != null && localPlayer.gameObject != null && !localPlayer.IsDead())
+        {
+            ZDOID localPlayerId = localPlayer.GetZDOID();
+            if (localPlayerId.IsNone())
+            {
+                localPlayerId = ZNet.instance.LocalPlayerCharacterID;
+            }
+
+            TryAddEnforcerPlayerPresence(localPlayerId, localPlayer.transform.position);
+        }
+
+        List<ZNetPeer>? peers = ZNet.instance.GetPeers();
+        if (peers == null)
+        {
+            return false;
+        }
+
+        foreach (ZNetPeer peer in peers)
+        {
+            if (TryGetLivingPeerPresence(peer, out ZDOID playerId, out Vector3 position))
+            {
+                TryAddEnforcerPlayerPresence(playerId, position);
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryGetLivingPeerPresence(
+        ZNetPeer peer,
+        out ZDOID playerId,
+        out Vector3 position)
+    {
+        playerId = ZDOID.None;
+        position = Vector3.zero;
+        if (peer == null ||
+            peer.m_uid == 0L ||
+            !peer.IsReady() ||
+            peer.m_characterID.IsNone())
+        {
+            return false;
+        }
+
+        playerId = peer.m_characterID;
+        GameObject? instance = ZNetScene.instance?.FindInstance(playerId);
+        Player? loadedPlayer = instance != null ? instance.GetComponent<Player>() : null;
+        if (loadedPlayer != null)
+        {
+            if (loadedPlayer.IsDead())
+            {
+                return false;
+            }
+
+            position = loadedPlayer.transform.position;
+            return IsFinite(position);
+        }
+
+        ZDO? playerZdo = ZDOMan.instance?.GetZDO(playerId);
+        if (playerZdo != null)
+        {
+            float health = playerZdo.GetFloat(ZDOVars.s_health, float.PositiveInfinity);
+            bool dead = playerZdo.GetBool(ZDOVars.s_dead, false) ||
+                        (!float.IsNaN(health) && !float.IsInfinity(health) && health <= 0f);
+            if (dead)
+            {
+                return false;
+            }
+
+            if (!float.IsNaN(health))
+            {
+                position = playerZdo.GetPosition();
+                if (IsFinite(position))
+                {
+                    return true;
+                }
+            }
+        }
+
+        position = peer.GetRefPos();
+        return IsFinite(position);
+    }
+
+    private static void TryAddEnforcerPlayerPresence(ZDOID playerId, Vector3 position)
+    {
+        if (playerId.IsNone() ||
+            !IsFinite(position) ||
+            !EnforcerPlayerPresenceIds.Add(playerId))
+        {
+            return;
+        }
+
+        EnforcerPlayerPresenceBuffer.Add(new EnforcerPlayerPresence(
+            position,
+            ZoneSystem.GetZone(position),
+            Character.InInterior(position)));
+    }
+
+    private static bool HasLivingPlayerInEnforcerRange(ZDO enforcerZdo)
+    {
+        Vector3 enforcerPosition = enforcerZdo.GetPosition();
+        if (!IsFinite(enforcerPosition))
+        {
+            return false;
+        }
+
+        bool anchorStored = enforcerZdo.GetBool(EnforcerPresenceAnchorStoredKey, false);
+        bool enforcerInterior = anchorStored
+            ? enforcerZdo.GetBool(EnforcerPresenceInteriorKey, false)
+            : Character.InInterior(enforcerPosition);
+        Vector2i currentZone = ZoneSystem.GetZone(enforcerPosition);
+        Vector2i enforcerZone = anchorStored && enforcerInterior
+            ? new Vector2i(
+                enforcerZdo.GetInt(EnforcerPresenceZoneXKey, currentZone.x),
+                enforcerZdo.GetInt(EnforcerPresenceZoneYKey, currentZone.y))
+            : currentZone;
+
+        foreach (EnforcerPlayerPresence player in EnforcerPlayerPresenceBuffer)
+        {
+            if (player.Interior != enforcerInterior)
+            {
+                continue;
+            }
+
+            if (enforcerInterior &&
+                (player.Zone.x != enforcerZone.x || player.Zone.y != enforcerZone.y))
+            {
+                continue;
+            }
+
+            float deltaX = player.Position.x - enforcerPosition.x;
+            float deltaZ = player.Position.z - enforcerPosition.z;
+            if (deltaX * deltaX + deltaZ * deltaZ <= EnforcerPresenceRangeSquared)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryBootstrapTrackedEnforcers()
+    {
+        if (ZDOMan.instance == null || ZoneSystem.instance == null)
+        {
+            return false;
+        }
+
+        HashSet<string> candidatePrefabs = new(StringComparer.Ordinal);
+        foreach (EnforcerBiomeDefinition biome in Settings.Enforcer.Biomes.Values)
+        {
+            IEnumerable<EnforcerCandidateDefinition> candidates = biome.Outdoor
+                .Concat(biome.Dungeon)
+                .Concat(biome.DungeonByLocation.Values.SelectMany(entries => entries));
+            foreach (EnforcerCandidateDefinition candidate in candidates)
+            {
+                string prefab = candidate.Summon.Boss.Trim();
+                if (prefab.Length > 0)
+                {
+                    candidatePrefabs.Add(prefab);
+                }
+            }
+        }
+
+        int restored = 0;
+        foreach (string prefab in candidatePrefabs)
+        {
+            EnforcerBootstrapScanBuffer.Clear();
+            int index = 0;
+            while (!ZDOMan.instance.GetAllZDOsWithPrefabIterative(prefab, EnforcerBootstrapScanBuffer, ref index))
+            {
+            }
+
+            foreach (ZDO zdo in EnforcerBootstrapScanBuffer)
+            {
+                if (zdo == null ||
+                    zdo.m_uid.IsNone() ||
+                    !zdo.GetBool(EnforcerKey, false) ||
+                    !IsTrackedCharacterZdoAlive(zdo) ||
+                    zdo.GetBool(ZDOVars.s_tamed, false))
+                {
+                    continue;
+                }
+
+                bool alreadyTracked = TrackedEnforcerZdoIds.Contains(zdo.m_uid);
+                TrackPotentialBlockerZdo(zdo, isBoss: false);
+                if (!alreadyTracked)
+                {
+                    restored++;
+                }
+
+                StoreEnforcerPresenceAnchor(zdo);
+            }
+        }
+
+        EnforcerBootstrapScanBuffer.Clear();
+        if (restored > 0)
+        {
+            CreatureManagerPlugin.Log.LogInfo(
+                $"Restored tracking for {restored} persisted Karma Enforcer(s) from server ZDO data.");
+        }
+
+        return true;
+    }
+
+    private static void DespawnAbandonedEnforcer(ZDO enforcerZdo)
+    {
+        if (enforcerZdo == null ||
+            enforcerZdo.m_uid.IsNone() ||
+            ZDOMan.instance == null ||
+            !IsTrackedCharacterZdoAlive(enforcerZdo) ||
+            !enforcerZdo.GetBool(EnforcerKey, false) ||
+            enforcerZdo.GetBool(ZDOVars.s_tamed, false))
+        {
+            return;
+        }
+
+        ZDOID enforcerId = enforcerZdo.m_uid;
+        string displayName = enforcerZdo.GetString(EnforcerNameKey, "Enforcer");
+        TrackedEnforcerZdoIds.Remove(enforcerId);
+        EnforcerNoPlayerSince.Remove(enforcerId);
+        TrackedBossZdoIds.Remove(enforcerId);
+        ReportedBlockerZdoIds.Remove(enforcerId);
+        enforcerZdo.SetOwner(ZDOMan.instance.m_sessionID);
+        enforcerZdo.Set(CountedDeathKey, true);
+        enforcerZdo.Set(EnforcerSummonedKey, false);
+        enforcerZdo.Set(EnforcerKey, false);
+        ClearActiveBossCountBeforeDespawn(enforcerZdo);
+        ZDOMan.instance.DestroyZDO(enforcerZdo);
+
+        CreatureManagerPlugin.Log.LogInfo(
+            $"Removed abandoned Karma Enforcer '{displayName}' after " +
+            $"{GetEnforcerAbandonedDespawnSeconds()}s without a living player within {EnforcerPresenceRange:0}m.");
+    }
+
+    private static void ClearActiveBossCountBeforeDespawn(ZDO zdo)
+    {
+        if (ZoneSystem.instance == null || !zdo.GetBool("bosscount", false))
+        {
+            return;
+        }
+
+        ZoneSystem.instance.GetGlobalKey(GlobalKeys.activeBosses, out float activeBossCount);
+        ZoneSystem.instance.SetGlobalKey(GlobalKeys.activeBosses, Mathf.Max(0f, activeBossCount - 1f));
+        zdo.Set("bosscount", false);
     }
 
     private static List<ConnectedPlayerContext> GetConnectedAlivePlayerContexts()
@@ -2007,6 +2404,7 @@ AshLands:
         zdo.Set(EnforcerLevelBonusKey, Mathf.Max(0, settings.LevelBonus));
         zdo.Set(EnforcerIsBossKey, settings.IsBoss);
         zdo.Set(EnforcerBossHudKey, settings.BossHud);
+        StoreEnforcerPresenceAnchor(zdo);
 
         if (RuntimeEnforcerLoot.TryGetValue(character.GetInstanceID(), out List<EnforcerLootDefinition> loot) &&
             loot.Count > 0 &&
@@ -2019,6 +2417,26 @@ AshLands:
         {
             zdo.Set(EnforcerNameKey, character.m_name);
         }
+    }
+
+    private static void StoreEnforcerPresenceAnchor(ZDO zdo)
+    {
+        if (zdo.GetBool(EnforcerPresenceAnchorStoredKey, false))
+        {
+            return;
+        }
+
+        Vector3 position = zdo.GetPosition();
+        bool interior = Character.InInterior(position);
+        zdo.Set(EnforcerPresenceInteriorKey, interior);
+        if (interior)
+        {
+            Vector2i zone = ZoneSystem.GetZone(position);
+            zdo.Set(EnforcerPresenceZoneXKey, zone.x);
+            zdo.Set(EnforcerPresenceZoneYKey, zone.y);
+        }
+
+        zdo.Set(EnforcerPresenceAnchorStoredKey, true);
     }
 
     private static bool TryGetZdo(Character character, out ZDO zdo)
@@ -2456,6 +2874,7 @@ AshLands:
                 !trackedZdo.GetBool(EnforcerKey, false))
             {
                 TrackedEnforcerZdoIds.Remove(trackedId);
+                EnforcerNoPlayerSince.Remove(trackedId);
                 continue;
             }
 
@@ -4766,6 +5185,20 @@ AshLands:
             PeerUid = peerUid;
             CharacterId = characterId;
             Position = position;
+        }
+    }
+
+    private readonly struct EnforcerPlayerPresence
+    {
+        internal readonly Vector3 Position;
+        internal readonly Vector2i Zone;
+        internal readonly bool Interior;
+
+        internal EnforcerPlayerPresence(Vector3 position, Vector2i zone, bool interior)
+        {
+            Position = position;
+            Zone = zone;
+            Interior = interior;
         }
     }
 

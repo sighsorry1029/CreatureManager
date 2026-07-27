@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.1.1";
+    internal const string ModVersion = "1.1.2";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -106,6 +106,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             EnableEnforcerModifiers = config("2 - Levels", "Enforcer Modifiers", Toggle.On, Ordered("Master switch for modifier rolls, effects, and modifier HUD icons on Karma Enforcers. This does not disable Enforcer summoning, level bonuses, or loot settings.", 67));
             KarmaMode = config("3 - Karma", "Karma System Mode", KarmaSystemMode.KarmaLevelAndEnforcer, Ordered("Off disables Karma runtime processing without deleting stored values. KarmaLevelAndEnforcer enables both features, KarmaLevelOnly disables Enforcer summons, and EnforcerOnly tracks Karma for summons without adding Karma levels to normal spawns.", 100));
             MaximumEnforcersPerSector = config("3 - Karma", "Maximum Enforcers Per Sector", 1, Ordered("Maximum active Enforcers allowed in the same fixed 3x3 Karma neighborhood.", 90, new AcceptableValueRange<int>(1, 20)));
+            EnforcerAbandonedDespawnSeconds = config("3 - Karma", "Enforcer Abandonment Despawn Time (s)", 120, Ordered("Seconds without a living player in the fixed 64 m encounter range before the Enforcer is removed without death drops. Summoned minions remain in the world. Dungeon checks require the same interior anchor zone; distance is measured on the XZ plane. Returning players or changing this value reset active timers. Enter an integer from 0 to 1500; 0 disables the feature.", 85, new AcceptableIntegerRangeWithoutSlider(0, 1500)));
             BlockEnforcerWhileBossActive = config("3 - Karma", "Block Enforcer While Boss Is Active", Toggle.On, Ordered("If on, Enforcer summons are blocked while a non-Enforcer boss is active in the same fixed 3x3 Karma neighborhood.", 80));
             BlockKarmaGainWhileBossActive = config("3 - Karma", "Block Karma Gain While Boss Is Active", Toggle.On, Ordered("If on, creature kills do not add Karma while a non-Enforcer boss is alive in the same fixed 3x3 Karma neighborhood. Killing the last active boss can still award Karma.", 75));
             BlockKarmaGainWhileEnforcerActive = config("3 - Karma", "Block Karma Gain While Enforcer Is Active", Toggle.On, Ordered("If on, creature kills do not add Karma while an Enforcer is alive in the same fixed 3x3 Karma neighborhood.", 74));
@@ -427,6 +428,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     internal static ConfigEntry<Toggle> EnableEnforcerModifiers = null!;
     internal static ConfigEntry<KarmaSystemMode> KarmaMode = null!;
     internal static ConfigEntry<int> MaximumEnforcersPerSector = null!;
+    internal static ConfigEntry<int> EnforcerAbandonedDespawnSeconds = null!;
     internal static ConfigEntry<Toggle> BlockEnforcerWhileBossActive = null!;
     internal static ConfigEntry<Toggle> BlockKarmaGainWhileBossActive = null!;
     internal static ConfigEntry<Toggle> BlockKarmaGainWhileEnforcerActive = null!;
@@ -462,6 +464,40 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     private class ConfigurationManagerAttributes
     {
         [UsedImplicitly] public int? Order = null!;
+    }
+
+    private sealed class AcceptableIntegerRangeWithoutSlider : AcceptableValueBase
+    {
+        private readonly int _minimum;
+        private readonly int _maximum;
+
+        internal AcceptableIntegerRangeWithoutSlider(int minimum, int maximum)
+            : base(typeof(int))
+        {
+            if (minimum >= maximum)
+            {
+                throw new ArgumentException("minimum must be lower than maximum", nameof(minimum));
+            }
+
+            _minimum = minimum;
+            _maximum = maximum;
+        }
+
+        public override object Clamp(object value)
+        {
+            int integer = (int)value;
+            return Math.Max(_minimum, Math.Min(_maximum, integer));
+        }
+
+        public override bool IsValid(object value)
+        {
+            return value is int integer && integer >= _minimum && integer <= _maximum;
+        }
+
+        public override string ToDescriptionString()
+        {
+            return $"# Acceptable value range: From {_minimum} to {_maximum}";
+        }
     }
 
     #endregion

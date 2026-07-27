@@ -20,7 +20,8 @@ internal static class CreatureLevelManager
     private const string KarmaBonusResponseRpc = "CreatureManager_LevelKarmaBonusResponse";
     private const float KarmaBonusRetryInterval = 0.5f;
     private const float KarmaBonusRequestTimeout = 10f;
-    private const float KarmaBonusMaximumRetryInterval = 5f;
+    private const float KarmaBonusMaximumRetryInterval = 30f;
+    private const float KarmaBonusDiagnosticsInterval = 60f;
     private const string HueProperty = "_Hue";
     private const string SaturationProperty = "_Saturation";
     private const string ValueProperty = "_Value";
@@ -38,13 +39,33 @@ internal static class CreatureLevelManager
     private static readonly Dictionary<int, Character> PendingLevelCharacters = new();
     private static readonly Dictionary<ZDOID, PendingKarmaBonusRequest> PendingKarmaBonusRequests = new();
     private static readonly Dictionary<ZDOID, int> ResolvedKarmaBonuses = new();
+    private static readonly int[] ServerKarmaBonusOutcomeCounts = new int[(int)KarmaBonusRequestOutcome.Count];
+    private static int ServerAcceptedOwnerMismatchCount;
+    private static int ServerAcceptedPrefabUnavailableCount;
+    private static int ClientKarmaBonusTimeoutEvents;
+    private static float NextServerKarmaBonusDiagnosticsAt;
+    private static float NextClientKarmaBonusDiagnosticsAt;
 
     private sealed class PendingKarmaBonusRequest
     {
         internal int RequestId;
         internal float StartedAt = -1f;
         internal float NextSendAt;
-        internal int TimeoutCount;
+        internal int SendCount;
+        internal int RejectedResponseCount;
+    }
+
+    private enum KarmaBonusRequestOutcome
+    {
+        Ready,
+        InvalidRequest,
+        PeerMissing,
+        PeerNotReady,
+        ServerNotReady,
+        ZdoMissing,
+        PlayerCharacter,
+        InvalidPosition,
+        Count
     }
 
     private enum LevelRuleScope
@@ -114,6 +135,12 @@ internal static class CreatureLevelManager
         PendingLevelCharacters.Clear();
         PendingKarmaBonusRequests.Clear();
         ResolvedKarmaBonuses.Clear();
+        Array.Clear(ServerKarmaBonusOutcomeCounts, 0, ServerKarmaBonusOutcomeCounts.Length);
+        ServerAcceptedOwnerMismatchCount = 0;
+        ServerAcceptedPrefabUnavailableCount = 0;
+        ClientKarmaBonusTimeoutEvents = 0;
+        NextServerKarmaBonusDiagnosticsAt = 0f;
+        NextClientKarmaBonusDiagnosticsAt = 0f;
         InvalidateRuleSearchCache();
     }
 
@@ -137,7 +164,7 @@ internal static class CreatureLevelManager
             return;
         }
 
-        PruneTimedOutKarmaBonusRequests();
+        UpdateTimedOutKarmaBonusRequests();
         if (!IsLevelSystemEnabled())
         {
             PendingLevelCharacters.Clear();
@@ -454,21 +481,32 @@ internal static class CreatureLevelManager
             ZRoutedRpc.instance.GetServerPeerID(),
             KarmaBonusRequestRpc,
             package);
+        request.SendCount++;
         if (request.StartedAt < 0f)
         {
             request.StartedAt = now;
         }
 
-        float retryInterval = Mathf.Min(
-            KarmaBonusMaximumRetryInterval,
-            KarmaBonusRetryInterval * Math.Max(1, request.TimeoutCount + 1));
-        request.NextSendAt = now + retryInterval;
+        request.NextSendAt = now + GetKarmaBonusRetryInterval(request.SendCount);
     }
 
-    private static void PruneTimedOutKarmaBonusRequests()
+    private static float GetKarmaBonusRetryInterval(int sendCount)
+    {
+        return sendCount switch
+        {
+            <= 1 => KarmaBonusRetryInterval,
+            2 => 1f,
+            3 => 2f,
+            4 => 5f,
+            5 => 10f,
+            _ => KarmaBonusMaximumRetryInterval
+        };
+    }
+
+    private static void UpdateTimedOutKarmaBonusRequests()
     {
         float now = Time.unscaledTime;
-        foreach (KeyValuePair<ZDOID, PendingKarmaBonusRequest> entry in PendingKarmaBonusRequests.ToArray())
+        foreach (KeyValuePair<ZDOID, PendingKarmaBonusRequest> entry in PendingKarmaBonusRequests)
         {
             PendingKarmaBonusRequest request = entry.Value;
             if (request.StartedAt < 0f || now - request.StartedAt < KarmaBonusRequestTimeout)
@@ -477,15 +515,192 @@ internal static class CreatureLevelManager
             }
 
             request.StartedAt = now;
-            request.NextSendAt = now;
-            request.TimeoutCount++;
-            if (request.TimeoutCount == 1 || request.TimeoutCount % 6 == 0)
+            ClientKarmaBonusTimeoutEvents++;
+        }
+
+        if (ClientKarmaBonusTimeoutEvents <= 0 || now < NextClientKarmaBonusDiagnosticsAt)
+        {
+            return;
+        }
+
+        int rejected = 0;
+        foreach (PendingKarmaBonusRequest request in PendingKarmaBonusRequests.Values)
+        {
+            if (request.RejectedResponseCount > 0)
             {
-                CreatureManagerPlugin.Log.LogWarning(
-                    $"Still waiting for the server Karma level bonus for creature {entry.Key}; " +
-                    "keeping level application pending and retrying at a reduced rate.");
+                rejected++;
             }
         }
+
+        int pending = PendingKarmaBonusRequests.Count;
+        int unanswered = Math.Max(0, pending - rejected);
+        CreatureManagerPlugin.Log.LogWarning(
+            $"Still waiting for server Karma level bonuses for {pending} creature(s): " +
+            $"noResponse={unanswered}, serverRejected={rejected}, " +
+            $"timeoutEvents={ClientKarmaBonusTimeoutEvents}; retries back off to " +
+            $"{KarmaBonusMaximumRetryInterval:0}s.");
+        ClientKarmaBonusTimeoutEvents = 0;
+        NextClientKarmaBonusDiagnosticsAt = now + KarmaBonusDiagnosticsInterval;
+    }
+
+    private static KarmaBonusRequestOutcome ResolveAuthoritativeKarmaBonus(
+        long sender,
+        int requestId,
+        ZDOID characterId,
+        out int bonus)
+    {
+        bonus = 0;
+        if (requestId <= 0 || characterId == ZDOID.None)
+        {
+            return KarmaBonusRequestOutcome.InvalidRequest;
+        }
+
+        ZNetPeer peer = ZNet.instance.GetPeer(sender);
+        if (peer == null)
+        {
+            return KarmaBonusRequestOutcome.PeerMissing;
+        }
+
+        if (!peer.IsReady())
+        {
+            return KarmaBonusRequestOutcome.PeerNotReady;
+        }
+
+        if (ZDOMan.instance == null || ZoneSystem.instance == null)
+        {
+            return KarmaBonusRequestOutcome.ServerNotReady;
+        }
+
+        ZDO zdo = ZDOMan.instance.GetZDO(characterId);
+        if (zdo == null)
+        {
+            return KarmaBonusRequestOutcome.ZdoMissing;
+        }
+
+        if (IsConnectedPlayerCharacter(characterId))
+        {
+            return KarmaBonusRequestOutcome.PlayerCharacter;
+        }
+
+        Vector3 position = zdo.GetPosition();
+        if (!IsFinite(position))
+        {
+            return KarmaBonusRequestOutcome.InvalidPosition;
+        }
+
+        if (zdo.GetOwner() != sender)
+        {
+            // The response is read-only; the client still requires local ZDO ownership before applying it.
+            ServerAcceptedOwnerMismatchCount++;
+        }
+
+        // Karma needs only the authoritative ZDO position and Enforcer keys. Prefab data is optional blocker metadata.
+        Character? prefabCharacter = null;
+        if (ZNetScene.instance != null)
+        {
+            GameObject? prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+            if (prefab != null)
+            {
+                if (prefab.GetComponent<Player>() != null)
+                {
+                    return KarmaBonusRequestOutcome.PlayerCharacter;
+                }
+
+                prefabCharacter = prefab.GetComponent<Character>();
+            }
+        }
+
+        if (prefabCharacter == null)
+        {
+            ServerAcceptedPrefabUnavailableCount++;
+        }
+
+        CreatureKarmaManager.TrackPotentialBlockerZdo(zdo, prefabCharacter?.IsBoss() == true);
+        bonus = CreatureKarmaManager.GetAuthoritativeLevelBonus(zdo);
+        return KarmaBonusRequestOutcome.Ready;
+    }
+
+    private static bool IsConnectedPlayerCharacter(ZDOID characterId)
+    {
+        if (ZNet.instance == null)
+        {
+            return false;
+        }
+
+        if (ZNet.instance.LocalPlayerCharacterID == characterId)
+        {
+            return true;
+        }
+
+        List<ZNetPeer>? peers = ZNet.instance.GetPeers();
+        if (peers != null)
+        {
+            foreach (ZNetPeer peer in peers)
+            {
+                if (peer != null && peer.m_characterID == characterId)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsFinite(Vector3 position)
+    {
+        return !float.IsNaN(position.x) &&
+               !float.IsNaN(position.y) &&
+               !float.IsNaN(position.z) &&
+               !float.IsInfinity(position.x) &&
+               !float.IsInfinity(position.y) &&
+               !float.IsInfinity(position.z);
+    }
+
+    private static void RecordServerKarmaBonusOutcome(KarmaBonusRequestOutcome outcome)
+    {
+        int index = (int)outcome;
+        if (index >= 0 && index < ServerKarmaBonusOutcomeCounts.Length)
+        {
+            ServerKarmaBonusOutcomeCounts[index]++;
+        }
+    }
+
+    private static void TryLogServerKarmaBonusDiagnostics(float now)
+    {
+        if (now < NextServerKarmaBonusDiagnosticsAt)
+        {
+            return;
+        }
+
+        int rejected = 0;
+        for (int index = 1; index < ServerKarmaBonusOutcomeCounts.Length; index++)
+        {
+            rejected += ServerKarmaBonusOutcomeCounts[index];
+        }
+
+        if (rejected > 0 ||
+            ServerAcceptedOwnerMismatchCount > 0 ||
+            ServerAcceptedPrefabUnavailableCount > 0)
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                "Karma bonus request summary: " +
+                $"ready={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.Ready]}, " +
+                $"invalid={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.InvalidRequest]}, " +
+                $"peerMissing={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.PeerMissing]}, " +
+                $"peerNotReady={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.PeerNotReady]}, " +
+                $"serverNotReady={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.ServerNotReady]}, " +
+                $"zdoMissing={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.ZdoMissing]}, " +
+                $"playerCharacter={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.PlayerCharacter]}, " +
+                $"invalidPosition={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.InvalidPosition]}, " +
+                $"acceptedOwnerMismatch={ServerAcceptedOwnerMismatchCount}, " +
+                $"acceptedPrefabUnavailable={ServerAcceptedPrefabUnavailableCount}.");
+        }
+
+        Array.Clear(ServerKarmaBonusOutcomeCounts, 0, ServerKarmaBonusOutcomeCounts.Length);
+        ServerAcceptedOwnerMismatchCount = 0;
+        ServerAcceptedPrefabUnavailableCount = 0;
+        NextServerKarmaBonusDiagnosticsAt = now + KarmaBonusDiagnosticsInterval;
     }
 
     private static void RPC_KarmaBonusRequest(long sender, ZPackage package)
@@ -501,29 +716,11 @@ internal static class CreatureLevelManager
         {
             int requestId = package.ReadInt();
             ZDOID characterId = package.ReadZDOID();
-            bool ready = false;
-            int bonus = 0;
-            ZNetPeer peer = ZNet.instance.GetPeer(sender);
-            if (requestId > 0 &&
-                characterId != ZDOID.None &&
-                peer != null &&
-                peer.IsReady() &&
-                ZDOMan.instance != null &&
-                ZNetScene.instance != null)
-            {
-                ZDO zdo = ZDOMan.instance.GetZDO(characterId);
-                GameObject? prefab = zdo != null ? ZNetScene.instance.GetPrefab(zdo.GetPrefab()) : null;
-                if (zdo != null &&
-                    zdo.GetOwner() == sender &&
-                    prefab != null &&
-                    prefab.GetComponent<Character>() is Character prefabCharacter &&
-                    prefab.GetComponent<Player>() == null)
-                {
-                    CreatureKarmaManager.TrackPotentialBlockerZdo(zdo, prefabCharacter.IsBoss());
-                    bonus = CreatureKarmaManager.GetAuthoritativeLevelBonus(zdo);
-                    ready = true;
-                }
-            }
+            KarmaBonusRequestOutcome outcome =
+                ResolveAuthoritativeKarmaBonus(sender, requestId, characterId, out int bonus);
+            bool ready = outcome == KarmaBonusRequestOutcome.Ready;
+            RecordServerKarmaBonusOutcome(outcome);
+            TryLogServerKarmaBonusDiagnostics(Time.unscaledTime);
 
             ZPackage response = new();
             response.Write(requestId);
@@ -557,6 +754,12 @@ internal static class CreatureLevelManager
                 return;
             }
 
+            if (!ready)
+            {
+                request.RejectedResponseCount++;
+                return;
+            }
+
             if (!TryFindPendingLevelCharacter(characterId, out Character character) ||
                 character.m_nview == null ||
                 !character.m_nview.IsValid() ||
@@ -565,11 +768,6 @@ internal static class CreatureLevelManager
             {
                 PendingKarmaBonusRequests.Remove(characterId);
                 ResolvedKarmaBonuses.Remove(characterId);
-                return;
-            }
-
-            if (!ready)
-            {
                 return;
             }
 
@@ -1658,6 +1856,16 @@ internal static class CreatureLevelManager
         if (TrySelectModifierInteger(search, "deathward", value => value.MaxActivations, out int deathwardMaxActivations))
         {
             powers.DeathwardMaxActivations = Math.Max(1, deathwardMaxActivations);
+            hasPower = true;
+        }
+
+        if (TrySelectModifierValue(
+                search,
+                "regenerating",
+                value => value.RegeneratingHealthPerSecondCap,
+                out float regeneratingHealthPerSecondCap))
+        {
+            powers.RegeneratingHealthPerSecondCap = Mathf.Max(0f, regeneratingHealthPerSecondCap);
             hasPower = true;
         }
 

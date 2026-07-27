@@ -4968,6 +4968,9 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "Regular boss specificity: prefab > group > Boss. Missing fields never fall back to Global; level may use the opt-in biome preset.");
         AppendTemplateComment(builder, "For any modifiers field, omission or {} keeps lower-priority fallback; a mapping overrides only listed values.");
         AppendTemplateComment(builder, "Use modifiers: [] as a terminal clear that blocks every lower-priority modifier source for that target.");
+        AppendTemplateComment(builder, "Every modifier tuple requires chance% first. Trailing values may be omitted only from the right.");
+        AppendTemplateComment(builder, "Omitted trailing values inherit per field, then use runtime defaults. Explicit 0 is a supplied value subject to normal validation; empty slots such as '10, , 5' are invalid.");
+        AppendTemplateComment(builder, "The generated entries below keep full tuples so their effective default values remain visible.");
         AppendTemplateComment(builder, "Enforcer summons ignore Boss and continue to use prefab/group, biome, and Global rules even when their source prefab is a boss.");
         AppendTemplateComment(builder, "Nested biome rules under a prefab/group beat the same target without a biome. User biome targets do not affect regular bosses; built-in preset biome levels can be opted in by config.");
         AppendTemplateComment(builder, "Rules are selected by the current network owner from the server-synchronized definitions when a creature is processed.");
@@ -5071,7 +5074,7 @@ internal static class CreatureDomainManager
         string blamerChance = bossDefaults ? "0" : chance;
         string blamerKarmaPerSecond = bossDefaults ? "1" : "0.5";
         string blamerMaxKarmaGain = bossDefaults ? "60" : "45";
-        AppendIndented(builder, 1, "modifiers:                           # At most one modifier per group. Special tuples are documented inline.");
+        AppendIndented(builder, 1, "modifiers:                           # At most one modifier per group. chance% is required; trailing tuple values are optional.");
         AppendIndented(builder, 2, "# Offense: Enraged to Undodgeable");
         AppendIndented(builder, 2, $"enraged: {chance}, 0.15                 # chance%, outgoingDamageBonus.");
         AppendIndented(builder, 2, $"fire: {chance}, 0.2                     # chance%, addedFireDamage.");
@@ -5084,7 +5087,7 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 2, "# Defense: Armored to Chameleon");
         AppendIndented(builder, 2, $"armored: {chance}, 0.3                 # chance%, damageReduction.");
         AppendIndented(builder, 2, $"deathward: {chance}, 0.2, 10, 3         # chance%, restoredHealth, cooldownSeconds, maxActivations.");
-        AppendIndented(builder, 2, $"regenerating: {chance}, {regenerationPerSecond}          # chance%, maxHealthRegenPerSecond.");
+        AppendIndented(builder, 2, $"regenerating: {chance}, {regenerationPerSecond}, 20      # chance%, maxHealthRatioPerSecond, healthPerSecondCap. 0 cap is unlimited.");
         AppendIndented(builder, 2, $"reflection: {chance}, 0.1, 0.5         # chance%, actualMeleeDamageReflected, procChance.");
         AppendIndented(builder, 2, $"vortex: {chance}, 0.5                  # chance%, projectileIgnoreProc.");
         AppendIndented(builder, 2, $"adaptive: {chance}, 0.5                # chance%, rememberedTypeDamageReduction.");

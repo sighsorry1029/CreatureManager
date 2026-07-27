@@ -25,6 +25,7 @@ internal static class CreatureModifierManager
     private const string DeathwardNextReadyTimeKey = "CreatureManager_DeathwardNextReadyTime";
     private const string SwiftPowerKey = "CreatureManager_SwiftPower";
     private const string RegeneratingPowerKey = "CreatureManager_RegeneratingPower";
+    private const string RegeneratingHealthPerSecondCapKey = "CreatureManager_RegeneratingHealthPerSecondCap";
     private const string VampiricPowerKey = "CreatureManager_VampiricPower";
     private const string FirePowerKey = "CreatureManager_FirePower";
     private const string FrostPowerKey = "CreatureManager_FrostPower";
@@ -160,6 +161,7 @@ internal static class CreatureModifierManager
     private const int DeathwardDefaultMaxActivations = 3;
     private const float SwiftDefaultPower = 0.25f;
     private const float RegeneratingDefaultPower = 0.003f;
+    private const float RegeneratingDefaultHealthPerSecondCap = 20f;
     private const float VampiricDefaultPower = 0.3f;
     private const float ElementalDefaultPower = 0.25f;
     private const float FireDefaultPower = 0.2f;
@@ -314,7 +316,7 @@ internal static class CreatureModifierManager
 
         new(ModifierGroup.Defense, "armored", "Armored", ModifierMask.Armored, ArmoredReductionKey, ArmoredDefaultPower, GetArmoredSprite, power => $"Reduces incoming damage by {FormatPercent(power)}."),
         new(ModifierGroup.Defense, "deathward", "Deathward", ModifierMask.Deathward, DeathwardHealthKey, DeathwardDefaultPower, GetDeathwardSprite, power => DescribeDeathward(power, DeathwardDefaultCooldown, DeathwardDefaultMaxActivations), ClampDeathwardHealth),
-        new(ModifierGroup.Defense, "regenerating", "Regenerating", ModifierMask.Regenerating, RegeneratingPowerKey, RegeneratingDefaultPower, GetRegeneratingSprite, power => $"Heals {FormatPercent(power)} of max health every second."),
+        new(ModifierGroup.Defense, "regenerating", "Regenerating", ModifierMask.Regenerating, RegeneratingPowerKey, RegeneratingDefaultPower, GetRegeneratingSprite, power => DescribeRegenerating(power, RegeneratingDefaultHealthPerSecondCap)),
         new(ModifierGroup.Defense, "reflection", "Reflection", ModifierMask.Reflection, ReflectionPowerKey, ReflectionDefaultPower, GetReflectionSprite, power => DescribeReflection(power, ReflectionDefaultProcChance), procChanceKey: ReflectionChanceKey),
         new(ModifierGroup.Defense, "vortex", "Vortex", ModifierMask.Vortex, VortexPowerKey, VortexDefaultPower, GetVortexSprite, power => $"On projectile hits, {FormatPercent(power)} proc chance to ignore all damage, push, stagger, and status effects."),
         new(ModifierGroup.Defense, "adaptive", "Adaptive", ModifierMask.Adaptive, AdaptivePowerKey, AdaptiveDefaultPower, GetAdaptiveSprite, power => $"Remembers one hit's dominant damage type for {FormatSeconds(AdaptiveDuration)} without changing it. Matching damage is reduced by {FormatPercent(power)} until the memory expires."),
@@ -1573,6 +1575,9 @@ internal static class CreatureModifierManager
                 ResolvePlayerDebuffProcChance(definition.ProcChance),
                 ResolvePlayerDebuffDuration(definition.Duration, PlayerDebuffDuration)),
             ModifierMask.ToxicDeath => DescribeToxicDeath(power, Mathf.Max(0f, definition.Radius ?? ToxicDeathDefaultRadius)),
+            ModifierMask.Regenerating => DescribeRegenerating(
+                power,
+                ResolveRegeneratingHealthPerSecondCap(definition.RegeneratingHealthPerSecondCap)),
             ModifierMask.Blink => DescribeBlink(ResolveBlinkCooldown(definition.Cooldown), ResolveBlinkMaxRange(definition.MaxRange)),
             ModifierMask.Knockback => DescribeKnockback(power, ResolveKnockbackCooldown(definition.Cooldown)),
             ModifierMask.Blamer => DescribeBlamer(
@@ -1606,7 +1611,7 @@ internal static class CreatureModifierManager
                 fallback,
                 ("power", FormatPercent(power))),
             ModifierMask.Armored => LocalizeModifierDescription("armored", fallback, ("power", FormatPercent(power))),
-            ModifierMask.Regenerating => LocalizeModifierDescription("regenerating", fallback, ("power", FormatPercent(power))),
+            ModifierMask.Regenerating => DescribeRegenerating(power, RegeneratingDefaultHealthPerSecondCap),
             ModifierMask.Vortex => LocalizeModifierDescription("vortex", fallback, ("power", FormatPercent(power))),
             ModifierMask.Adaptive => LocalizeModifierDescription(
                 "adaptive",
@@ -1954,6 +1959,29 @@ internal static class CreatureModifierManager
             ("cap", cap));
     }
 
+    private static string DescribeRegenerating(float maxHealthRatioPerSecond, float healthPerSecondCap)
+    {
+        string power = FormatPercent(maxHealthRatioPerSecond);
+        if (healthPerSecondCap <= 0f)
+        {
+            string unlimitedFallback =
+                $"Heals {power} of max health every second with no absolute per-second cap.";
+            return CreatureLocalization.Format(
+                "cm_modifier_regenerating_description_unlimited",
+                unlimitedFallback,
+                ("power", power));
+        }
+
+        string cap = healthPerSecondCap.ToString("0.##", CultureInfo.InvariantCulture);
+        string fallback =
+            $"Heals {power} of max health every second, up to {cap} health per second.";
+        return LocalizeModifierDescription(
+            "regenerating",
+            fallback,
+            ("power", power),
+            ("cap", cap));
+    }
+
     private static string DescribeReaping(
         float healPerKill,
         float maxHealthPerKill,
@@ -1982,6 +2010,15 @@ internal static class CreatureModifierManager
         return !configuredMaxActivations.HasValue || configuredMaxActivations.Value < 1
             ? DeathwardDefaultMaxActivations
             : configuredMaxActivations.Value;
+    }
+
+    private static float ResolveRegeneratingHealthPerSecondCap(float? configuredCap)
+    {
+        return !configuredCap.HasValue ||
+               float.IsNaN(configuredCap.Value) ||
+               float.IsInfinity(configuredCap.Value)
+            ? RegeneratingDefaultHealthPerSecondCap
+            : Mathf.Max(0f, configuredCap.Value);
     }
 
     private static float ResolveBlinkCooldown(float? configuredCooldown)
@@ -3039,6 +3076,12 @@ internal static class CreatureModifierManager
         bool deathwardActive = HasModifier(mask, ModifierMask.Deathward);
         SetActiveFloat(zdo, DeathwardCooldownKey, deathwardActive, ResolveDeathwardCooldown(powers.DeathwardCooldown));
         SetActiveInt(zdo, DeathwardMaxActivationsKey, deathwardActive, ResolveDeathwardMaxActivations(powers.DeathwardMaxActivations));
+        bool regeneratingActive = HasModifier(mask, ModifierMask.Regenerating);
+        SetActiveFloat(
+            zdo,
+            RegeneratingHealthPerSecondCapKey,
+            regeneratingActive,
+            ResolveRegeneratingHealthPerSecondCap(powers.RegeneratingHealthPerSecondCap));
         bool reapingActive = HasModifier(mask, ModifierMask.Reaping);
         SetActiveInt(zdo, ReapingHealMaxActivationsKey, reapingActive, Math.Max(1, powers.ReapingHealMaxActivations ?? ReapingDefaultHealMaxActivations));
         SetActiveFloat(zdo, ReapingMaxHealthPerKillKey, reapingActive, Mathf.Max(0f, powers.ReapingMaxHealthPerKill ?? ReapingDefaultMaxHealthPerKill));
@@ -3136,6 +3179,12 @@ internal static class CreatureModifierManager
         bool deathwardActive = HasModifier(mask, ModifierMask.Deathward);
         SetActiveFloat(target, DeathwardCooldownKey, deathwardActive, source.GetFloat(DeathwardCooldownKey, 0f));
         SetActiveInt(target, DeathwardMaxActivationsKey, deathwardActive, source.GetInt(DeathwardMaxActivationsKey, 0));
+        bool regeneratingActive = HasModifier(mask, ModifierMask.Regenerating);
+        SetActiveFloat(
+            target,
+            RegeneratingHealthPerSecondCapKey,
+            regeneratingActive,
+            source.GetFloat(RegeneratingHealthPerSecondCapKey, RegeneratingDefaultHealthPerSecondCap));
         bool reapingActive = HasModifier(mask, ModifierMask.Reaping);
         SetActiveInt(target, ReapingHealMaxActivationsKey, reapingActive, source.GetInt(ReapingHealMaxActivationsKey, 0));
         SetActiveFloat(target, ReapingMaxHealthPerKillKey, reapingActive, source.GetFloat(ReapingMaxHealthPerKillKey, 0f));
@@ -3319,6 +3368,14 @@ internal static class CreatureModifierManager
         if (deathward?.MaxActivations.HasValue == true)
         {
             powers.DeathwardMaxActivations = ResolveDeathwardMaxActivations(deathward.MaxActivations);
+            has = true;
+        }
+
+        if (modifiers.TryGetValue("regenerating", out ModifierDefinition regenerating) &&
+            regenerating.RegeneratingHealthPerSecondCap.HasValue)
+        {
+            powers.RegeneratingHealthPerSecondCap =
+                ResolveRegeneratingHealthPerSecondCap(regenerating.RegeneratingHealthPerSecondCap);
             has = true;
         }
 
@@ -7166,7 +7223,17 @@ internal static class CreatureModifierManager
             now >= schedule.NextRegeneration)
         {
             schedule.NextRegeneration = now + 1f;
-            float regen = character.GetMaxHealth() * Mathf.Clamp01(zdo.GetFloat(RegeneratingPowerKey, RegeneratingDefaultPower));
+            float regen = character.GetMaxHealth() *
+                          Mathf.Clamp01(zdo.GetFloat(RegeneratingPowerKey, RegeneratingDefaultPower));
+            float cap = ResolveRegeneratingHealthPerSecondCap(
+                zdo.GetFloat(
+                    RegeneratingHealthPerSecondCapKey,
+                    RegeneratingDefaultHealthPerSecondCap));
+            if (cap > 0f)
+            {
+                regen = Mathf.Min(regen, cap);
+            }
+
             if (regen > 0f)
             {
                 character.Heal(regen, false);

@@ -133,7 +133,7 @@ CreatureManager provides 32 modifiers in four groups. Natural rolls select at mo
 | :---: | --- | --- |
 | <img src="https://i.ibb.co/wNHPbYF1/armored.png" width="40" height="40" alt="Armored icon"> | **Armored** (`armored`) | Takes 30% less damage. |
 | <img src="https://i.ibb.co/ns25Rvk0/deathward.png" width="40" height="40" alt="Deathward icon"> | **Deathward** (`deathward`) | Cancels lethal damage and restores 20% of max health. Has a 10s cooldown and up to 3 activations. |
-| <img src="https://i.ibb.co/x8s20mxk/regenerating.png" width="40" height="40" alt="Regenerating icon"> | **Regenerating** (`regenerating`) | Heals a configurable share of max health per second. Defaults are 1% for Global creatures, 0.2% for bosses, and 0.5% for Enforcers. |
+| <img src="https://i.ibb.co/x8s20mxk/regenerating.png" width="40" height="40" alt="Regenerating icon"> | **Regenerating** (`regenerating`) | Heals a configurable share of max health per second, capped at 20 health per second by default. Rate defaults are 1% for Global creatures, 0.2% for bosses, and 0.5% for Enforcers. |
 | <img src="https://i.ibb.co/S4q133Xd/reflection.png" width="40" height="40" alt="Reflection icon"> | **Reflection** (`reflection`) | Has a 50% chance on a direct melee hit to reflect 10% of the health actually lost, bypassing defense and resistance. |
 | <img src="https://i.ibb.co/1JYL26MD/vortex.png" width="40" height="40" alt="Vortex icon"> | **Vortex** (`vortex`) | Has a 50% chance to negate projectile damage, push, stagger, and status effects. |
 | <img src="https://i.ibb.co/KjW1GynX/adaptive.png" width="40" height="40" alt="Adaptive icon"> | **Adaptive** (`adaptive`) | Remembers the dominant hit type for 5s and reduces matching damage by 50%. |
@@ -194,6 +194,8 @@ Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains
 Saving an active YAML file updates synchronized templates and global rules without a restart. Already loaded creatures keep their creature fields, AI, equipped attack data, and completed level and modifier state; existing Enforcers keep their identity, level, loot, and modifiers. Creature GameObjects instantiated after the reload use the current templates; this includes persistent creatures loaded again after a zone unload. Projectiles and ragdolls are separate runtime objects, so ones created after the reload also use current templates even when their source creature already existed. Faction relationships, Karma economy and encounter checks, server localization, and shared texture visuals are live global or visual exceptions. Changing `clonedFrom` for an already registered clone requires a restart.
 
 The generated YAML headers are the schema reference. This README intentionally does not duplicate their field-by-field examples.
+
+Every modifier tuple requires `chance` first. Later values form an optional trailing suffix: stop after the last value you want to override. Omitted values inherit through the normal rule chain and otherwise use runtime defaults. Explicit `0` is a supplied value subject to normal field validation, while empty interior slots such as `10, , 5` are invalid.
 
 ## Configuration Files
 

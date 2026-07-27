@@ -228,6 +228,7 @@ internal sealed class ModifierDefinition
     public string? TriggerEffect { get; set; }
     public float? MaxKarmaGain { get; set; }
     public float? FleeHealthRatio { get; set; }
+    public float? RegeneratingHealthPerSecondCap { get; set; }
     public int? ReapingHealMaxActivations { get; set; }
     public float? ReapingMaxHealthPerKill { get; set; }
     public float? ReapingMaxHealthCap { get; set; }
@@ -258,6 +259,8 @@ internal sealed class ModifierDefinition
         if (source.TriggerEffect != null) TriggerEffect = source.TriggerEffect;
         if (source.MaxKarmaGain.HasValue) MaxKarmaGain = source.MaxKarmaGain;
         if (source.FleeHealthRatio.HasValue) FleeHealthRatio = source.FleeHealthRatio;
+        if (source.RegeneratingHealthPerSecondCap.HasValue)
+            RegeneratingHealthPerSecondCap = source.RegeneratingHealthPerSecondCap;
         if (source.ReapingHealMaxActivations.HasValue) ReapingHealMaxActivations = source.ReapingHealMaxActivations;
         if (source.ReapingMaxHealthPerKill.HasValue) ReapingMaxHealthPerKill = source.ReapingMaxHealthPerKill;
         if (source.ReapingMaxHealthCap.HasValue) ReapingMaxHealthCap = source.ReapingMaxHealthCap;
@@ -299,6 +302,7 @@ internal sealed class ModifierPowerDefinition
 
     public float? DeathwardCooldown { get; set; }
     public int? DeathwardMaxActivations { get; set; }
+    public float? RegeneratingHealthPerSecondCap { get; set; }
     public float? ReflectionProcChance { get; set; }
 
     public float? ExposedProcChance { get; set; }

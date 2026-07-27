@@ -123,7 +123,13 @@ try
             DamagePerLevel = 0.2f,
             Modifiers = new Dictionary<string, ModifierDefinition>
             {
-                ["enraged"] = new ModifierDefinition { Chance = 20f, Power = 0.15f }
+                ["enraged"] = new ModifierDefinition { Chance = 20f, Power = 0.15f },
+                ["regenerating"] = new ModifierDefinition
+                {
+                    Chance = 10f,
+                    Power = 0.01f,
+                    RegeneratingHealthPerSecondCap = 20f
+                }
             },
             ModifiersCleared = true,
             IsPreset = true
@@ -137,6 +143,9 @@ try
             Require(definition.IsPreset, "Level preset bookkeeping was not preserved.");
             Require(definition.Modifiers?.ContainsKey("ENRAGED") == true, "Level modifier comparer was not preserved.");
             Require(definition.Modifiers!["enraged"].Power == 0.15f, "Level modifier settings were not preserved.");
+            Require(
+                definition.Modifiers["regenerating"].RegeneratingHealthPerSecondCap == 20f,
+                "Regenerating health-per-second cap was not preserved.");
         });
 
     const string nestedLevelYaml = """
@@ -188,6 +197,224 @@ try
     Require(
         !CreatureYaml.TryReadLevelDefinitions(unknownLevelModifierYaml, "unknown modifier contract", out _),
         "An unknown modifier key was accepted.");
+    const string regeneratingModifierYaml = """
+        Global:
+          modifiers:
+            regenerating: 10, 0.01, 20
+        """;
+    Require(
+        CreatureYaml.TryReadLevelDefinitions(
+            regeneratingModifierYaml,
+            "regenerating modifier contract",
+            out List<LevelDefinition> regeneratingLevels),
+        "The three-value regenerating tuple was rejected.");
+    Require(regeneratingLevels.Count == 1, "The regenerating rule count changed during normalization.");
+    Require(
+        regeneratingLevels[0].Modifiers?.TryGetValue(
+            "regenerating",
+            out ModifierDefinition? regeneratingDefinition) == true &&
+        regeneratingDefinition.Chance == 10f &&
+        regeneratingDefinition.Power == 0.01f &&
+        regeneratingDefinition.RegeneratingHealthPerSecondCap == 20f,
+        "The regenerating tuple did not preserve its rate and absolute cap.");
+    const string regeneratingDefaultCapYaml = """
+        Global:
+          modifiers:
+            regenerating: 10, 0.01
+        """;
+    Require(
+        CreatureYaml.TryReadLevelDefinitions(
+            regeneratingDefaultCapYaml,
+            "regenerating default cap contract",
+            out List<LevelDefinition> regeneratingDefaultCapLevels),
+        "A regenerating tuple that omits the optional cap was rejected.");
+    Require(
+        regeneratingDefaultCapLevels[0].Modifiers?["regenerating"].RegeneratingHealthPerSecondCap == null,
+        "An omitted regenerating cap did not remain available for inheritance and the runtime default.");
+    ModifierDefinition inheritedRegenerating = new()
+    {
+        Chance = 5f,
+        Power = 0.005f,
+        RegeneratingHealthPerSecondCap = 15f
+    };
+    inheritedRegenerating.OverlayFrom(regeneratingDefaultCapLevels[0].Modifiers!["regenerating"]);
+    Require(
+        inheritedRegenerating.Power == 0.01f &&
+        inheritedRegenerating.RegeneratingHealthPerSecondCap == 15f,
+        "An omitted regenerating cap did not preserve the inherited cap.");
+    const string regeneratingUnlimitedCapYaml = """
+        Global:
+          modifiers:
+            regenerating: 10, 0.01, 0
+        """;
+    Require(
+        CreatureYaml.TryReadLevelDefinitions(
+            regeneratingUnlimitedCapYaml,
+            "regenerating unlimited cap contract",
+            out List<LevelDefinition> regeneratingUnlimitedCapLevels) &&
+        regeneratingUnlimitedCapLevels[0].Modifiers?["regenerating"].RegeneratingHealthPerSecondCap == 0f,
+        "The explicit unlimited regenerating cap was not preserved.");
+    const string regeneratingDefaultsYaml = """
+        Global:
+          modifiers:
+            regenerating: 10
+        """;
+    Require(
+        CreatureYaml.TryReadLevelDefinitions(
+            regeneratingDefaultsYaml,
+            "regenerating defaults contract",
+            out List<LevelDefinition> regeneratingDefaultsLevels),
+        "A chance-only regenerating tuple was rejected.");
+    Require(
+        regeneratingDefaultsLevels[0].Modifiers?["regenerating"].Power == null &&
+        regeneratingDefaultsLevels[0].Modifiers?["regenerating"].RegeneratingHealthPerSecondCap == null,
+        "Omitted regenerating values did not remain available for inheritance and runtime defaults.");
+    string chanceOnlyModifierYaml =
+        "Global:\n  modifiers:\n" +
+        string.Join(
+            "\n",
+            CreatureModifierCatalog.Keys.Select(modifier => $"    {modifier}: 10")) +
+        "\n";
+    Require(
+        CreatureYaml.TryReadLevelDefinitions(
+            chanceOnlyModifierYaml,
+            "chance-only modifier contract",
+            out List<LevelDefinition> chanceOnlyModifierLevels),
+        "At least one modifier rejected a tuple containing only its required chance.");
+    Require(
+        chanceOnlyModifierLevels[0].Modifiers is { Count: 32 } chanceOnlyModifiers &&
+        chanceOnlyModifiers.Values.All(value =>
+            value.Chance == 10f &&
+            value.Power == null &&
+            value.Cooldown == null &&
+            value.MaxActivations == null &&
+            value.MaxRange == null &&
+            value.StartEffect == null &&
+            value.ProcChance == null &&
+            value.Duration == null &&
+            value.SecondaryPower == null &&
+            value.Radius == null &&
+            value.TriggerEffect == null &&
+            value.MaxKarmaGain == null &&
+            value.FleeHealthRatio == null &&
+            value.RegeneratingHealthPerSecondCap == null &&
+            value.ReapingHealMaxActivations == null &&
+            value.ReapingMaxHealthPerKill == null &&
+            value.ReapingMaxHealthCap == null &&
+            value.ReapingDamagePerKill == null &&
+            value.ReapingDamageCap == null &&
+            value.ReapingScalePerKill == null &&
+            value.ReapingScaleCap == null),
+        "Chance-only modifier tuples did not leave all omitted trailing values available for inheritance.");
+    const string partialTrailingModifierYaml = """
+        Global:
+          modifiers:
+            deathward: 10, 0.3, 12
+            reflection: 10, 0.25
+            exposed: 10, 0.2, 0.6
+            crippling: 10, 0.3, 0.4, 0.5
+            adrenalineDrain: 10, 0.2, 0.3, 0.4
+            toxicDeath: 10, 0.3, 6
+            reaping: 10, 0.05, 12, 0.1
+            juggernaut: 10, 200
+            blamer: 10, 0.5, 45
+        """;
+    Require(
+        CreatureYaml.TryReadLevelDefinitions(
+            partialTrailingModifierYaml,
+            "partial trailing modifier contract",
+            out List<LevelDefinition> partialTrailingModifierLevels),
+        "A valid special modifier tuple with omitted trailing values was rejected.");
+    Dictionary<string, ModifierDefinition> partialModifiers =
+        partialTrailingModifierLevels[0].Modifiers ??
+        throw new InvalidOperationException("Partial trailing modifier map was not produced.");
+    Require(
+        partialModifiers["deathward"].Power == 0.3f &&
+        partialModifiers["deathward"].Cooldown == 12f &&
+        partialModifiers["deathward"].MaxActivations == null,
+        "Deathward did not preserve its supplied prefix while leaving maxActivations omitted.");
+    Require(
+        partialModifiers["reflection"].Power == 0.25f &&
+        partialModifiers["reflection"].ProcChance == null,
+        "Reflection did not leave its omitted procChance available for inheritance.");
+    Require(
+        partialModifiers["exposed"].ProcChance == 0.6f &&
+        partialModifiers["exposed"].Duration == null,
+        "A standard affliction did not leave its omitted duration available for inheritance.");
+    Require(
+        partialModifiers["crippling"].SecondaryPower == 0.4f &&
+        partialModifiers["crippling"].ProcChance == 0.5f &&
+        partialModifiers["crippling"].Duration == null,
+        "A split affliction did not preserve the supplied prefix.");
+    Require(
+        partialModifiers["adrenalineDrain"].SecondaryPower == 0.3f &&
+        partialModifiers["adrenalineDrain"].ProcChance == 0.4f &&
+        partialModifiers["adrenalineDrain"].Duration == null,
+        "Adrenaline Drain did not preserve the supplied prefix.");
+    Require(
+        partialModifiers["toxicDeath"].Radius == 6f &&
+        partialModifiers["toxicDeath"].TriggerEffect == null,
+        "Toxic Death did not leave its omitted trigger effect available for inheritance.");
+    Require(
+        partialModifiers["reaping"].ReapingHealMaxActivations == 12 &&
+        partialModifiers["reaping"].ReapingMaxHealthPerKill == 0.1f &&
+        partialModifiers["reaping"].ReapingMaxHealthCap == null,
+        "Reaping did not preserve the supplied prefix.");
+    Require(
+        partialModifiers["juggernaut"].Power == 200f &&
+        partialModifiers["juggernaut"].Cooldown == null,
+        "Juggernaut did not leave its omitted cooldown available for inheritance.");
+    Require(
+        partialModifiers["blamer"].MaxKarmaGain == 45f &&
+        partialModifiers["blamer"].FleeHealthRatio == null,
+        "Blamer did not leave its omitted flee threshold available for inheritance.");
+    ModifierDefinition inheritedDeathward = new()
+    {
+        Chance = 5f,
+        Power = 0.2f,
+        Cooldown = 10f,
+        MaxActivations = 3
+    };
+    inheritedDeathward.OverlayFrom(partialModifiers["deathward"]);
+    Require(
+        inheritedDeathward.Chance == 10f &&
+        inheritedDeathward.Power == 0.3f &&
+        inheritedDeathward.Cooldown == 12f &&
+        inheritedDeathward.MaxActivations == 3,
+        "An omitted trailing modifier value did not preserve its inherited value.");
+    const string emptyInteriorModifierYaml = """
+        Global:
+          modifiers:
+            deathward: 10, , 12
+        """;
+    Require(
+        !CreatureYaml.TryReadLevelDefinitions(
+            emptyInteriorModifierYaml,
+            "empty interior modifier contract",
+            out _),
+        "An empty interior modifier tuple position was collapsed and reinterpreted.");
+    const string danglingModifierCommaYaml = """
+        Global:
+          modifiers:
+            reflection: 10,
+        """;
+    Require(
+        !CreatureYaml.TryReadLevelDefinitions(
+            danglingModifierCommaYaml,
+            "dangling modifier comma contract",
+            out _),
+        "A dangling modifier tuple comma was accepted as trailing omission.");
+    const string excessiveModifierValuesYaml = """
+        Global:
+          modifiers:
+            unflinching: 10, 1
+        """;
+    Require(
+        !CreatureYaml.TryReadLevelDefinitions(
+            excessiveModifierValuesYaml,
+            "excessive modifier values contract",
+            out _),
+        "A modifier tuple accepted values beyond its schema.");
     Require(
         CreatureModifierCatalog.Keys.Count == 32 &&
         CreatureModifierCatalog.Keys.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 32,

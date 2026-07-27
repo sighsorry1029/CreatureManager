@@ -875,6 +875,7 @@ internal static class CreatureYaml
         bool isChameleon = modifier.Equals("chameleon", StringComparison.OrdinalIgnoreCase);
         bool isBlamer = modifier.Equals("blamer", StringComparison.OrdinalIgnoreCase);
         bool isDeathward = modifier.Equals("deathward", StringComparison.OrdinalIgnoreCase);
+        bool isRegenerating = modifier.Equals("regenerating", StringComparison.OrdinalIgnoreCase);
         bool isReflection = modifier.Equals("reflection", StringComparison.OrdinalIgnoreCase);
         bool isReaping = modifier.Equals("reaping", StringComparison.OrdinalIgnoreCase);
         bool isStandardAffliction = modifier.Equals("exposed", StringComparison.OrdinalIgnoreCase) ||
@@ -893,6 +894,7 @@ internal static class CreatureYaml
             isChameleon,
             isBlamer,
             isDeathward,
+            isRegenerating,
             isReflection,
             isReaping,
             isStandardAffliction,
@@ -909,30 +911,20 @@ internal static class CreatureYaml
             return false;
         }
 
-        string[] tokens = SplitTuple(text);
-        int maxValues = isBlink ? 4 : 2;
-        int exactCount = isUndodgeable ? 2 :
-            isChanceOnly ? 1 :
-            isKnockback ? 3 :
-            isDeathward ? 4 :
-            isChameleon ? 2 :
-            isBlamer ? 4 :
-            isReflection ? 3 :
+        string[] tokens = SplitTuplePreserveEmpty(text);
+        int maxValues = isChanceOnly ? 1 :
             isReaping ? 9 :
-            isStandardAffliction ? 4 :
-            isSplitAffliction ? 5 :
-            isAdrenalineDrain ? 5 :
-            isToxicDeath ? 4 : 0;
-        bool invalidCount = exactCount > 0
-            ? tokens.Length != exactCount
-            : tokens.Length < 1 || tokens.Length > maxValues;
+            isSplitAffliction || isAdrenalineDrain ? 5 :
+            isBlink || isDeathward || isBlamer || isStandardAffliction || isToxicDeath ? 4 :
+            isRegenerating || isKnockback || isReflection ? 3 : 2;
+        bool invalidCount = tokens.Length < 1 || tokens.Length > maxValues;
         if (invalidCount)
         {
             if (context == ModifierYamlContext.Level)
             {
-                string expected = exactCount > 0
-                    ? exactCount.ToString(CultureInfo.InvariantCulture)
-                    : isBlink ? "1 to 4" : "1 or 2";
+                string expected = maxValues == 1
+                    ? "1"
+                    : $"1 to {maxValues.ToString(CultureInfo.InvariantCulture)}";
                 CreatureManagerPlugin.Log.LogWarning(
                     $"{modifierPath} expected {expected} tuple values but got {tokens.Length}. Use modifierDistanceScaling for distance-based chance scaling.");
             }
@@ -941,6 +933,15 @@ internal static class CreatureYaml
                 CreatureManagerPlugin.Log.LogWarning($"{modifierPath} must be {format}.");
             }
 
+            return false;
+        }
+
+        int emptyIndex = Array.FindIndex(tokens, static token => token.Length == 0);
+        if (emptyIndex >= 0)
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"{modifierPath} has an empty tuple value at position {emptyIndex + 1}. " +
+                "Only trailing values may be omitted; end the tuple after the last supplied value.");
             return false;
         }
 
@@ -958,30 +959,32 @@ internal static class CreatureYaml
             return false;
         }
 
-        if (isUndodgeable && (float.IsNaN(values[1]) || float.IsInfinity(values[1])))
+        int? deathwardMaxActivations = null;
+        if (isDeathward && tokens.Length >= 4)
         {
-            CreatureManagerPlugin.Log.LogWarning($"{modifierPath} damageReduction must be a finite number.");
-            return false;
+            if (!int.TryParse(tokens[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedMaxActivations) ||
+                parsedMaxActivations < 1)
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"{modifierPath} maxActivations must be an integer of 1 or greater.");
+                return false;
+            }
+
+            deathwardMaxActivations = parsedMaxActivations;
         }
 
-        int deathwardMaxActivations = 0;
-        if (isDeathward &&
-            (!int.TryParse(tokens[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out deathwardMaxActivations) ||
-             deathwardMaxActivations < 1))
+        int? reapingHealMaxActivations = null;
+        if (isReaping && tokens.Length >= 3)
         {
-            CreatureManagerPlugin.Log.LogWarning(
-                $"{modifierPath} maxActivations must be an integer of 1 or greater.");
-            return false;
-        }
+            if (!int.TryParse(tokens[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedHealMaxActivations) ||
+                parsedHealMaxActivations < 1)
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"{modifierPath} healMaxActivations must be an integer of 1 or greater.");
+                return false;
+            }
 
-        int reapingHealMaxActivations = 0;
-        if (isReaping &&
-            (!int.TryParse(tokens[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out reapingHealMaxActivations) ||
-             reapingHealMaxActivations < 1))
-        {
-            CreatureManagerPlugin.Log.LogWarning(
-                $"{modifierPath} healMaxActivations must be an integer of 1 or greater.");
-            return false;
+            reapingHealMaxActivations = parsedHealMaxActivations;
         }
 
         definition = new ModifierDefinition
@@ -1000,20 +1003,33 @@ internal static class CreatureYaml
             }
         }
 
-        if (isDeathward)
+        if (isDeathward && values.Length >= 3)
         {
             definition.Cooldown = values[2];
+        }
+
+        if (isDeathward && deathwardMaxActivations.HasValue)
+        {
             definition.MaxActivations = deathwardMaxActivations;
         }
 
-        if (isKnockback)
+        if (isRegenerating && values.Length >= 3)
+        {
+            definition.RegeneratingHealthPerSecondCap = values[2];
+        }
+
+        if (isKnockback && values.Length >= 3)
         {
             definition.Cooldown = values[2];
         }
 
-        if (isBlamer)
+        if (isBlamer && values.Length >= 3)
         {
             definition.MaxKarmaGain = values[2];
+        }
+
+        if (isBlamer && values.Length >= 4)
+        {
             definition.FleeHealthRatio = UnityEngine.Mathf.Clamp01(values[3]);
         }
 
@@ -1027,38 +1043,78 @@ internal static class CreatureYaml
             definition.StartEffect = tokens[3];
         }
 
-        if (isReaping)
+        if (isReaping && reapingHealMaxActivations.HasValue)
         {
             definition.ReapingHealMaxActivations = reapingHealMaxActivations;
+        }
+
+        if (isReaping && values.Length >= 4)
+        {
             definition.ReapingMaxHealthPerKill = values[3];
+        }
+
+        if (isReaping && values.Length >= 5)
+        {
             definition.ReapingMaxHealthCap = values[4];
+        }
+
+        if (isReaping && values.Length >= 6)
+        {
             definition.ReapingDamagePerKill = values[5];
+        }
+
+        if (isReaping && values.Length >= 7)
+        {
             definition.ReapingDamageCap = values[6];
+        }
+
+        if (isReaping && values.Length >= 8)
+        {
             definition.ReapingScalePerKill = values[7];
+        }
+
+        if (isReaping && values.Length >= 9)
+        {
             definition.ReapingScaleCap = values[8];
         }
 
-        if (isStandardAffliction)
+        if (isStandardAffliction && values.Length >= 3)
         {
             definition.ProcChance = values[2];
+        }
+
+        if (isStandardAffliction && values.Length >= 4)
+        {
             definition.Duration = values[3];
         }
 
-        if (isSplitAffliction || isAdrenalineDrain)
+        if ((isSplitAffliction || isAdrenalineDrain) && values.Length >= 3)
         {
             definition.SecondaryPower = values[2];
+        }
+
+        if ((isSplitAffliction || isAdrenalineDrain) && values.Length >= 4)
+        {
             definition.ProcChance = values[3];
+        }
+
+        if ((isSplitAffliction || isAdrenalineDrain) && values.Length >= 5)
+        {
             definition.Duration = values[4];
         }
 
-        if (isReflection)
+        if (isReflection && values.Length >= 3)
         {
             definition.ProcChance = values[2];
         }
 
-        if (isToxicDeath)
+        if (isToxicDeath && values.Length >= 3)
         {
             definition.Radius = values[2];
+        }
+
+        if (isToxicDeath && tokens.Length >= 4)
+        {
             definition.TriggerEffect = tokens[3];
         }
 
@@ -1089,6 +1145,7 @@ internal static class CreatureYaml
         bool isChameleon,
         bool isBlamer,
         bool isDeathward,
+        bool isRegenerating,
         bool isReflection,
         bool isReaping,
         bool isStandardAffliction,
@@ -1097,18 +1154,19 @@ internal static class CreatureYaml
         bool isToxicDeath)
     {
         if (isBlink) return "chance[, cooldown[, maxRange[, startEffect]]]";
-        if (isUndodgeable) return "chance, damageReduction";
+        if (isUndodgeable) return "chance[, damageReduction]";
         if (isChanceOnly) return "chance";
-        if (isKnockback) return "chance, minimumPushForce, cooldown";
-        if (isDeathward) return "chance, restoreHealth, cooldown, maxActivations";
-        if (isChameleon) return "chance, immunitySwitchSeconds";
-        if (isBlamer) return "chance, karmaPerSecond, maxKarmaGain, fleeHealthRatio";
-        if (isReaping) return "chance, healPerKill, healMaxActivations, maxHealthPerKill, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap";
-        if (isStandardAffliction) return "chance, power, procChance, duration";
-        if (isSplitAffliction) return "chance, primaryPower, secondaryPower, procChance, duration";
-        if (isAdrenalineDrain) return "chance, currentAdrenalineRemoved, adrenalineGainReduction, procChance, duration";
-        if (isReflection) return "chance, reflectedDamage, procChance";
-        if (isToxicDeath) return "chance, maxHealthDamage, radius, triggerEffect";
+        if (isKnockback) return "chance[, minimumPushForce[, cooldown]]";
+        if (isDeathward) return "chance[, restoreHealth[, cooldown[, maxActivations]]]";
+        if (isRegenerating) return "chance[, maxHealthRatioPerSecond[, healthPerSecondCap]]";
+        if (isChameleon) return "chance[, immunitySwitchSeconds]";
+        if (isBlamer) return "chance[, karmaPerSecond[, maxKarmaGain[, fleeHealthRatio]]]";
+        if (isReaping) return "chance[, healPerKill[, healMaxActivations[, maxHealthPerKill[, maxHealthCap[, damagePerKill[, damageCap[, scalePerKill[, scaleCap]]]]]]]]";
+        if (isStandardAffliction) return "chance[, power[, procChance[, duration]]]";
+        if (isSplitAffliction) return "chance[, primaryPower[, secondaryPower[, procChance[, duration]]]]";
+        if (isAdrenalineDrain) return "chance[, currentAdrenalineRemoved[, adrenalineGainReduction[, procChance[, duration]]]]";
+        if (isReflection) return "chance[, reflectedDamage[, procChance]]";
+        if (isToxicDeath) return "chance[, maxHealthDamage[, radius[, triggerEffect]]]";
         return "chance[, power]";
     }
 
@@ -1133,6 +1191,7 @@ internal static class CreatureYaml
         if (definition.Radius.HasValue) definition.Radius = UnityEngine.Mathf.Max(0f, definition.Radius.Value);
         if (definition.MaxKarmaGain.HasValue) definition.MaxKarmaGain = UnityEngine.Mathf.Max(0f, definition.MaxKarmaGain.Value);
         if (definition.FleeHealthRatio.HasValue) definition.FleeHealthRatio = UnityEngine.Mathf.Clamp01(definition.FleeHealthRatio.Value);
+        if (definition.RegeneratingHealthPerSecondCap.HasValue) definition.RegeneratingHealthPerSecondCap = UnityEngine.Mathf.Max(0f, definition.RegeneratingHealthPerSecondCap.Value);
         if (definition.ReapingMaxHealthPerKill.HasValue) definition.ReapingMaxHealthPerKill = UnityEngine.Mathf.Max(0f, definition.ReapingMaxHealthPerKill.Value);
         if (definition.ReapingMaxHealthCap.HasValue) definition.ReapingMaxHealthCap = UnityEngine.Mathf.Max(0f, definition.ReapingMaxHealthCap.Value);
         if (definition.ReapingDamagePerKill.HasValue) definition.ReapingDamagePerKill = UnityEngine.Mathf.Max(0f, definition.ReapingDamagePerKill.Value);
@@ -1228,6 +1287,14 @@ internal static class CreatureYaml
                 $"{modifierPath} maxRange must be greater than 0 and will disable Blink AI range expansion.");
         }
 
+        if (modifier.Equals("regenerating", StringComparison.OrdinalIgnoreCase) &&
+            definition.RegeneratingHealthPerSecondCap < 0f)
+        {
+            string regeneratingPath = GetCanonicalModifierPath(modifierPath, modifier, "regenerating");
+            CreatureManagerPlugin.Log.LogWarning(
+                $"{regeneratingPath} healthPerSecondCap must be 0 or greater and will be clamped at runtime.");
+        }
+
         if (modifier.Equals("reaping", StringComparison.OrdinalIgnoreCase) &&
             (definition.ReapingMaxHealthPerKill < 0f ||
              definition.ReapingMaxHealthCap < 0f ||
@@ -1311,7 +1378,8 @@ internal static class CreatureYaml
         {
             definition.Power, definition.Cooldown, definition.MaxRange, definition.ProcChance,
             definition.Duration, definition.SecondaryPower, definition.Radius, definition.MaxKarmaGain,
-            definition.FleeHealthRatio, definition.ReapingMaxHealthPerKill, definition.ReapingMaxHealthCap,
+            definition.FleeHealthRatio, definition.RegeneratingHealthPerSecondCap,
+            definition.ReapingMaxHealthPerKill, definition.ReapingMaxHealthCap,
             definition.ReapingDamagePerKill, definition.ReapingDamageCap, definition.ReapingScalePerKill,
             definition.ReapingScaleCap
         };
