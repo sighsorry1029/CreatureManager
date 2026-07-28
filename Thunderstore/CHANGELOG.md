@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.3
+
+- Prune Karma level bonus requests whose pending client creature was destroyed or unloaded, preventing dungeon-generation bursts from leaving permanent `Still waiting` diagnostics and stale retry bookkeeping.
+- Log server summaries containing only transient `zdoMissing` outcomes at debug level, while retaining warnings for other request failures, accepted anomalies, and prolonged client-side waits.
+
 ## 1.1.2
 
 - Make dedicated-server Karma level bonus responses use authoritative server ZDO position and Enforcer state without requiring requester ownership or a loaded creature prefab, while keeping client application owner-authoritative.

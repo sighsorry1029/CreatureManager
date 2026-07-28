@@ -506,8 +506,15 @@ internal static class CreatureLevelManager
     private static void UpdateTimedOutKarmaBonusRequests()
     {
         float now = Time.unscaledTime;
-        foreach (KeyValuePair<ZDOID, PendingKarmaBonusRequest> entry in PendingKarmaBonusRequests)
+        foreach (KeyValuePair<ZDOID, PendingKarmaBonusRequest> entry in PendingKarmaBonusRequests.ToArray())
         {
+            if (!TryFindPendingLevelCharacter(entry.Key, out _))
+            {
+                PendingKarmaBonusRequests.Remove(entry.Key);
+                ResolvedKarmaBonuses.Remove(entry.Key);
+                continue;
+            }
+
             PendingKarmaBonusRequest request = entry.Value;
             if (request.StartedAt < 0f || now - request.StartedAt < KarmaBonusRequestTimeout)
             {
@@ -516,6 +523,12 @@ internal static class CreatureLevelManager
 
             request.StartedAt = now;
             ClientKarmaBonusTimeoutEvents++;
+        }
+
+        if (PendingKarmaBonusRequests.Count == 0)
+        {
+            ClientKarmaBonusTimeoutEvents = 0;
+            return;
         }
 
         if (ClientKarmaBonusTimeoutEvents <= 0 || now < NextClientKarmaBonusDiagnosticsAt)
@@ -683,7 +696,7 @@ internal static class CreatureLevelManager
             ServerAcceptedOwnerMismatchCount > 0 ||
             ServerAcceptedPrefabUnavailableCount > 0)
         {
-            CreatureManagerPlugin.Log.LogWarning(
+            string summary =
                 "Karma bonus request summary: " +
                 $"ready={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.Ready]}, " +
                 $"invalid={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.InvalidRequest]}, " +
@@ -694,7 +707,20 @@ internal static class CreatureLevelManager
                 $"playerCharacter={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.PlayerCharacter]}, " +
                 $"invalidPosition={ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.InvalidPosition]}, " +
                 $"acceptedOwnerMismatch={ServerAcceptedOwnerMismatchCount}, " +
-                $"acceptedPrefabUnavailable={ServerAcceptedPrefabUnavailableCount}.");
+                $"acceptedPrefabUnavailable={ServerAcceptedPrefabUnavailableCount}.";
+
+            bool onlyTransientZdoMissing =
+                rejected == ServerKarmaBonusOutcomeCounts[(int)KarmaBonusRequestOutcome.ZdoMissing] &&
+                ServerAcceptedOwnerMismatchCount == 0 &&
+                ServerAcceptedPrefabUnavailableCount == 0;
+            if (onlyTransientZdoMissing)
+            {
+                CreatureManagerPlugin.Log.LogDebug(summary);
+            }
+            else
+            {
+                CreatureManagerPlugin.Log.LogWarning(summary);
+            }
         }
 
         Array.Clear(ServerKarmaBonusOutcomeCounts, 0, ServerKarmaBonusOutcomeCounts.Length);
