@@ -268,8 +268,20 @@ internal static class CreatureModifierManager
     private const float ResistanceTextMinWidth = 150f;
     private const float BossContentWidth = 220f;
     private const float BossContentBelowHealthGap = 2f;
+    private const int ModifierStateSnapshotVersion = 1;
+    private const int MaximumModifierStateSnapshotBytes = 64 * 1024;
     private static readonly string[] SneakMethodNames = { "IsCrouching", "IsCrouch", "IsSneaking", "InSneak", "IsStealth" };
     private static readonly string[] SneakFieldNames = { "m_crouching", "m_crouch", "m_crouchToggled", "m_isCrouching", "m_isCrouch", "m_sneaking" };
+    private static readonly HashSet<int> ModifierStateKeyHashes = typeof(CreatureModifierManager)
+        .GetFields(BindingFlags.Static | BindingFlags.NonPublic)
+        .Where(field =>
+            field.IsLiteral &&
+            field.FieldType == typeof(string) &&
+            field.Name.EndsWith("Key", StringComparison.Ordinal))
+        .Select(field => field.GetRawConstantValue() as string)
+        .Where(value => value != null && value.StartsWith("CreatureManager_", StringComparison.Ordinal))
+        .Select(value => value!.GetStableHashCode())
+        .ToHashSet();
     private static Sprite? ArmoredSprite;
     private static Sprite? EnragedSprite;
     private static Sprite? DeathwardSprite;
@@ -2647,23 +2659,299 @@ internal static class CreatureModifierManager
         CopyStoredModifierPowers(sourceZdo, targetZdo);
         CopyStoredRuntimeModifierState(sourceZdo, targetZdo, inheritedMask);
         targetZdo.Set(AppliedKey, true);
-        RefreshModifierHotPathState(target, targetZdo);
-        PassiveModifierSchedule? schedule = null;
-        if (HasModifier(inheritedMask, ModifierMask.Chameleon))
+        ActivateStoredModifierState(target, targetZdo, inheritedMask);
+        return true;
+    }
+
+    internal static string CaptureModifierState(Character character)
+    {
+        try
         {
-            schedule = GetPassiveModifierSchedule(target, targetZdo, Time.time);
-            float interval = ResolveChameleonInterval(targetZdo.GetFloat(ChameleonIntervalKey, ChameleonDefaultInterval));
+            if (!TryGetZdo(character, out ZDO zdo))
+            {
+                return string.Empty;
+            }
+
+            if (!zdo.GetBool(AppliedKey, false) &&
+                character.m_nview != null &&
+                character.m_nview.IsValid() &&
+                character.m_nview.IsOwner())
+            {
+                TryRollModifiers(character);
+            }
+
+            if (!zdo.GetBool(AppliedKey, false))
+            {
+                return string.Empty;
+            }
+
+            ZPackage package = new();
+            package.Write(ModifierStateSnapshotVersion);
+            WriteModifierStateEntries(package, ZDOExtraData.GetFloats(zdo.m_uid), static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, ZDOExtraData.GetVec3s(zdo.m_uid), static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, ZDOExtraData.GetQuaternions(zdo.m_uid), static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, ZDOExtraData.GetInts(zdo.m_uid), static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, ZDOExtraData.GetLongs(zdo.m_uid), static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, ZDOExtraData.GetStrings(zdo.m_uid), static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, ZDOExtraData.GetByteArrays(zdo.m_uid), static (pkg, value) => pkg.Write(value));
+            return Convert.ToBase64String(package.GetArray());
+        }
+        catch (Exception ex)
+        {
+            CreatureManagerPlugin.Log.LogWarning($"Could not capture modifier state: {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    internal static bool RestoreModifierState(Character character, string serializedState)
+    {
+        if (!TryGetZdo(character, out ZDO zdo) ||
+            character.m_nview == null ||
+            !character.m_nview.IsValid() ||
+            !character.m_nview.IsOwner() ||
+            string.IsNullOrWhiteSpace(serializedState))
+        {
+            return false;
+        }
+
+        if (!TryDeserializeModifierState(serializedState, out ModifierStateSnapshot? snapshot, out string error))
+        {
+            CreatureManagerPlugin.Log.LogWarning($"Rejected modifier state snapshot: {error}");
+            return false;
+        }
+
+        UntrackRuntimeModifiers(character);
+        ResetBlamerKarmaNetworkState(character);
+        InvalidateModifierCaches(character);
+        ClearSerializedModifierState(zdo);
+
+        foreach (KeyValuePair<int, float> entry in snapshot!.Floats)
+        {
+            zdo.Set(entry.Key, entry.Value);
+        }
+
+        foreach (KeyValuePair<int, Vector3> entry in snapshot.Vectors)
+        {
+            zdo.Set(entry.Key, entry.Value);
+        }
+
+        foreach (KeyValuePair<int, Quaternion> entry in snapshot.Quaternions)
+        {
+            zdo.Set(entry.Key, entry.Value);
+        }
+
+        foreach (KeyValuePair<int, int> entry in snapshot.Ints)
+        {
+            zdo.Set(entry.Key, entry.Value);
+        }
+
+        foreach (KeyValuePair<int, long> entry in snapshot.Longs)
+        {
+            zdo.Set(entry.Key, entry.Value);
+        }
+
+        foreach (KeyValuePair<int, string> entry in snapshot.Strings)
+        {
+            zdo.Set(entry.Key, entry.Value);
+        }
+
+        foreach (KeyValuePair<int, byte[]> entry in snapshot.ByteArrays)
+        {
+            zdo.Set(entry.Key, entry.Value);
+        }
+
+        ModifierMask restoredMask = GetStoredModifierMask(zdo);
+        ActivateStoredModifierState(character, zdo, restoredMask);
+        return true;
+    }
+
+    private static void ActivateStoredModifierState(Character character, ZDO zdo, ModifierMask mask)
+    {
+        RefreshModifierHotPathState(character, zdo);
+        PassiveModifierSchedule? schedule = null;
+        if (HasModifier(mask, ModifierMask.Chameleon))
+        {
+            schedule = GetPassiveModifierSchedule(character, zdo, Time.time);
+            float interval = ResolveChameleonInterval(zdo.GetFloat(ChameleonIntervalKey, ChameleonDefaultInterval));
             schedule.NextChameleon = Time.time + interval;
         }
 
-        if (HasModifier(inheritedMask, ModifierMask.Blamer))
+        if (HasModifier(mask, ModifierMask.Blamer))
         {
-            schedule ??= GetPassiveModifierSchedule(target, targetZdo, Time.time);
+            schedule ??= GetPassiveModifierSchedule(character, zdo, Time.time);
             schedule.NextBlamer = Time.time + BlamerTickInterval;
         }
 
-        ApplyRuntimeModifierStats(target, targetZdo);
-        return true;
+        ApplyRuntimeModifierStats(character, zdo);
+    }
+
+    private static void WriteModifierStateEntries<T>(
+        ZPackage package,
+        IEnumerable<KeyValuePair<int, T>> source,
+        Action<ZPackage, T> writeValue)
+    {
+        List<KeyValuePair<int, T>> entries = source
+            .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
+            .OrderBy(entry => entry.Key)
+            .ToList();
+        package.Write(entries.Count);
+        foreach (KeyValuePair<int, T> entry in entries)
+        {
+            package.Write(entry.Key);
+            writeValue(package, entry.Value);
+        }
+    }
+
+    private static bool TryDeserializeModifierState(
+        string serializedState,
+        out ModifierStateSnapshot? snapshot,
+        out string error)
+    {
+        snapshot = null;
+        error = string.Empty;
+        try
+        {
+            byte[] bytes = Convert.FromBase64String(serializedState);
+            if (bytes.Length == 0 || bytes.Length > MaximumModifierStateSnapshotBytes)
+            {
+                throw new FormatException($"Snapshot size {bytes.Length} is outside the supported range.");
+            }
+
+            ZPackage package = new(bytes);
+            int version = package.ReadInt();
+            if (version != ModifierStateSnapshotVersion)
+            {
+                throw new FormatException($"Unsupported snapshot version {version}.");
+            }
+
+            HashSet<int> seenHashes = new();
+            ModifierStateSnapshot parsed = new()
+            {
+                Floats = ReadModifierStateEntries(package, seenHashes, static pkg => pkg.ReadSingle()),
+                Vectors = ReadModifierStateEntries(package, seenHashes, static pkg => pkg.ReadVector3()),
+                Quaternions = ReadModifierStateEntries(package, seenHashes, static pkg => pkg.ReadQuaternion()),
+                Ints = ReadModifierStateEntries(package, seenHashes, static pkg => pkg.ReadInt()),
+                Longs = ReadModifierStateEntries(package, seenHashes, static pkg => pkg.ReadLong()),
+                Strings = ReadModifierStateEntries(package, seenHashes, static pkg => pkg.ReadString()),
+                ByteArrays = ReadModifierStateEntries(package, seenHashes, static pkg => pkg.ReadByteArray())
+            };
+
+            if (package.GetPos() != package.Size())
+            {
+                throw new FormatException("Snapshot contains trailing data.");
+            }
+
+            int appliedHash = AppliedKey.GetStableHashCode();
+            if (!parsed.Ints.Any(entry => entry.Key == appliedHash && entry.Value != 0))
+            {
+                throw new FormatException("Snapshot does not contain an applied modifier state.");
+            }
+
+            snapshot = parsed;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static List<KeyValuePair<int, T>> ReadModifierStateEntries<T>(
+        ZPackage package,
+        HashSet<int> seenHashes,
+        Func<ZPackage, T> readValue)
+    {
+        int count = package.ReadInt();
+        if (count < 0 || count > ModifierStateKeyHashes.Count)
+        {
+            throw new FormatException($"Invalid modifier entry count {count}.");
+        }
+
+        List<KeyValuePair<int, T>> entries = new(count);
+        for (int index = 0; index < count; index++)
+        {
+            int hash = package.ReadInt();
+            if (!ModifierStateKeyHashes.Contains(hash) || !seenHashes.Add(hash))
+            {
+                throw new FormatException($"Unexpected or duplicate modifier key {hash}.");
+            }
+
+            entries.Add(new KeyValuePair<int, T>(hash, readValue(package)));
+        }
+
+        return entries;
+    }
+
+    private static void ClearSerializedModifierState(ZDO zdo)
+    {
+        ZDOID id = zdo.m_uid;
+        foreach (int hash in ZDOExtraData.GetFloats(id)
+                     .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
+                     .Select(entry => entry.Key)
+                     .ToArray())
+        {
+            zdo.RemoveFloat(hash);
+        }
+
+        foreach (int hash in ZDOExtraData.GetVec3s(id)
+                     .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
+                     .Select(entry => entry.Key)
+                     .ToArray())
+        {
+            zdo.RemoveVec3(hash);
+        }
+
+        foreach (int hash in ZDOExtraData.GetQuaternions(id)
+                     .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
+                     .Select(entry => entry.Key)
+                     .ToArray())
+        {
+            zdo.RemoveQuaternion(hash);
+        }
+
+        foreach (int hash in ZDOExtraData.GetInts(id)
+                     .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
+                     .Select(entry => entry.Key)
+                     .ToArray())
+        {
+            zdo.RemoveInt(hash);
+        }
+
+        foreach (int hash in ZDOExtraData.GetLongs(id)
+                     .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
+                     .Select(entry => entry.Key)
+                     .ToArray())
+        {
+            zdo.RemoveLong(hash);
+        }
+
+        foreach (int hash in ZDOExtraData.GetStrings(id)
+                     .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
+                     .Select(entry => entry.Key)
+                     .ToArray())
+        {
+            zdo.Set(hash, string.Empty);
+        }
+
+        foreach (int hash in ZDOExtraData.GetByteArrays(id)
+                     .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
+                     .Select(entry => entry.Key)
+                     .ToArray())
+        {
+            zdo.Set(hash, Array.Empty<byte>());
+        }
+    }
+
+    private sealed class ModifierStateSnapshot
+    {
+        public List<KeyValuePair<int, float>> Floats { get; set; } = new();
+        public List<KeyValuePair<int, Vector3>> Vectors { get; set; } = new();
+        public List<KeyValuePair<int, Quaternion>> Quaternions { get; set; } = new();
+        public List<KeyValuePair<int, int>> Ints { get; set; } = new();
+        public List<KeyValuePair<int, long>> Longs { get; set; } = new();
+        public List<KeyValuePair<int, string>> Strings { get; set; } = new();
+        public List<KeyValuePair<int, byte[]>> ByteArrays { get; set; } = new();
     }
 
     private static void CaptureInheritedReapingHealthRatio(ZDO source, Character target, ModifierMask mask)
@@ -11414,4 +11702,21 @@ internal static class CreatureModifierManager
         return center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
     }
 
+}
+
+public static class CreatureManagerModifierApi
+{
+    public static string CaptureModifierState(Character? character)
+    {
+        return character == null
+            ? string.Empty
+            : CreatureModifierManager.CaptureModifierState(character);
+    }
+
+    public static bool RestoreModifierState(Character? character, string? serializedState)
+    {
+        return character != null &&
+               !string.IsNullOrWhiteSpace(serializedState) &&
+               CreatureModifierManager.RestoreModifierState(character, serializedState!);
+    }
 }

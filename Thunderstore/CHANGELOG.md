@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.5
+
+- Added the versioned `CreatureManagerModifierApi` for lossless modifier-state capture and restoration by transport mods, including stored powers, cooldowns, accumulated runtime state, cache refresh, and validation before replacement.
+
 ## 1.1.4
 
 - Rename the Compendium page to the localized `Combat Modifiers` / `전투 특성` title and add a localized opening hint explaining how to inspect creature weaknesses, resistances, and immunities while sneaking.
