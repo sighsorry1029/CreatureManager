@@ -1,3 +1,6 @@
+cm_compendium_tab: "전투 특성"
+cm_compendium_resistance_hint: "은신한 채 생물을 바라보면 이름표 아래에서 약점, 저항, 면역을 확인할 수 있습니다."
+
 cm_group_offense: "공격: 격노부터 회피 불가까지"
 cm_group_defense: "방어: 중장갑부터 카멜레온까지"
 cm_group_affliction: "약화: 노출부터 맹독의 죽음까지"

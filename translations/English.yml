@@ -1,3 +1,6 @@
+cm_compendium_tab: "Combat Modifiers"
+cm_compendium_resistance_hint: "Sneak while looking at a creature to view its weaknesses, resistances, and immunities beneath its nameplate."
+
 cm_group_offense: "Offense: Enraged to Undodgeable"
 cm_group_defense: "Defense: Armored to Chameleon"
 cm_group_affliction: "Affliction: Exposed to Toxic Death"

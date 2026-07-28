@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.4
+
+- Rename the Compendium page to the localized `Combat Modifiers` / `전투 특성` title and add a localized opening hint explaining how to inspect creature weaknesses, resistances, and immunities while sneaking.
+
 ## 1.1.3
 
 - Prune Karma level bonus requests whose pending client creature was destroyed or unloaded, preventing dungeon-generation bursts from leaving permanent `Still waiting` diagnostics and stale retry bookkeeping.

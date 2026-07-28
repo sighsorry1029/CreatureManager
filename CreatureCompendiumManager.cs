@@ -9,7 +9,7 @@ namespace CreatureManager;
 
 internal static class CreatureCompendiumManager
 {
-    private const string PageTopic = "CreatureManager";
+    private const string PageTopic = "$cm_compendium_tab";
     private const string BodyIconPrefix = "CreatureManager_CompendiumModifierIcon_";
     private const string IconLinkPrefix = "cm-modifier-icon-";
     private const char IconPlaceholder = '\uFFFC';
@@ -37,7 +37,10 @@ internal static class CreatureCompendiumManager
 
         TextsDialog.TextInfo info = new(PageTopic, BuildPageText(entries));
         dialog.m_texts.Add(info);
-        dialog.m_texts.Sort((a, b) => a.m_topic.CompareTo(b.m_topic));
+        dialog.m_texts.Sort((a, b) => string.Compare(
+            CreatureLocalization.LocalizeText(a.m_topic),
+            CreatureLocalization.LocalizeText(b.m_topic),
+            StringComparison.CurrentCultureIgnoreCase));
     }
 
     internal static void RefreshPageContentIcons(TextsDialog dialog, TextsDialog.TextInfo info)
@@ -124,6 +127,12 @@ internal static class CreatureCompendiumManager
     private static string BuildPageText(List<CompendiumModifierEntry> entries)
     {
         StringBuilder builder = new();
+        builder
+            .Append(CreatureLocalization.Localize(
+                "cm_compendium_resistance_hint",
+                "Sneak while looking at a creature to view its weaknesses, resistances, and immunities beneath its nameplate."))
+            .Append("\n\n");
+
         string previousGroup = string.Empty;
         foreach (CompendiumModifierEntry entry in entries)
         {
