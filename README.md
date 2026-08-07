@@ -273,7 +273,7 @@ CreatureManager is spawn-aware. Natural hostile spawns receive the complete matc
 
 ### Karma and Enforcers
 
-Karma is a regional pressure system based on a sliding 3x3 neighborhood of vanilla zones. Kills of untamed, non-player creatures by a player, a tamed creature, or another player-side creature raise local Karma; runtime-summoned creatures, including Enforcers and their minions, do not. Higher thresholds can add levels to future natural spawns, and idle regions decay over time.
+Karma is a regional pressure system based on a sliding 3x3 neighborhood of vanilla zones. Outdoor and dungeon neighborhoods track independent Karma, levels, decay, and Enforcer cooldowns while sharing the configured thresholds and gain rules. Kills of untamed, non-player creatures by a player, a tamed creature, or another player-side creature raise Karma in the current neighborhood; runtime-summoned creatures, including Enforcers and their minions, do not. Higher thresholds can add levels to future natural spawns, and idle regions decay over time.
 
 Enforcers turn high Karma into encounters. A biome or dungeon table can choose an Enforcer, minions, modifiers, level bonus, bonus loot, and location restrictions. Nearby overlapping player regions are evaluated as one connected check region to avoid duplicate rolls for the same group.
 
@@ -319,8 +319,8 @@ Inspect `textures.reference.txt`, place a PNG in the `textures` directory when n
 | `cm:reference levelvisual` | Generate the vanilla level visual reference. |
 | `cm:full creature` | Generate the full creature scaffold. |
 | `cm:spawn <prefab> [modifiers] [level]` | Spawn a test creature with up to four forced modifiers and an optional exact level. |
-| `cm:karma` | Show the current neighborhood Karma. |
-| `cm:karma <value>` | Set the current neighborhood Karma to a non-negative value. |
+| `cm:karma` | Show the current outdoor or dungeon neighborhood Karma. |
+| `cm:karma <value>` | Set the current outdoor or dungeon neighborhood Karma to a non-negative value. |
 
 The spawn command supports prefab and comma-separated modifier completion. It is intended for testing and does not perform a normal level or modifier roll. `cm:spawn` and `cm:karma` are available to the local listen-server host and connected dedicated-server administrators; a dedicated-server console has no player position to target.
 

@@ -19,6 +19,12 @@ internal static class CreatureKarmaManager
         Unavailable
     }
 
+    private enum KarmaRealm
+    {
+        Outdoor,
+        Dungeon
+    }
+
     private const string CountedDeathKey = "CreatureManager_KarmaDeathCounted";
     private const string EnforcerKey = "CreatureManager_KarmaEnforcer";
     private const string EnforcerSummonedKey = "CreatureManager_KarmaEnforcerSummoned";
@@ -167,6 +173,7 @@ internal static class CreatureKarmaManager
     private static int LastKarmaStatusResponseId = -1;
     private static float ClientKarmaStatusValue;
     private static int ClientKarmaStatusLevel;
+    private static KarmaRealm ClientKarmaStatusRealm;
     private static bool ClientKarmaStatusValid;
 
     private sealed class CreatureDeathContext
@@ -191,6 +198,7 @@ internal static class CreatureKarmaManager
         FeatureDisabled,
         ServerUnavailable,
         KillerUnavailable,
+        KillerChangedRealm,
         BiomeNotConfigured,
         BiomeDisabled,
         NoCandidates,
@@ -366,6 +374,7 @@ internal static class CreatureKarmaManager
         LastKarmaStatusResponseId = -1;
         ClientKarmaStatusValue = 0f;
         ClientKarmaStatusLevel = 0;
+        ClientKarmaStatusRealm = KarmaRealm.Outdoor;
         ClientKarmaStatusValid = false;
     }
 
@@ -374,6 +383,8 @@ internal static class CreatureKarmaManager
         return """
 # CreatureManager Karma configuration.
 # Karma uses a sliding 3x3 vanilla zone neighborhood. Kill creatures in a neighborhood to raise its Karma.
+# Outdoor and dungeon neighborhoods keep independent Karma, levels, decay, Enforcer cooldowns, and consumption.
+# The thresholds and gain rules below are shared; dungeonMultiplier affects only the dungeon neighborhood.
 # Higher Karma can add level bonuses to future spawns in that neighborhood.
 # Enforcer summons a boss-style non-boss creature with minions in a high-Karma neighborhood.
 # Overlapping player-centered 3x3 windows join transitively into one connected check region.
@@ -959,6 +970,7 @@ AshLands:
             bool summoned = TryForceEnforcerSummonNear(
                 context.PlayerKillerId,
                 context.DeadId,
+                GetKarmaRealm(context.Position),
                 out EnforcerSummonFailure failure);
             string failureSuffix = summoned ? "" : $" reason={failure}";
             CreatureManagerPlugin.Log.LogInfo(
@@ -1109,7 +1121,13 @@ AshLands:
         try
         {
             int requestId = package.ReadInt();
-            if (!TryGetPeerReferencePosition(sender, out Vector3 position))
+            if (!TryGetPeerPlayerZdo(sender, out _, out ZDO playerZdo))
+            {
+                return;
+            }
+
+            Vector3 position = playerZdo.GetPosition();
+            if (!IsFinite(position))
             {
                 return;
             }
@@ -1119,6 +1137,7 @@ AshLands:
             response.Write(requestId);
             response.Write(karma);
             response.Write(IsKarmaLevelEnabled() ? GetSectorLevelBonus(karma) : 0);
+            response.Write((int)GetKarmaRealm(position));
             ZRoutedRpc.instance.InvokeRoutedRPC(sender, KarmaStatusResponseRpc, response);
         }
         catch (Exception ex)
@@ -1140,38 +1159,36 @@ AshLands:
             int requestId = package.ReadInt();
             float karma = package.ReadSingle();
             int level = package.ReadInt();
+            int realmValue = package.ReadInt();
             if (requestId < LastKarmaStatusResponseId)
             {
                 return;
             }
 
+            if (!Enum.IsDefined(typeof(KarmaRealm), realmValue))
+            {
+                return;
+            }
+
             LastKarmaStatusResponseId = requestId;
+            KarmaRealm realm = (KarmaRealm)realmValue;
+            Player? localPlayer = Player.m_localPlayer;
+            if (localPlayer != null && GetKarmaRealm(localPlayer.transform.position) != realm)
+            {
+                ClientKarmaStatusValid = false;
+                NextKarmaStatusRequestTime = 0f;
+                return;
+            }
+
             ClientKarmaStatusValue = Mathf.Max(0f, karma);
             ClientKarmaStatusLevel = Mathf.Max(0, level);
+            ClientKarmaStatusRealm = realm;
             ClientKarmaStatusValid = true;
         }
         catch (Exception ex)
         {
             CreatureManagerPlugin.Log.LogWarning($"Failed to process Karma status response: {ex.Message}");
         }
-    }
-
-    private static bool TryGetPeerReferencePosition(long sender, out Vector3 position)
-    {
-        position = Vector3.zero;
-        if (ZNet.instance == null)
-        {
-            return false;
-        }
-
-        ZNetPeer peer = ZNet.instance.GetPeer(sender);
-        if (peer == null)
-        {
-            return false;
-        }
-
-        position = peer.m_refPos;
-        return true;
     }
 
     private static bool TryGetPeerPlayerZdo(long sender, out ZNetPeer peer, out ZDO zdo)
@@ -1782,11 +1799,12 @@ AshLands:
     private static List<(ConnectedPlayerContext Representative, Vector3 CenterPosition, HashSet<string> RegionZoneKeys)> BuildSummonCheckRegions(
         IReadOnlyList<ConnectedPlayerContext> players)
     {
-        Dictionary<(int X, int Y), List<ConnectedPlayerContext>> playersByCenterZone = new();
+        Dictionary<(int X, int Y, KarmaRealm Realm), List<ConnectedPlayerContext>> playersByCenterZone = new();
         foreach (ConnectedPlayerContext player in players)
         {
             Vector2i centerZone = ZoneSystem.GetZone(player.Position);
-            (int X, int Y) key = (centerZone.x, centerZone.y);
+            (int X, int Y, KarmaRealm Realm) key =
+                (centerZone.x, centerZone.y, GetKarmaRealm(player.Position));
             if (!playersByCenterZone.TryGetValue(key, out List<ConnectedPlayerContext> zonePlayers))
             {
                 zonePlayers = new List<ConnectedPlayerContext>();
@@ -1797,14 +1815,14 @@ AshLands:
         }
 
         List<SummonCheckWindow> windows = new();
-        foreach (KeyValuePair<(int X, int Y), List<ConnectedPlayerContext>> entry in playersByCenterZone)
+        foreach (KeyValuePair<(int X, int Y, KarmaRealm Realm), List<ConnectedPlayerContext>> entry in playersByCenterZone)
         {
             Vector2i centerZone = new(entry.Key.X, entry.Key.Y);
             Vector3 centerPosition = ZoneSystem.GetZonePos(centerZone);
             centerPosition.y = entry.Value[0].Position.y;
             float karma = GetKarma(centerPosition);
             List<ConnectedPlayerContext> eligiblePlayers = players
-                .Where(player => IsInKarmaNeighborhood(player.Position, centerZone))
+                .Where(player => IsInKarmaNeighborhood(player.Position, centerZone, entry.Key.Realm))
                 .Where(player => HasEligibleEnforcerCandidate(player, karma))
                 .ToList();
             windows.Add(new SummonCheckWindow(
@@ -1905,6 +1923,7 @@ AshLands:
     private static bool TryForceEnforcerSummonNear(
         ZDOID killerId,
         ZDOID excludedDeadId,
+        KarmaRealm triggerRealm,
         out EnforcerSummonFailure failure)
     {
         failure = EnforcerSummonFailure.None;
@@ -1923,6 +1942,12 @@ AshLands:
         if (!TryFindConnectedAlivePlayer(killerId, out ConnectedPlayerContext player))
         {
             failure = EnforcerSummonFailure.KillerUnavailable;
+            return false;
+        }
+
+        if (GetKarmaRealm(player.Position) != triggerRealm)
+        {
+            failure = EnforcerSummonFailure.KillerChangedRealm;
             return false;
         }
 
@@ -2179,7 +2204,8 @@ AshLands:
     {
         SectorState state = GetBestState(position, out string key);
         int bonus = IsKarmaLevelEnabled() ? GetSectorLevelBonus(state.Karma) : 0;
-        return $"Karma zone={key} neighborhood=3x3 karma={state.Karma:0.#} bonus={bonus} activeEnforcers={GetActiveEnforcerCountInSector(position)}/{GetMaximumEnforcersPerSector()} enforcerCooldown={GetRemainingEnforcerCooldown(position):0}s";
+        string realm = GetKarmaRealm(position) == KarmaRealm.Dungeon ? "dungeon" : "outdoor";
+        return $"Karma realm={realm} zone={key} neighborhood=3x3 karma={state.Karma:0.#} bonus={bonus} activeEnforcers={GetActiveEnforcerCountInSector(position)}/{GetMaximumEnforcersPerSector()} enforcerCooldown={GetRemainingEnforcerCooldown(position):0}s";
     }
 
     internal static string GetMinimapStatus(Vector3 position)
@@ -2200,8 +2226,15 @@ AshLands:
         int bonus;
         if (ZNet.instance != null && !ZNet.instance.IsServer())
         {
+            KarmaRealm localRealm = GetKarmaRealm(position);
+            if (ClientKarmaStatusValid && ClientKarmaStatusRealm != localRealm)
+            {
+                ClientKarmaStatusValid = false;
+                NextKarmaStatusRequestTime = 0f;
+            }
+
             RequestKarmaStatus();
-            if (!ClientKarmaStatusValid)
+            if (!ClientKarmaStatusValid || ClientKarmaStatusRealm != localRealm)
             {
                 return "";
             }
@@ -2796,6 +2829,7 @@ AshLands:
         activeEnforcers = 0;
         hasNonEnforcerBoss = false;
         Vector2i centerZone = ZoneSystem.GetZone(position);
+        KarmaRealm centerRealm = GetKarmaRealm(position);
         HashSet<ZDOID> observedCharacterIds = new();
         foreach (Character character in Character.GetAllCharacters())
         {
@@ -2825,7 +2859,7 @@ AshLands:
                 TrackedBossZdoIds.Add(characterId);
             }
 
-            if (!IsInEnforcerCheckRegion(character.transform.position, centerZone, regionZoneKeys))
+            if (!IsInEnforcerCheckRegion(character.transform.position, centerZone, centerRealm, regionZoneKeys))
             {
                 continue;
             }
@@ -2842,6 +2876,7 @@ AshLands:
 
         CountTrackedBlockerZdos(
             centerZone,
+            centerRealm,
             regionZoneKeys,
             excludedCharacterId,
             observedCharacterIds,
@@ -2851,6 +2886,7 @@ AshLands:
 
     private static void CountTrackedBlockerZdos(
         Vector2i centerZone,
+        KarmaRealm centerRealm,
         HashSet<string>? regionZoneKeys,
         ZDOID excludedCharacterId,
         HashSet<ZDOID> observedCharacterIds,
@@ -2880,7 +2916,7 @@ AshLands:
 
             Vector3 trackedPosition = trackedZdo.GetPosition();
             if (IsFinite(trackedPosition) &&
-                IsInEnforcerCheckRegion(trackedPosition, centerZone, regionZoneKeys))
+                IsInEnforcerCheckRegion(trackedPosition, centerZone, centerRealm, regionZoneKeys))
             {
                 activeEnforcers++;
             }
@@ -2908,7 +2944,7 @@ AshLands:
 
             Vector3 trackedPosition = trackedZdo.GetPosition();
             if (IsFinite(trackedPosition) &&
-                IsInEnforcerCheckRegion(trackedPosition, centerZone, regionZoneKeys))
+                IsInEnforcerCheckRegion(trackedPosition, centerZone, centerRealm, regionZoneKeys))
             {
                 hasNonEnforcerBoss = true;
                 return;
@@ -2928,8 +2964,16 @@ AshLands:
                (float.IsInfinity(health) || health > 0f);
     }
 
-    private static bool IsInKarmaNeighborhood(Vector3 position, Vector2i centerZone)
+    private static bool IsInKarmaNeighborhood(
+        Vector3 position,
+        Vector2i centerZone,
+        KarmaRealm centerRealm)
     {
+        if (GetKarmaRealm(position) != centerRealm)
+        {
+            return false;
+        }
+
         Vector2i zone = ZoneSystem.GetZone(position);
         return Math.Abs(zone.x - centerZone.x) <= ZoneRadius &&
                Math.Abs(zone.y - centerZone.y) <= ZoneRadius;
@@ -2938,11 +2982,12 @@ AshLands:
     private static bool IsInEnforcerCheckRegion(
         Vector3 position,
         Vector2i centerZone,
+        KarmaRealm centerRealm,
         HashSet<string>? regionZoneKeys)
     {
         return regionZoneKeys != null
             ? regionZoneKeys.Contains(GetSectorKey(position))
-            : IsInKarmaNeighborhood(position, centerZone);
+            : IsInKarmaNeighborhood(position, centerZone, centerRealm);
     }
 
     private static EnforcerSummonFailure GetEnforcerBlockerFailure(
@@ -3616,6 +3661,14 @@ AshLands:
         return position.y >= 4500f;
     }
 
+    private static KarmaRealm GetKarmaRealm(Vector3 position)
+    {
+        // Keep the Karma ledger aligned with the existing dungeon gain and Enforcer-table boundary.
+        return IsLikelyDungeonPosition(position)
+            ? KarmaRealm.Dungeon
+            : KarmaRealm.Outdoor;
+    }
+
     private static bool TryGetDungeonLocationPrefabName(Vector3 position, out string locationPrefab)
     {
         if (TryGetZoneLocationPrefabName(position, out locationPrefab))
@@ -4223,18 +4276,20 @@ AshLands:
     private static string GetSectorKey(Vector3 position)
     {
         Vector2i zone = ZoneSystem.GetZone(position);
-        return GetSectorKey(zone);
+        return GetSectorKey(zone, GetKarmaRealm(position));
     }
 
-    private static string GetSectorKey(Vector2i zone)
+    private static string GetSectorKey(Vector2i zone, KarmaRealm realm)
     {
-        return $"{zone.x},{zone.y}";
+        string prefix = realm == KarmaRealm.Dungeon ? "D" : "O";
+        return $"{prefix}:{zone.x},{zone.y}";
     }
 
     private static IEnumerable<string> GetSectorKeys(Vector3 position)
     {
         Vector2i zone = ZoneSystem.GetZone(position);
-        yield return GetSectorKey(zone);
+        KarmaRealm realm = GetKarmaRealm(position);
+        yield return GetSectorKey(zone, realm);
 
         int radius = ZoneRadius;
         for (int x = -radius; x <= radius; x++)
@@ -4246,7 +4301,7 @@ AshLands:
                     continue;
                 }
 
-                yield return GetSectorKey(new Vector2i(zone.x + x, zone.y + y));
+                yield return GetSectorKey(new Vector2i(zone.x + x, zone.y + y), realm);
             }
         }
     }

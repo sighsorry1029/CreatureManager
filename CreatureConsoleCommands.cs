@@ -54,7 +54,7 @@ internal static class CreatureConsoleCommands
             onlyAdmin: true);
         new Terminal.ConsoleCommand(
             "cm:karma",
-            "Show or set current 3x3 zone-neighborhood Karma. Usage: cm:karma [value]",
+            "Show or set the current outdoor or dungeon 3x3 zone-neighborhood Karma. Usage: cm:karma [value]",
             Karma,
             isCheat: true,
             isNetwork: true,

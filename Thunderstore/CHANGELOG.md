@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.6
+
+- Separate outdoor and dungeon Karma neighborhoods, including Karma values, level bonuses, decay, Enforcer consumption and cooldowns, blocker checks, Omen summons, HUD status, and administrator commands, while retaining the shared thresholds and gain rules.
+
 ## 1.1.5
 
 - Added the versioned `CreatureManagerModifierApi` for lossless modifier-state capture and restoration by transport mods, including stored powers, cooldowns, accumulated runtime state, cache refresh, and validation before replacement.
