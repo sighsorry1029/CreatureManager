@@ -59,6 +59,7 @@ internal enum CreaturePrefabBaselineGroup : ulong
 
     ProjectileSpawnOnHit = 1UL << 41,
     SpawnAbilitySpawnPrefabs = 1UL << 42,
+    ProjectileRandomSpawnOnHit = 1UL << 43,
 
     AttackAll = AttackDamage | AttackTuple | AttackStatusEffect | AttackProjectile | AttackAi,
     CharacterAll = CharacterIdentity | CharacterBoss | CharacterGlobalKey | CharacterHealth |
@@ -70,7 +71,7 @@ internal enum CreaturePrefabBaselineGroup : ulong
     HumanoidAll = HumanoidDefaultItems | HumanoidRandomWeapon | HumanoidRandomArmor |
                   HumanoidRandomShield | HumanoidRandomItems | HumanoidRandomSets,
     VisualAll = VisualScale | RagdollReferences | Appearance,
-    ProjectileAll = ProjectileSpawnOnHit | SpawnAbilitySpawnPrefabs,
+    ProjectileAll = ProjectileSpawnOnHit | SpawnAbilitySpawnPrefabs | ProjectileRandomSpawnOnHit,
     All = AttackAll | CharacterAll | BaseAiAll | MonsterAiAll | HumanoidAll | VisualAll | ProjectileAll
 }
 
@@ -89,6 +90,7 @@ internal static class CreaturePrefabBaseline
         CreaturePrefabBaselineGroup.AttackProjectile,
         CreaturePrefabBaselineGroup.AttackAi,
         CreaturePrefabBaselineGroup.ProjectileSpawnOnHit,
+        CreaturePrefabBaselineGroup.ProjectileRandomSpawnOnHit,
         CreaturePrefabBaselineGroup.SpawnAbilitySpawnPrefabs,
         CreaturePrefabBaselineGroup.CharacterIdentity,
         CreaturePrefabBaselineGroup.CharacterBoss,
@@ -493,6 +495,8 @@ internal static class CreaturePrefabBaseline
     private sealed class ProjectileState
     {
         private GameObject? _spawnOnHit;
+        private List<GameObject>? _randomSpawnOnHit;
+        private int _randomSpawnOnHitCount;
         private GameObject[]? _spawnPrefabs;
 
         internal bool Capture(GameObject prefab, CreaturePrefabBaselineGroup group)
@@ -508,6 +512,20 @@ internal static class CreaturePrefabBaseline
                     }
 
                     _spawnOnHit = projectile.m_spawnOnHit;
+                    return true;
+                }
+                case CreaturePrefabBaselineGroup.ProjectileRandomSpawnOnHit:
+                {
+                    Projectile? projectile = prefab.GetComponent<Projectile>();
+                    if (projectile == null)
+                    {
+                        return false;
+                    }
+
+                    _randomSpawnOnHit = projectile.m_randomSpawnOnHit == null
+                        ? null
+                        : new List<GameObject>(projectile.m_randomSpawnOnHit);
+                    _randomSpawnOnHitCount = projectile.m_randomSpawnOnHitCount;
                     return true;
                 }
                 case CreaturePrefabBaselineGroup.SpawnAbilitySpawnPrefabs:
@@ -538,6 +556,19 @@ internal static class CreaturePrefabBaseline
                     if (projectile != null)
                     {
                         projectile.m_spawnOnHit = _spawnOnHit;
+                    }
+
+                    break;
+                }
+                case CreaturePrefabBaselineGroup.ProjectileRandomSpawnOnHit:
+                {
+                    Projectile? projectile = prefab.GetComponent<Projectile>();
+                    if (projectile != null)
+                    {
+                        projectile.m_randomSpawnOnHit = _randomSpawnOnHit == null
+                            ? null
+                            : new List<GameObject>(_randomSpawnOnHit);
+                        projectile.m_randomSpawnOnHitCount = _randomSpawnOnHitCount;
                     }
 
                     break;

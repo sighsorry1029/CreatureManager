@@ -5991,24 +5991,33 @@ internal static class CreatureModifierManager
             hit.m_staggerMultiplier *= 1f + staggering;
         }
 
-        if (TryGetModifierPower(attacker, ModifierMask.Fire, FirePowerKey, FireDefaultPower, out float fire))
+        bool hasFire = TryGetModifierPower(attacker, ModifierMask.Fire, FirePowerKey, FireDefaultPower, out float fire);
+        bool hasFrost = TryGetModifierPower(attacker, ModifierMask.Frost, FrostPowerKey, FrostDefaultPower, out float frost);
+        bool hasLightning = TryGetModifierPower(attacker, ModifierMask.Lightning, LightningPowerKey, LightningDefaultPower, out float lightning);
+        bool hasSpirit = TryGetModifierPower(attacker, ModifierMask.Spirit, SpiritPowerKey, ElementalDefaultPower, out float spirit);
+        float? modifierSourceDamage = hasFire || hasFrost || hasLightning || hasSpirit
+            ? GetModifierSourceDamage(target, hit, totalDamage)
+            : null;
+        float addedDamageBasis = modifierSourceDamage.GetValueOrDefault();
+
+        if (hasFire)
         {
-            hit.m_damage.m_fire += totalDamage * fire;
+            hit.m_damage.m_fire += addedDamageBasis * fire;
         }
 
-        if (TryGetModifierPower(attacker, ModifierMask.Frost, FrostPowerKey, FrostDefaultPower, out float frost))
+        if (hasFrost)
         {
-            hit.m_damage.m_frost += totalDamage * frost;
+            hit.m_damage.m_frost += addedDamageBasis * frost;
         }
 
-        if (TryGetModifierPower(attacker, ModifierMask.Lightning, LightningPowerKey, LightningDefaultPower, out float lightning))
+        if (hasLightning)
         {
-            hit.m_damage.m_lightning += totalDamage * lightning;
+            hit.m_damage.m_lightning += addedDamageBasis * lightning;
         }
 
-        if (TryGetModifierPower(attacker, ModifierMask.Spirit, SpiritPowerKey, ElementalDefaultPower, out float spirit))
+        if (hasSpirit)
         {
-            float spiritDamage = totalDamage * spirit;
+            float spiritDamage = addedDamageBasis * spirit;
             if (target is Player)
             {
                 QueuePlayerSpiritDamage(hit, spiritDamage);
@@ -6030,7 +6039,31 @@ internal static class CreatureModifierManager
             CurrentRpcDamageContext.ArmorPiercing = Mathf.Max(CurrentRpcDamageContext.ArmorPiercing, armorPiercing);
         }
 
-        TryArmKnockback(attacker, target, hit);
+        TryArmKnockback(attacker, target, hit, totalDamage, modifierSourceDamage);
+    }
+
+    private static float GetModifierSourceDamage(Character target, HitData hit, float totalDamage)
+    {
+        HitData.DamageModifiers modifiers = target.GetDamageModifiers(target.GetWeakSpot(hit.m_weakSpot));
+        float excludedDamage =
+            GetIgnoredModifierDamage(hit.m_damage.m_blunt, modifiers.m_blunt) +
+            GetIgnoredModifierDamage(hit.m_damage.m_slash, modifiers.m_slash) +
+            GetIgnoredModifierDamage(hit.m_damage.m_pierce, modifiers.m_pierce) +
+            GetIgnoredModifierDamage(hit.m_damage.m_chop, modifiers.m_chop) +
+            GetIgnoredModifierDamage(hit.m_damage.m_pickaxe, modifiers.m_pickaxe) +
+            GetIgnoredModifierDamage(hit.m_damage.m_fire, modifiers.m_fire) +
+            GetIgnoredModifierDamage(hit.m_damage.m_frost, modifiers.m_frost) +
+            GetIgnoredModifierDamage(hit.m_damage.m_lightning, modifiers.m_lightning) +
+            GetIgnoredModifierDamage(hit.m_damage.m_poison, modifiers.m_poison) +
+            GetIgnoredModifierDamage(hit.m_damage.m_spirit, modifiers.m_spirit);
+        return SanitizePositiveDamage(totalDamage - excludedDamage);
+    }
+
+    private static float GetIgnoredModifierDamage(float damage, HitData.DamageModifier modifier)
+    {
+        return modifier is HitData.DamageModifier.Ignore or HitData.DamageModifier.Immune
+            ? SanitizePositiveDamage(damage)
+            : 0f;
     }
 
     internal static ApplyDamageState BeginApplyDamage(Character target, HitData hit)
@@ -6172,17 +6205,27 @@ internal static class CreatureModifierManager
             amount);
     }
 
-    private static void TryArmKnockback(Character attacker, Character target, HitData hit)
+    private static void TryArmKnockback(
+        Character attacker,
+        Character target,
+        HitData hit,
+        float totalDamage,
+        float? modifierSourceDamage)
     {
         if (target is not Player ||
             attacker == null ||
             attacker.IsPlayer() ||
             hit == null ||
-            hit.GetTotalDamage() <= 0f ||
+            totalDamage <= 0f ||
             !IsHostileAttacker(target, attacker) ||
             !TryGetZdo(attacker, out ZDO zdo) ||
             !HasModifier(zdo, ModifierMask.Knockback) ||
             !CreatureLevelManager.AllowsModifierEffects(attacker))
+        {
+            return;
+        }
+
+        if ((modifierSourceDamage ?? GetModifierSourceDamage(target, hit, totalDamage)) <= 0f)
         {
             return;
         }

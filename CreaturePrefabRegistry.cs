@@ -119,35 +119,8 @@ internal static class CreaturePrefabRegistry
 
     internal static List<GameObject> GetAttackPrefabs()
     {
-        HashSet<string> creatureAttackItemNames = GetCreatureAttackItemNames();
-        IEnumerable<GameObject> prefabs = Enumerable.Empty<GameObject>();
-        if (ObjectDB.instance != null)
-        {
-            prefabs = prefabs.Concat(ObjectDB.instance.m_items);
-        }
-
-        if (FejdObjectDb != null)
-        {
-            prefabs = prefabs.Concat(FejdObjectDb.m_items);
-        }
-
-        if (ZNetScene.instance != null)
-        {
-            prefabs = prefabs.Concat(ZNetScene.instance.m_prefabs);
-        }
-
-        if (FejdZNetScene != null)
-        {
-            prefabs = prefabs.Concat(FejdZNetScene.m_prefabs);
-        }
-
-        return prefabs
-            .Where(prefab => prefab != null &&
-                             !IsClonedPrefab(prefab) &&
-                             creatureAttackItemNames.Contains(prefab.name) &&
-                             IsAttackItem(prefab))
-            .GroupBy(prefab => prefab.name, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
+        return GetCreatureAttackItemsByName()
+            .Values
             .OrderBy(prefab => prefab.name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -447,9 +420,9 @@ internal static class CreaturePrefabRegistry
                prefab.GetComponent("TriggerSpawnAbility") != null;
     }
 
-    private static HashSet<string> GetCreatureAttackItemNames()
+    private static Dictionary<string, GameObject> GetCreatureAttackItemsByName()
     {
-        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, GameObject> itemsByName = new(StringComparer.OrdinalIgnoreCase);
         foreach (GameObject creaturePrefab in GetCreaturePrefabs())
         {
             Humanoid humanoid = creaturePrefab.GetComponent<Humanoid>();
@@ -458,13 +431,13 @@ internal static class CreaturePrefabRegistry
                 continue;
             }
 
-            AddAttackItems(names, humanoid.m_defaultItems);
-            AddAttackItems(names, humanoid.m_randomWeapon);
+            AddAttackItems(itemsByName, humanoid.m_defaultItems);
+            AddAttackItems(itemsByName, humanoid.m_randomWeapon);
             if (humanoid.m_randomItems != null)
             {
                 foreach (Humanoid.RandomItem randomItem in humanoid.m_randomItems)
                 {
-                    AddAttackItem(names, randomItem?.m_prefab);
+                    AddAttackItem(itemsByName, randomItem?.m_prefab);
                 }
             }
 
@@ -472,15 +445,17 @@ internal static class CreaturePrefabRegistry
             {
                 foreach (Humanoid.ItemSet set in humanoid.m_randomSets)
                 {
-                    AddAttackItems(names, set?.m_items);
+                    AddAttackItems(itemsByName, set?.m_items);
                 }
             }
         }
 
-        return names;
+        return itemsByName;
     }
 
-    private static void AddAttackItems(HashSet<string> names, IEnumerable<GameObject>? items)
+    private static void AddAttackItems(
+        Dictionary<string, GameObject> itemsByName,
+        IEnumerable<GameObject>? items)
     {
         if (items == null)
         {
@@ -489,16 +464,22 @@ internal static class CreaturePrefabRegistry
 
         foreach (GameObject item in items)
         {
-            AddAttackItem(names, item);
+            AddAttackItem(itemsByName, item);
         }
     }
 
-    private static void AddAttackItem(HashSet<string> names, GameObject? item)
+    private static void AddAttackItem(Dictionary<string, GameObject> itemsByName, GameObject? item)
     {
-        if (item != null && IsAttackItem(item))
+        if (item == null ||
+            IsClonedPrefab(item) ||
+            string.IsNullOrWhiteSpace(item.name) ||
+            !IsAttackItem(item) ||
+            itemsByName.ContainsKey(item.name))
         {
-            names.Add(item.name);
+            return;
         }
+
+        itemsByName.Add(item.name, item);
     }
 
     private static bool RegisterWithZNetScene(ZNetScene? scene, GameObject prefab)

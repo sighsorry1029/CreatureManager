@@ -173,7 +173,7 @@ Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains
 - Clone or edit vanilla and modded creature prefabs.
 - Configure selected `Character` and `Humanoid` fields, equipment, appearance, scale, and textures.
 - Clone and tune monster attack prefabs, including damage, animation, projectile, AI range, and attack status effects.
-- Clone projectile prefabs and override `Projectile.m_spawnOnHit` or `SpawnAbility.m_spawnPrefab` without duplicating their remaining component state.
+- Clone projectile prefabs and override `Projectile.m_spawnOnHit`, weighted random on-hit spawns, or `SpawnAbility.m_spawnPrefab` without duplicating their remaining component state.
 - Build reusable `BaseAI` and `MonsterAI` presets, or borrow AI directly from another creature prefab.
 - Add and edit factions without mirroring unrelated game systems.
 - Define weighted levels for global, boss, biome, group, and individual prefab rules.
@@ -205,7 +205,7 @@ Every modifier tuple requires `chance` first. Later values form an optional trai
 | `attacks.yml` | Clone and edit monster attack item prefabs. |
 | `creatures.sample.yml` | Inactive creature examples generated on the first launch. Copy selected entries into an active creature file, or rename it to `creatures_sample.yml` to activate it. |
 | `attacks.sample.yml` | Inactive attack examples generated on the first launch. Copy selected entries into an active attack file, or rename it to `attacks_sample.yml` to activate it. |
-| `projectile.yml` | Clone projectile prefabs and override supported on-hit or spawn-ability prefab references. |
+| `projectile.yml` | Clone projectile prefabs and override fixed or weighted-random on-hit spawns and spawn-ability prefab references. |
 | `ai.yml` | Override same-name creature AI directly or define uniquely named reusable AI presets. |
 | `factions.yml` | Define and edit factions. This domain is intentionally single-file. |
 | `levels.yml` | Configure level weights, stat scaling, distance scaling, visuals, and modifiers. |

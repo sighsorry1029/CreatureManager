@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.7
+
+- Discover modded creature attacks directly from loaded Humanoid loadouts and inspect animator controllers with a lightweight Animator-only probe, allowing non-networked attack holders into generated references without instantiating complete creature prefabs.
+- Add weighted `projectile.randomSpawnOnHit` and `randomSpawnOnHitCount` reference and override support, including inheritance, explicit clear and disable semantics, validation, baseline restoration, and attack usage metadata.
+- Base Fire, Frost, Lightning, and Spirit added damage and Juggernaut eligibility only on channels the target does not Ignore or Immune, respecting weak spots and current damage modifiers so ineffective damage cannot become effective elemental damage or knockback.
+
 ## 1.1.6
 
 - Separate outdoor and dungeon Karma neighborhoods, including Karma values, level bonuses, decay, Enforcer consumption and cooldowns, blocker checks, Omen summons, HUD status, and administrator commands, while retaining the shared thresholds and gain rules.

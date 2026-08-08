@@ -125,7 +125,8 @@ internal static class CreatureReferenceWriter
         builder.AppendLine("# Includes prefabs with root Projectile, Aoe, TriggerSpawnAbility, or SpawnAbility components, plus prefabs referenced by ItemDrop attack projectile fields.");
         builder.AppendLine("# usedByAttacks is reference-only metadata gathered from loaded ItemDrop primary and secondary attacks; projectile.yml ignores it.");
         builder.AppendLine("# projectile and spawnAbility blocks are emitted only when those components exist on the prefab root.");
-        builder.AppendLine("# Repeated spawnAbility.spawnPrefabs entries are compacted as Prefab:weight; an omitted weight means 1.");
+        builder.AppendLine("# Repeated projectile.randomSpawnOnHit and spawnAbility.spawnPrefabs entries are compacted as Prefab:weight; an omitted weight means 1.");
+        builder.AppendLine("# projectile.randomSpawnOnHitCount is the number of independent random selections per hit; 0 disables that random spawn path.");
         builder.AppendLine("# Owner sections are best-effort guesses from the Valheim manifest and loaded asset bundles.");
         builder.AppendLine();
 
@@ -159,6 +160,12 @@ internal static class CreatureReferenceWriter
                 {
                     AppendLine(builder, 1, "projectile:");
                     AppendLine(builder, 2, $"spawnOnHit: {(entry.ProjectileSpawnOnHit == null ? "null" : FormatYamlString(entry.ProjectileSpawnOnHit))}");
+                    if (entry.ProjectileRandomSpawnOnHit.Count > 0)
+                    {
+                        AppendLine(builder, 2,
+                            $"randomSpawnOnHit: {FormatWeightedPrefabInlineList(entry.ProjectileRandomSpawnOnHit)}");
+                        AppendLine(builder, 2, $"randomSpawnOnHitCount: {entry.ProjectileRandomSpawnOnHitCount}");
+                    }
                 }
 
                 if (entry.HasSpawnAbility)
@@ -222,6 +229,8 @@ internal static class CreatureReferenceWriter
         public List<string> UsedByAttacks { get; set; } = new();
         public bool HasProjectile { get; set; }
         public string? ProjectileSpawnOnHit { get; set; }
+        public List<string> ProjectileRandomSpawnOnHit { get; set; } = new();
+        public int ProjectileRandomSpawnOnHitCount { get; set; }
         public bool HasSpawnAbility { get; set; }
         public List<string> SpawnAbilityPrefabs { get; set; } = new();
     }
@@ -331,6 +340,11 @@ internal static class CreatureReferenceWriter
                         .ToList() ?? new List<string>(),
                     HasProjectile = projectile != null,
                     ProjectileSpawnOnHit = GetPrefabNameOrNull(projectile?.m_spawnOnHit),
+                    ProjectileRandomSpawnOnHit = projectile?.m_randomSpawnOnHit?
+                        .Where(prefab => prefab != null && !string.IsNullOrWhiteSpace(prefab.name))
+                        .Select(prefab => prefab.name)
+                        .ToList() ?? new List<string>(),
+                    ProjectileRandomSpawnOnHitCount = projectile?.m_randomSpawnOnHitCount ?? 0,
                     HasSpawnAbility = spawnAbility != null,
                     SpawnAbilityPrefabs = spawnAbility?.m_spawnPrefab?
                         .Where(prefab => prefab != null && !string.IsNullOrWhiteSpace(prefab.name))
@@ -368,7 +382,12 @@ internal static class CreatureReferenceWriter
     private static Dictionary<string, ProjectileReferenceUsage> CollectProjectileUsage()
     {
         Dictionary<string, ProjectileReferenceUsage> usageByProjectile = new(StringComparer.OrdinalIgnoreCase);
-        foreach (GameObject itemPrefab in CreaturePrefabRegistry.GetItemPrefabs())
+        IEnumerable<GameObject> itemPrefabs = CreaturePrefabRegistry.GetAttackPrefabs()
+            .Concat(CreaturePrefabRegistry.GetItemPrefabs())
+            .Where(prefab => prefab != null && !string.IsNullOrWhiteSpace(prefab.name))
+            .GroupBy(prefab => prefab.name, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First());
+        foreach (GameObject itemPrefab in itemPrefabs)
         {
             ItemDrop? itemDrop = itemPrefab.GetComponent<ItemDrop>();
             ItemDrop.ItemData.SharedData? shared = itemDrop?.m_itemData?.m_shared;
@@ -631,15 +650,18 @@ internal static class CreatureReferenceWriter
 
     private static List<string> GetAnimationParameters(GameObject prefab)
     {
-        List<string> directParameters = GetAnimatorParameterNames(
-            prefab.GetComponent<Character>()?.m_animator ??
-            prefab.GetComponentInChildren<Animator>(true));
+        Animator? characterAnimator = prefab.GetComponent<Character>()?.m_animator;
+        Animator? sourceAnimator = characterAnimator?.runtimeAnimatorController != null
+            ? characterAnimator
+            : prefab.GetComponentsInChildren<Animator>(true)
+                .FirstOrDefault(animator => animator.runtimeAnimatorController != null) ?? characterAnimator;
+        List<string> directParameters = GetAnimatorParameterNames(sourceAnimator);
         if (directParameters.Count > 0)
         {
             return directParameters;
         }
 
-        return GetInstantiatedAnimatorParameterNames(prefab);
+        return GetControllerAnimatorParameterNames(prefab.name, sourceAnimator);
     }
 
     private static List<string> GetAnimatorParameterNames(Animator? animator)
@@ -657,32 +679,44 @@ internal static class CreatureReferenceWriter
             .ToList();
     }
 
-    private static List<string> GetInstantiatedAnimatorParameterNames(GameObject prefab)
+    private static List<string> GetControllerAnimatorParameterNames(string prefabName, Animator? sourceAnimator)
     {
-        if (prefab.GetComponentInChildren<Animator>(true) == null)
+        if (sourceAnimator?.runtimeAnimatorController == null)
         {
             return new List<string>();
         }
 
-        GameObject? instance = null;
-        bool previousForceDisableInit = ZNetView.m_forceDisableInit;
+        GameObject? probe = null;
         try
         {
-            ZNetView.m_forceDisableInit = true;
-            instance = UnityEngine.Object.Instantiate(prefab);
-            return GetAnimatorParameterNames(instance.GetComponentInChildren<Animator>(true));
+            probe = new GameObject("CreatureManager_AnimatorProbe")
+            {
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            probe.SetActive(false);
+            Animator probeAnimator = probe.AddComponent<Animator>();
+            probeAnimator.runtimeAnimatorController = sourceAnimator.runtimeAnimatorController;
+            List<string> parameters = GetAnimatorParameterNames(probeAnimator);
+            if (parameters.Count == 0)
+            {
+                probe.SetActive(true);
+                parameters = GetAnimatorParameterNames(probeAnimator);
+                probe.SetActive(false);
+            }
+
+            return parameters;
         }
         catch (Exception ex)
         {
-            CreatureManagerPlugin.Log.LogDebug($"Failed to inspect animation parameters for '{prefab.name}': {ex.Message}");
+            CreatureManagerPlugin.Log.LogDebug(
+                $"Failed to inspect animation controller parameters for '{prefabName}': {ex.Message}");
             return new List<string>();
         }
         finally
         {
-            ZNetView.m_forceDisableInit = previousForceDisableInit;
-            if (instance != null)
+            if (probe != null)
             {
-                UnityEngine.Object.DestroyImmediate(instance);
+                UnityEngine.Object.DestroyImmediate(probe);
             }
         }
     }

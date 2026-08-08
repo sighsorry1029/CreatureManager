@@ -213,6 +213,31 @@ internal static class CreatureYaml
             {
                 return Invalid(path, "projectile.spawnOnHit must be a non-empty prefab name or null.");
             }
+
+            if (projectile.RandomSpawnOnHitSpecified)
+            {
+                if (projectile.RandomSpawnOnHit == null)
+                {
+                    return Invalid(path, "projectile.randomSpawnOnHit must be a Prefab[:weight] list or [] to clear it; omit the field to inherit it.");
+                }
+
+                if (!TryParseSpawnPrefabEntries(
+                        projectile.RandomSpawnOnHit,
+                        out _,
+                        out string randomSpawnError,
+                        allowEmpty: true))
+                {
+                    return Invalid(path, $"projectile.randomSpawnOnHit is invalid: {randomSpawnError}");
+                }
+            }
+
+            if (projectile.RandomSpawnOnHitCountSpecified &&
+                (projectile.RandomSpawnOnHitCount is not int randomSpawnCount ||
+                 randomSpawnCount is < 0 or > MaxExpandedSpawnPrefabCount))
+            {
+                return Invalid(path,
+                    $"projectile.randomSpawnOnHitCount must be an integer from 0 to {MaxExpandedSpawnPrefabCount}; omit the field to inherit it.");
+            }
         }
 
         SpawnAbilityDefinition? spawnAbility = definition.SpawnAbility;
@@ -1987,12 +2012,24 @@ internal static class CreatureYaml
     internal static bool TryParseSpawnPrefabEntries(
         IReadOnlyList<string>? values,
         out List<(string PrefabName, int Weight)> entries,
-        out string error)
+        out string error,
+        bool allowEmpty = false)
     {
         entries = new List<(string PrefabName, int Weight)>();
         error = "";
-        if (values is not { Count: > 0 })
+        if (values == null)
         {
+            error = $"value must be a non-empty Prefab[:weight] list; omitted weight defaults to 1 and weight must be from 1 to {MaxSpawnPrefabWeight}.";
+            return false;
+        }
+
+        if (values.Count == 0)
+        {
+            if (allowEmpty)
+            {
+                return true;
+            }
+
             error = $"value must be a non-empty Prefab[:weight] list; omitted weight defaults to 1 and weight must be from 1 to {MaxSpawnPrefabWeight}.";
             return false;
         }

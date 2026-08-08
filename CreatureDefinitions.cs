@@ -88,6 +88,8 @@ internal sealed class ProjectileDefinition
 internal sealed class ProjectileComponentDefinition
 {
     private string? _spawnOnHit;
+    private List<string>? _randomSpawnOnHit;
+    private int? _randomSpawnOnHitCount;
 
     [YamlIgnore]
     public string? SpawnOnHit
@@ -114,7 +116,34 @@ internal sealed class ProjectileComponentDefinition
         }
     }
 
-    internal bool HasSpecifiedFields => SpawnOnHitSpecified;
+    public List<string>? RandomSpawnOnHit
+    {
+        get => _randomSpawnOnHit;
+        set
+        {
+            _randomSpawnOnHit = value;
+            RandomSpawnOnHitSpecified = true;
+        }
+    }
+
+    [YamlIgnore]
+    public bool RandomSpawnOnHitSpecified { get; private set; }
+
+    public int? RandomSpawnOnHitCount
+    {
+        get => _randomSpawnOnHitCount;
+        set
+        {
+            _randomSpawnOnHitCount = value;
+            RandomSpawnOnHitCountSpecified = true;
+        }
+    }
+
+    [YamlIgnore]
+    public bool RandomSpawnOnHitCountSpecified { get; private set; }
+
+    internal bool HasSpecifiedFields =>
+        SpawnOnHitSpecified || RandomSpawnOnHitSpecified || RandomSpawnOnHitCountSpecified;
 }
 
 internal sealed class SpawnAbilityDefinition

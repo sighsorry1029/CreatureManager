@@ -87,7 +87,12 @@ try
             Prefab = "BombBlob_Tar_projectile",
             Enabled = true,
             UsedByAttacks = new List<string> { "BombBlob_Tar" },
-            Projectile = new ProjectileComponentDefinition { SpawnOnHit = "BlobTar" },
+            Projectile = new ProjectileComponentDefinition
+            {
+                SpawnOnHit = "BlobTar",
+                RandomSpawnOnHit = new List<string> { "Fairy1_RtD", "Fairy2_RtD" },
+                RandomSpawnOnHitCount = 1
+            },
             SpawnAbility = new SpawnAbilityDefinition { SpawnPrefabs = new List<string> { "Mistile" } }
         },
         definition =>
@@ -97,6 +102,10 @@ try
             Require(definition.UsedByAttacks is ["BombBlob_Tar"], "Projectile usedByAttacks values were not preserved.");
             Require(definition.Projectile?.SpawnOnHitSpecified == true, "Projectile spawnOnHit presence was not preserved.");
             Require(definition.Projectile?.SpawnOnHit == "BlobTar", "Projectile spawnOnHit value was not preserved.");
+            Require(definition.Projectile?.RandomSpawnOnHitSpecified == true, "Projectile randomSpawnOnHit presence was not preserved.");
+            Require(definition.Projectile?.RandomSpawnOnHit is ["Fairy1_RtD", "Fairy2_RtD"], "Projectile randomSpawnOnHit values were not preserved.");
+            Require(definition.Projectile?.RandomSpawnOnHitCountSpecified == true, "Projectile randomSpawnOnHitCount presence was not preserved.");
+            Require(definition.Projectile?.RandomSpawnOnHitCount == 1, "Projectile randomSpawnOnHitCount was not preserved.");
             Require(definition.SpawnAbility?.SpawnPrefabsSpecified == true, "SpawnAbility spawnPrefabs presence was not preserved.");
             Require(definition.SpawnAbility?.SpawnPrefabs is ["Mistile"], "SpawnAbility spawnPrefabs values were not preserved.");
         });
@@ -578,6 +587,15 @@ try
     Require(
         explicitNullProjectileDefinitions is [{ Projectile.SpawnOnHitSpecified: true, Projectile.SpawnOnHit: null }],
         "Explicit null projectile.spawnOnHit did not retain field presence.");
+    Require(
+        explicitNullProjectileDefinitions[0].Projectile is
+        {
+            RandomSpawnOnHitSpecified: false,
+            RandomSpawnOnHit: null,
+            RandomSpawnOnHitCountSpecified: false,
+            RandomSpawnOnHitCount: null
+        },
+        "Omitted random projectile fields did not remain inherited.");
     string explicitNullProjectileBundle = serializer.Serialize(explicitNullProjectileDefinitions);
     Require(
         explicitNullProjectileBundle.Contains("spawnOnHit:", StringComparison.Ordinal) &&
@@ -600,6 +618,80 @@ try
     Require(
         emptyProjectileBlockDefinitions is [{ Projectile: null }],
         "An empty projectile block was not normalized to a no-op.");
+
+    const string randomSpawnProjectileYaml = """
+        - prefab: ThorProjectile3_RtD
+          projectile:
+            spawnOnHit: null
+            randomSpawnOnHit: [Fairy1_RtD, Fairy2_RtD]
+            randomSpawnOnHitCount: 1
+        """;
+    Require(
+        CreatureYaml.TryReadDefinitions<ProjectileDefinition>(randomSpawnProjectileYaml, "random spawn projectile contract", out List<ProjectileDefinition> randomSpawnProjectileDefinitions),
+        "A valid projectile.randomSpawnOnHit definition was rejected.");
+    Require(
+        randomSpawnProjectileDefinitions is
+        [{ Projectile:
+            {
+                SpawnOnHitSpecified: true,
+                SpawnOnHit: null,
+                RandomSpawnOnHitSpecified: true,
+                RandomSpawnOnHit: ["Fairy1_RtD", "Fairy2_RtD"],
+                RandomSpawnOnHitCountSpecified: true,
+                RandomSpawnOnHitCount: 1
+            } }],
+        "Random projectile spawn fields were not parsed with their presence intact.");
+    string randomSpawnProjectileBundle = serializer.Serialize(randomSpawnProjectileDefinitions);
+    Require(
+        randomSpawnProjectileBundle.Contains("randomSpawnOnHit:", StringComparison.Ordinal) &&
+        randomSpawnProjectileBundle.Contains("randomSpawnOnHitCount: 1", StringComparison.Ordinal) &&
+        !randomSpawnProjectileBundle.Contains("randomSpawnOnHitSpecified", StringComparison.OrdinalIgnoreCase),
+        "Random projectile spawn fields were omitted or leaked DTO presence metadata during serialization.");
+    Require(
+        CreatureYaml.TryReadDefinitions<ProjectileDefinition>(randomSpawnProjectileBundle, "serialized random spawn projectile contract", out List<ProjectileDefinition> roundTrippedRandomSpawnDefinitions) &&
+        roundTrippedRandomSpawnDefinitions is
+        [{ Projectile.RandomSpawnOnHitSpecified: true, Projectile.RandomSpawnOnHitCountSpecified: true }],
+        "Random projectile spawn fields were not preserved through bundle serialization.");
+
+    const string clearRandomSpawnProjectileYaml = """
+        - prefab: clear_random_spawn_projectile
+          projectile:
+            randomSpawnOnHit: []
+        """;
+    Require(
+        CreatureYaml.TryReadDefinitions<ProjectileDefinition>(clearRandomSpawnProjectileYaml, "clear random spawn projectile contract", out List<ProjectileDefinition> clearRandomSpawnDefinitions),
+        "An explicit empty projectile.randomSpawnOnHit list was rejected.");
+    Require(
+        clearRandomSpawnDefinitions is [{ Projectile.RandomSpawnOnHitSpecified: true, Projectile.RandomSpawnOnHit: [] }],
+        "An explicit empty projectile.randomSpawnOnHit list did not retain clear semantics.");
+    Require(
+        serializer.Serialize(clearRandomSpawnDefinitions).Contains("randomSpawnOnHit: []", StringComparison.Ordinal),
+        "An explicit empty projectile.randomSpawnOnHit list was omitted during serialization.");
+
+    const string zeroRandomSpawnCountYaml = """
+        - prefab: disable_random_spawn_projectile
+          projectile:
+            randomSpawnOnHitCount: 0
+        """;
+    Require(
+        CreatureYaml.TryReadDefinitions<ProjectileDefinition>(zeroRandomSpawnCountYaml, "zero random spawn count contract", out List<ProjectileDefinition> zeroRandomSpawnCountDefinitions) &&
+        zeroRandomSpawnCountDefinitions is [{ Projectile.RandomSpawnOnHitCountSpecified: true, Projectile.RandomSpawnOnHitCount: 0 }],
+        "projectile.randomSpawnOnHitCount 0 was not accepted as an explicit disable value.");
+
+    string[] invalidRandomSpawnProjectileYaml =
+    {
+        "- prefab: invalid_null_random_spawn\n  projectile:\n    randomSpawnOnHit: null\n",
+        "- prefab: invalid_blank_random_spawn\n  projectile:\n    randomSpawnOnHit: ['']\n",
+        "- prefab: invalid_negative_random_count\n  projectile:\n    randomSpawnOnHitCount: -1\n",
+        $"- prefab: invalid_large_random_count\n  projectile:\n    randomSpawnOnHitCount: {CreatureYaml.MaxExpandedSpawnPrefabCount + 1}\n",
+        "- prefab: invalid_null_random_count\n  projectile:\n    randomSpawnOnHitCount: null\n"
+    };
+    foreach (string invalidRandomSpawnYaml in invalidRandomSpawnProjectileYaml)
+    {
+        Require(
+            !CreatureYaml.TryReadDefinitions<ProjectileDefinition>(invalidRandomSpawnYaml, "invalid random spawn projectile contract", out _),
+            "An invalid random projectile spawn definition was accepted.");
+    }
 
     const string emptySpawnOnHitYaml = """
         - prefab: invalid_empty_spawn_on_hit

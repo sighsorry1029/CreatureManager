@@ -1683,14 +1683,16 @@ internal static class CreatureDomainManager
                 continue;
             }
 
-            if (definition.Projectile?.SpawnOnHitSpecified == true)
+            ProjectileComponentDefinition? projectileDefinition = definition.Projectile;
+            bool hasProjectileFields = projectileDefinition?.HasSpecifiedFields == true;
+            if (hasProjectileFields && prefab.GetComponent<Projectile>() == null)
             {
-                if (prefab.GetComponent<Projectile>() == null)
-                {
-                    errors.Add($"projectile '{prefabName}' sets projectile.spawnOnHit but has no root Projectile component");
-                }
+                errors.Add($"projectile '{prefabName}' sets projectile fields but has no root Projectile component");
+            }
 
-                string? spawnOnHit = definition.Projectile.SpawnOnHit?.Trim();
+            if (projectileDefinition?.SpawnOnHitSpecified == true)
+            {
+                string? spawnOnHit = projectileDefinition.SpawnOnHit?.Trim();
                 if (spawnOnHit != null)
                 {
                     GameObject? spawnOnHitPrefab = CreaturePrefabRegistry.GetPrefab(spawnOnHit);
@@ -1701,6 +1703,32 @@ internal static class CreatureDomainManager
                     else if (IsStaleManagedClone(spawnOnHitPrefab, currentCloneTargets))
                     {
                         errors.Add($"projectile '{prefabName}' references stale projectile.spawnOnHit clone '{spawnOnHit}'");
+                    }
+                }
+            }
+
+            if (projectileDefinition?.RandomSpawnOnHitSpecified == true)
+            {
+                if (!CreatureYaml.TryParseSpawnPrefabEntries(
+                        projectileDefinition.RandomSpawnOnHit,
+                        out List<(string PrefabName, int Weight)> randomSpawnPrefabs,
+                        out string randomSpawnError,
+                        allowEmpty: true))
+                {
+                    errors.Add($"projectile '{prefabName}' has invalid projectile.randomSpawnOnHit: {randomSpawnError}");
+                    continue;
+                }
+
+                foreach ((string randomSpawnPrefabName, _) in randomSpawnPrefabs)
+                {
+                    GameObject? randomSpawnPrefab = CreaturePrefabRegistry.GetPrefab(randomSpawnPrefabName);
+                    if (randomSpawnPrefab == null)
+                    {
+                        errors.Add($"projectile '{prefabName}' references missing projectile.randomSpawnOnHit prefab '{randomSpawnPrefabName}'");
+                    }
+                    else if (IsStaleManagedClone(randomSpawnPrefab, currentCloneTargets))
+                    {
+                        errors.Add($"projectile '{prefabName}' references stale projectile.randomSpawnOnHit clone '{randomSpawnPrefabName}'");
                     }
                 }
             }
@@ -2850,19 +2878,25 @@ internal static class CreatureDomainManager
             return;
         }
 
-        bool setSpawnOnHit = definition.Projectile?.SpawnOnHitSpecified == true;
+        ProjectileComponentDefinition? projectileDefinition = definition.Projectile;
+        bool setSpawnOnHit = projectileDefinition?.SpawnOnHitSpecified == true;
+        bool setRandomSpawnOnHit = projectileDefinition?.RandomSpawnOnHitSpecified == true;
+        bool setRandomSpawnOnHitCount = projectileDefinition?.RandomSpawnOnHitCountSpecified == true;
         Projectile? projectile = null;
         GameObject? spawnOnHit = null;
-        if (setSpawnOnHit)
+        if (setSpawnOnHit || setRandomSpawnOnHit || setRandomSpawnOnHitCount)
         {
             projectile = prefab.GetComponent<Projectile>();
             if (projectile == null)
             {
-                CreatureManagerPlugin.Log.LogWarning($"Projectile definition '{prefab.name}' sets projectile.spawnOnHit, but the prefab has no root Projectile component.");
+                CreatureManagerPlugin.Log.LogWarning($"Projectile definition '{prefab.name}' sets projectile fields, but the prefab has no root Projectile component.");
                 return;
             }
+        }
 
-            string? spawnOnHitName = definition.Projectile!.SpawnOnHit?.Trim();
+        if (setSpawnOnHit)
+        {
+            string? spawnOnHitName = projectileDefinition!.SpawnOnHit?.Trim();
             if (spawnOnHitName != null)
             {
                 spawnOnHit = CreaturePrefabRegistry.GetPrefab(spawnOnHitName);
@@ -2872,6 +2906,52 @@ internal static class CreatureDomainManager
                     return;
                 }
             }
+        }
+
+        List<GameObject>? randomSpawnOnHit = null;
+        if (setRandomSpawnOnHit)
+        {
+            if (!CreatureYaml.TryParseSpawnPrefabEntries(
+                    projectileDefinition!.RandomSpawnOnHit,
+                    out List<(string PrefabName, int Weight)> weightedRandomSpawnPrefabs,
+                    out string randomSpawnError,
+                    allowEmpty: true))
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"Projectile definition '{prefab.name}' has invalid projectile.randomSpawnOnHit: {randomSpawnError}");
+                return;
+            }
+
+            randomSpawnOnHit = new List<GameObject>(weightedRandomSpawnPrefabs.Sum(entry => entry.Weight));
+            foreach ((string randomSpawnPrefabName, int weight) in weightedRandomSpawnPrefabs)
+            {
+                GameObject? randomSpawnPrefab = CreaturePrefabRegistry.GetPrefab(randomSpawnPrefabName);
+                if (randomSpawnPrefab == null)
+                {
+                    CreatureManagerPlugin.Log.LogWarning(
+                        $"Projectile definition '{prefab.name}' references missing projectile.randomSpawnOnHit prefab '{randomSpawnPrefabName}'.");
+                    return;
+                }
+
+                for (int weightIndex = 0; weightIndex < weight; ++weightIndex)
+                {
+                    randomSpawnOnHit.Add(randomSpawnPrefab);
+                }
+            }
+        }
+
+        int randomSpawnOnHitCount = 0;
+        if (setRandomSpawnOnHitCount)
+        {
+            if (projectileDefinition!.RandomSpawnOnHitCount is not int configuredCount ||
+                configuredCount is < 0 or > CreatureYaml.MaxExpandedSpawnPrefabCount)
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"Projectile definition '{prefab.name}' has invalid projectile.randomSpawnOnHitCount.");
+                return;
+            }
+
+            randomSpawnOnHitCount = configuredCount;
         }
 
         SpawnAbility? spawnAbility = null;
@@ -2915,12 +2995,26 @@ internal static class CreatureDomainManager
 
         CreaturePrefabBaselineGroup baselineGroups = CreaturePrefabBaselineGroup.None;
         if (setSpawnOnHit) baselineGroups |= CreaturePrefabBaselineGroup.ProjectileSpawnOnHit;
+        if (setRandomSpawnOnHit || setRandomSpawnOnHitCount)
+        {
+            baselineGroups |= CreaturePrefabBaselineGroup.ProjectileRandomSpawnOnHit;
+        }
         if (spawnPrefabs != null) baselineGroups |= CreaturePrefabBaselineGroup.SpawnAbilitySpawnPrefabs;
         CreaturePrefabBaseline.Capture(prefab, baselineGroups);
 
         if (setSpawnOnHit)
         {
             projectile!.m_spawnOnHit = spawnOnHit;
+        }
+
+        if (setRandomSpawnOnHit)
+        {
+            projectile!.m_randomSpawnOnHit = randomSpawnOnHit!;
+        }
+
+        if (setRandomSpawnOnHitCount)
+        {
+            projectile!.m_randomSpawnOnHitCount = randomSpawnOnHitCount;
         }
 
         if (spawnPrefabs != null)
@@ -5315,6 +5409,8 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "Omitted fields inherit the source prefab. Clones retain every unexposed component and field unchanged.");
         AppendTemplateComment(builder, "usedByAttacks is generated reference metadata. It is accepted in this file but never changes runtime behavior.");
         AppendTemplateComment(builder, "There is no type field; projectile and spawnAbility blocks already identify the supported component.");
+        AppendTemplateComment(builder, "projectile.randomSpawnOnHit uses Prefab[:weight]. Omit it to inherit, or use [] to clear the inherited list.");
+        AppendTemplateComment(builder, "projectile.randomSpawnOnHitCount is the number of independent selections per hit. Omit it to inherit; 0 disables random spawning.");
         AppendTemplateComment(builder, "spawnAbility.spawnPrefabs uses Prefab[:weight]. Weight defaults to 1, is limited to 1000, and expanded lists are limited to 4096 slots.");
         AppendTemplateBlankLine(builder);
         AppendTemplateComment(builder, "Schema:");
@@ -5324,6 +5420,8 @@ internal static class CreatureDomainManager
         AppendTemplateLine(builder, 1, "usedByAttacks: [BombBlob_Tar]       # informational only; ignored when applying this entry.");
         AppendTemplateLine(builder, 1, "projectile:");
         AppendTemplateLine(builder, 2, "spawnOnHit: BlobTar                 # replace with a prefab name, or use null to clear it explicitly.");
+        AppendTemplateLine(builder, 2, "randomSpawnOnHit: [Skeleton:2, Blob] # whole-list replacement; repeated slots are random selection weights, and [] clears.");
+        AppendTemplateLine(builder, 2, "randomSpawnOnHitCount: 1            # selections per hit; omit to inherit, or use 0 to disable this path.");
         AppendTemplateLine(builder, 1, "spawnAbility:");
         AppendTemplateLine(builder, 2, "spawnPrefabs: [Mistile]             # whole-list replacement using Prefab[:weight]; omitted weight is 1.");
         AppendTemplateBlankLine(builder);
@@ -5342,6 +5440,8 @@ internal static class CreatureDomainManager
         AppendTemplateLine(builder, 1, "clonedFrom: BombBlob_Tar_projectile");
         AppendTemplateLine(builder, 1, "projectile:");
         AppendTemplateLine(builder, 2, "spawnOnHit: null                    # explicit clear; omitting projectile keeps the inherited value.");
+        AppendTemplateLine(builder, 2, "randomSpawnOnHit: [Fairy1_RtD, Fairy2_RtD]");
+        AppendTemplateLine(builder, 2, "randomSpawnOnHitCount: 1");
         AppendTemplateBlankLine(builder);
         return builder.ToString();
     }
