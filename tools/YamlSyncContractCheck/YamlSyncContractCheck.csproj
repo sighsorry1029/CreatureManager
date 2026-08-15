@@ -10,6 +10,7 @@
   <ItemGroup>
     <Compile Include="..\..\CreatureDefinitions.cs" Link="CreatureDefinitions.cs" />
     <Compile Include="..\..\CreatureYaml.cs" Link="CreatureYaml.cs" />
+    <Compile Include="..\..\ModifierIconSource.cs" Link="ModifierIconSource.cs" />
     <PackageReference Include="YamlDotNet" Version="16.3.0" />
   </ItemGroup>
 

@@ -94,8 +94,6 @@ internal static class CreatureModifierManager
     private const string BlamerActiveKey = "CreatureManager_BlamerActive";
     private const string KarmaEnforcerKey = "CreatureManager_KarmaEnforcer";
     private const string KarmaEnforcerSummonedKey = "CreatureManager_KarmaEnforcerSummoned";
-    private const string LevelHealthAppliedKey = "CreatureManager_LevelHealthApplied";
-    private const string LevelHealthMultiplierKey = "CreatureManager_LevelHealthMultiplier";
     private const string ReapingBaseMaxHealthKey = "CreatureManager_ReapingBaseMaxHealth";
     private const string ReapingHealActivationCountKey = "CreatureManager_ReapingHealActivationCount";
     private const string ReapingBonusHealthKey = "CreatureManager_ReapingBonusHealth";
@@ -268,90 +266,139 @@ internal static class CreatureModifierManager
     private const float ResistanceTextMinWidth = 150f;
     private const float BossContentWidth = 220f;
     private const float BossContentBelowHealthGap = 2f;
-    private const int ModifierStateSnapshotVersion = 1;
+    private const int ModifierStateSnapshotVersion = 2;
     private const int MaximumModifierStateSnapshotBytes = 64 * 1024;
     private static readonly string[] SneakMethodNames = { "IsCrouching", "IsCrouch", "IsSneaking", "InSneak", "IsStealth" };
     private static readonly string[] SneakFieldNames = { "m_crouching", "m_crouch", "m_crouchToggled", "m_isCrouching", "m_isCrouch", "m_sneaking" };
-    private static readonly HashSet<int> ModifierStateKeyHashes = typeof(CreatureModifierManager)
-        .GetFields(BindingFlags.Static | BindingFlags.NonPublic)
-        .Where(field =>
-            field.IsLiteral &&
-            field.FieldType == typeof(string) &&
-            field.Name.EndsWith("Key", StringComparison.Ordinal))
-        .Select(field => field.GetRawConstantValue() as string)
-        .Where(value => value != null && value.StartsWith("CreatureManager_", StringComparison.Ordinal))
-        .Select(value => value!.GetStableHashCode())
-        .ToHashSet();
-    private static Sprite? ArmoredSprite;
-    private static Sprite? EnragedSprite;
-    private static Sprite? DeathwardSprite;
-    private static Sprite? SwiftSprite;
-    private static Sprite? RegeneratingSprite;
-    private static Sprite? VampiricSprite;
-    private static Sprite? FireSprite;
-    private static Sprite? FrostSprite;
-    private static Sprite? LightningSprite;
-    private static Sprite? SpiritSprite;
-    private static Sprite? ToxicDeathSprite;
-    private static Sprite? ArmorPiercingSprite;
-    private static Sprite? StaggeringSprite;
-    private static Sprite? UndodgeableSprite;
-    private static Sprite? AttackSpeedSprite;
-    private static Sprite? ExposedSprite;
-    private static Sprite? WeakenedSprite;
-    private static Sprite? WitheredSprite;
-    private static Sprite? ReflectionSprite;
-    private static Sprite? VortexSprite;
-    private static Sprite? CripplingSprite;
-    private static Sprite? DisruptiveSprite;
-    private static Sprite? AdrenalineDrainSprite;
-    private static Sprite? CorrosiveSprite;
-    private static Sprite? AdaptiveSprite;
-    private static Sprite? UnflinchingSprite;
-    private static Sprite? ChameleonSprite;
-    private static Sprite? OmenSprite;
-    private static Sprite? ReapingSprite;
-    private static Sprite? BlinkSprite;
-    private static Sprite? KnockbackSprite;
-    private static Sprite? BlamerSprite;
+    // Keep the public modifier snapshot contract explicit; level, Karma, and player-debuff state do not belong to it.
+    private static readonly HashSet<int> ModifierStateKeyHashes = new[]
+    {
+        AppliedKey,
+        Mask64Key,
+        ArmoredReductionKey,
+        EnragedBonusKey,
+        DeathwardHealthKey,
+        DeathwardCooldownKey,
+        DeathwardMaxActivationsKey,
+        DeathwardActivationCountKey,
+        DeathwardNextReadyTimeKey,
+        SwiftPowerKey,
+        RegeneratingPowerKey,
+        RegeneratingHealthPerSecondCapKey,
+        VampiricPowerKey,
+        FirePowerKey,
+        FrostPowerKey,
+        LightningPowerKey,
+        SpiritPowerKey,
+        ToxicDeathPowerKey,
+        ArmorPiercingPowerKey,
+        StaggeringPowerKey,
+        UndodgeableDamageReductionKey,
+        AttackSpeedPowerKey,
+        ExposedChanceKey,
+        ExposedPowerKey,
+        ExposedDurationKey,
+        WeakenedChanceKey,
+        WeakenedPowerKey,
+        WeakenedDurationKey,
+        WitheredChanceKey,
+        WitheredPowerKey,
+        WitheredDurationKey,
+        ReflectionPowerKey,
+        ReflectionChanceKey,
+        VortexPowerKey,
+        CripplingChanceKey,
+        CripplingPowerKey,
+        CripplingJumpPowerKey,
+        CripplingDurationKey,
+        DisruptiveChanceKey,
+        DisruptivePowerKey,
+        DisruptiveEitrPowerKey,
+        DisruptiveDurationKey,
+        AdrenalineDrainChanceKey,
+        AdrenalineDrainPowerKey,
+        AdrenalineDrainGainReductionKey,
+        AdrenalineDrainDurationKey,
+        CorrosiveChanceKey,
+        CorrosivePowerKey,
+        CorrosiveDurationKey,
+        ToxicDeathRadiusKey,
+        ToxicDeathTriggerEffectKey,
+        AdaptivePowerKey,
+        UnflinchingPowerKey,
+        ChameleonIntervalKey,
+        ChameleonTypeKey,
+        OmenPowerKey,
+        ReapingPowerKey,
+        ReapingHealMaxActivationsKey,
+        ReapingMaxHealthPerKillKey,
+        ReapingMaxHealthCapKey,
+        ReapingDamagePerKillKey,
+        ReapingDamageCapKey,
+        ReapingScalePerKillKey,
+        ReapingScaleCapKey,
+        BlinkPowerKey,
+        BlinkCooldownKey,
+        BlinkMaxRangeKey,
+        BlinkStartEffectKey,
+        BlinkNextTimeKey,
+        BlinkAlertStartTimeKey,
+        KnockbackPowerKey,
+        KnockbackCooldownKey,
+        KnockbackNextReadyTimeKey,
+        BlamerKarmaPerSecondKey,
+        BlamerMaxKarmaGainKey,
+        BlamerFleeHealthRatioKey,
+        BlamerAccumulatedKarmaKey,
+        BlamerActiveKey,
+        ReapingBaseMaxHealthKey,
+        ReapingHealActivationCountKey,
+        ReapingBonusHealthKey,
+        ReapingDamageBonusKey,
+        ReapingScaleBonusKey,
+        ReapingBaseScaleKey,
+        AdaptiveTypeKey,
+        AdaptiveUntilKey
+    }.Select(static key => key.GetStableHashCode()).ToHashSet();
+    private static readonly Dictionary<string, Sprite> ModifierIconSprites = new(StringComparer.Ordinal);
     private static Sprite? FallbackStarSprite;
     private static readonly ModifierSpec[] ModifierSpecs =
     {
-        new(ModifierGroup.Offense, "enraged", "Enraged", ModifierMask.Enraged, EnragedBonusKey, EnragedDefaultPower, GetEnragedSprite, power => $"Increases outgoing damage by {FormatPercent(power)}."),
-        new(ModifierGroup.Offense, "fire", "Fire", ModifierMask.Fire, FirePowerKey, FireDefaultPower, GetFireSprite, power => $"Adds fire damage equal to {FormatPercent(power)} of the original hit damage."),
-        new(ModifierGroup.Offense, "frost", "Frost", ModifierMask.Frost, FrostPowerKey, FrostDefaultPower, GetFrostSprite, power => $"Adds frost damage equal to {FormatPercent(power)} of the original hit damage."),
-        new(ModifierGroup.Offense, "lightning", "Lightning", ModifierMask.Lightning, LightningPowerKey, LightningDefaultPower, GetLightningSprite, power => $"Adds lightning damage equal to {FormatPercent(power)} of the original hit damage."),
-        new(ModifierGroup.Offense, "spirit", "Spirit", ModifierMask.Spirit, SpiritPowerKey, ElementalDefaultPower, GetSpiritSprite, power => $"Adds spirit damage equal to {FormatPercent(power)} of the original hit damage. Against players, a damaging hit adds that amount to vanilla Spirit damage-over-time; its ticks bypass resistance and armor."),
-        new(ModifierGroup.Offense, "armorPiercing", "Armor Piercing", ModifierMask.ArmorPiercing, ArmorPiercingPowerKey, ArmorPiercingDefaultPower, GetArmorPiercingSprite, power => $"Against players, ignores {FormatPercent(power)} of body armor for that hit."),
-        new(ModifierGroup.Offense, "staggering", "Staggering", ModifierMask.Staggering, StaggeringPowerKey, StaggeringDefaultPower, GetStaggeringSprite, power => $"Increases outgoing normal-hit and block-stagger buildup by {FormatPercent(power)}."),
-        new(ModifierGroup.Offense, "undodgeable", "Undodgeable", ModifierMask.Undodgeable, UndodgeableDamageReductionKey, UndodgeableDefaultDamageReduction, GetUndodgeableSprite, power => $"Attacks against players ignore dodge invulnerability but deal {FormatPercent(power)} less damage. Blocking and parrying remain available.", ClampUndodgeableDamageReduction),
+        new(ModifierGroup.Offense, "enraged", "Enraged", ModifierMask.Enraged, EnragedBonusKey, EnragedDefaultPower, power => $"Increases outgoing damage by {FormatPercent(power)}."),
+        new(ModifierGroup.Offense, "fire", "Fire", ModifierMask.Fire, FirePowerKey, FireDefaultPower, power => $"Adds fire damage equal to {FormatPercent(power)} of the original hit damage."),
+        new(ModifierGroup.Offense, "frost", "Frost", ModifierMask.Frost, FrostPowerKey, FrostDefaultPower, power => $"Adds frost damage equal to {FormatPercent(power)} of the original hit damage."),
+        new(ModifierGroup.Offense, "lightning", "Lightning", ModifierMask.Lightning, LightningPowerKey, LightningDefaultPower, power => $"Adds lightning damage equal to {FormatPercent(power)} of the original hit damage."),
+        new(ModifierGroup.Offense, "spirit", "Spirit", ModifierMask.Spirit, SpiritPowerKey, ElementalDefaultPower, power => $"Adds spirit damage equal to {FormatPercent(power)} of the original hit damage. Against players, a damaging hit adds that amount to vanilla Spirit damage-over-time; its ticks bypass resistance and armor."),
+        new(ModifierGroup.Offense, "armorPiercing", "Armor Piercing", ModifierMask.ArmorPiercing, ArmorPiercingPowerKey, ArmorPiercingDefaultPower, power => $"Against players, ignores {FormatPercent(power)} of body armor for that hit."),
+        new(ModifierGroup.Offense, "staggering", "Staggering", ModifierMask.Staggering, StaggeringPowerKey, StaggeringDefaultPower, power => $"Increases outgoing normal-hit and block-stagger buildup by {FormatPercent(power)}."),
+        new(ModifierGroup.Offense, "undodgeable", "Undodgeable", ModifierMask.Undodgeable, UndodgeableDamageReductionKey, UndodgeableDefaultDamageReduction, power => $"Attacks against players ignore dodge invulnerability but deal {FormatPercent(power)} less damage. Blocking and parrying remain available.", ClampUndodgeableDamageReduction),
 
-        new(ModifierGroup.Defense, "armored", "Armored", ModifierMask.Armored, ArmoredReductionKey, ArmoredDefaultPower, GetArmoredSprite, power => $"Reduces incoming damage by {FormatPercent(power)}."),
-        new(ModifierGroup.Defense, "deathward", "Deathward", ModifierMask.Deathward, DeathwardHealthKey, DeathwardDefaultPower, GetDeathwardSprite, power => DescribeDeathward(power, DeathwardDefaultCooldown, DeathwardDefaultMaxActivations), ClampDeathwardHealth),
-        new(ModifierGroup.Defense, "regenerating", "Regenerating", ModifierMask.Regenerating, RegeneratingPowerKey, RegeneratingDefaultPower, GetRegeneratingSprite, power => DescribeRegenerating(power, RegeneratingDefaultHealthPerSecondCap)),
-        new(ModifierGroup.Defense, "reflection", "Reflection", ModifierMask.Reflection, ReflectionPowerKey, ReflectionDefaultPower, GetReflectionSprite, power => DescribeReflection(power, ReflectionDefaultProcChance), procChanceKey: ReflectionChanceKey),
-        new(ModifierGroup.Defense, "vortex", "Vortex", ModifierMask.Vortex, VortexPowerKey, VortexDefaultPower, GetVortexSprite, power => $"On projectile hits, {FormatPercent(power)} proc chance to ignore all damage, push, stagger, and status effects."),
-        new(ModifierGroup.Defense, "adaptive", "Adaptive", ModifierMask.Adaptive, AdaptivePowerKey, AdaptiveDefaultPower, GetAdaptiveSprite, power => $"Remembers one hit's dominant damage type for {FormatSeconds(AdaptiveDuration)} without changing it. Matching damage is reduced by {FormatPercent(power)} until the memory expires."),
-        new(ModifierGroup.Defense, "unflinching", "Unflinching", ModifierMask.Unflinching, UnflinchingPowerKey, UnflinchingDefaultPower, GetUnflinchingSprite, _ => "Cannot be staggered by normal hits or perfect parries, preventing the vanilla double-damage stagger window."),
-        new(ModifierGroup.Defense, "chameleon", "Chameleon", ModifierMask.Chameleon, ChameleonIntervalKey, ChameleonDefaultInterval, GetChameleonSprite, interval => DescribeChameleon(interval), ResolveChameleonInterval),
+        new(ModifierGroup.Defense, "armored", "Armored", ModifierMask.Armored, ArmoredReductionKey, ArmoredDefaultPower, power => $"Reduces incoming damage by {FormatPercent(power)}."),
+        new(ModifierGroup.Defense, "deathward", "Deathward", ModifierMask.Deathward, DeathwardHealthKey, DeathwardDefaultPower, power => DescribeDeathward(power, DeathwardDefaultCooldown, DeathwardDefaultMaxActivations), ClampDeathwardHealth),
+        new(ModifierGroup.Defense, "regenerating", "Regenerating", ModifierMask.Regenerating, RegeneratingPowerKey, RegeneratingDefaultPower, power => DescribeRegenerating(power, RegeneratingDefaultHealthPerSecondCap)),
+        new(ModifierGroup.Defense, "reflection", "Reflection", ModifierMask.Reflection, ReflectionPowerKey, ReflectionDefaultPower, power => DescribeReflection(power, ReflectionDefaultProcChance), procChanceKey: ReflectionChanceKey),
+        new(ModifierGroup.Defense, "vortex", "Vortex", ModifierMask.Vortex, VortexPowerKey, VortexDefaultPower, power => $"On projectile hits, {FormatPercent(power)} proc chance to ignore all damage, push, stagger, and status effects."),
+        new(ModifierGroup.Defense, "adaptive", "Adaptive", ModifierMask.Adaptive, AdaptivePowerKey, AdaptiveDefaultPower, power => $"Remembers one hit's dominant damage type for {FormatSeconds(AdaptiveDuration)} without changing it. Matching damage is reduced by {FormatPercent(power)} until the memory expires."),
+        new(ModifierGroup.Defense, "unflinching", "Unflinching", ModifierMask.Unflinching, UnflinchingPowerKey, UnflinchingDefaultPower, _ => "Cannot be staggered by normal hits or perfect parries, preventing the vanilla double-damage stagger window."),
+        new(ModifierGroup.Defense, "chameleon", "Chameleon", ModifierMask.Chameleon, ChameleonIntervalKey, ChameleonDefaultInterval, interval => DescribeChameleon(interval), ResolveChameleonInterval),
 
-        new(ModifierGroup.Affliction, "exposed", "Exposed", ModifierMask.Exposed, ExposedPowerKey, ExposedDefaultPower, GetExposedSprite, power => DescribePlayerAffliction("exposed", "make that player take", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration, "more damage"), procChanceKey: ExposedChanceKey),
-        new(ModifierGroup.Affliction, "weakened", "Weakened", ModifierMask.Weakened, WeakenedPowerKey, WeakenedDefaultPower, GetWeakenedSprite, power => DescribePlayerAffliction("weakened", "make that player deal", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration, "less damage"), procChanceKey: WeakenedChanceKey),
-        new(ModifierGroup.Affliction, "withered", "Withered", ModifierMask.Withered, WitheredPowerKey, WitheredDefaultPower, GetWitheredSprite, power => DescribePlayerAffliction("withered", "reduce that player's healing received by", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration), procChanceKey: WitheredChanceKey),
-        new(ModifierGroup.Affliction, "crippling", "Crippling", ModifierMask.Crippling, CripplingPowerKey, CripplingDefaultPower, GetCripplingSprite, power => DescribeCrippling(power, CripplingDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: CripplingChanceKey),
-        new(ModifierGroup.Affliction, "disruptive", "Disruptive", ModifierMask.Disruptive, DisruptivePowerKey, DisruptiveDefaultPower, GetDisruptiveSprite, power => DescribeDisruptive(power, DisruptiveDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: DisruptiveChanceKey),
-        new(ModifierGroup.Affliction, "adrenalineDrain", "Adrenaline Drain", ModifierMask.AdrenalineDrain, AdrenalineDrainPowerKey, AdrenalineDrainDefaultPower, GetAdrenalineDrainSprite, power => DescribeAdrenalineDrain(power, AdrenalineDrainDefaultGainReduction, PlayerDebuffDefaultProcChance, AdrenalineDrainDefaultDuration), procChanceKey: AdrenalineDrainChanceKey),
-        new(ModifierGroup.Affliction, "corrosive", "Corrosive", ModifierMask.Corrosive, CorrosivePowerKey, CorrosiveDefaultPower, GetCorrosiveSprite, power => DescribeCorrosive(power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration), procChanceKey: CorrosiveChanceKey),
-        new(ModifierGroup.Affliction, "toxicDeath", "Toxic Death", ModifierMask.ToxicDeath, ToxicDeathPowerKey, ToxicDeathDefaultPower, GetToxicDeathSprite, power => DescribeToxicDeath(power, ToxicDeathDefaultRadius)),
+        new(ModifierGroup.Affliction, "exposed", "Exposed", ModifierMask.Exposed, ExposedPowerKey, ExposedDefaultPower, power => DescribePlayerAffliction("exposed", "make that player take", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration, "more damage"), procChanceKey: ExposedChanceKey),
+        new(ModifierGroup.Affliction, "weakened", "Weakened", ModifierMask.Weakened, WeakenedPowerKey, WeakenedDefaultPower, power => DescribePlayerAffliction("weakened", "make that player deal", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration, "less damage"), procChanceKey: WeakenedChanceKey),
+        new(ModifierGroup.Affliction, "withered", "Withered", ModifierMask.Withered, WitheredPowerKey, WitheredDefaultPower, power => DescribePlayerAffliction("withered", "reduce that player's healing received by", power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration, PlayerDebuffDuration), procChanceKey: WitheredChanceKey),
+        new(ModifierGroup.Affliction, "crippling", "Crippling", ModifierMask.Crippling, CripplingPowerKey, CripplingDefaultPower, power => DescribeCrippling(power, CripplingDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: CripplingChanceKey),
+        new(ModifierGroup.Affliction, "disruptive", "Disruptive", ModifierMask.Disruptive, DisruptivePowerKey, DisruptiveDefaultPower, power => DescribeDisruptive(power, DisruptiveDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: DisruptiveChanceKey),
+        new(ModifierGroup.Affliction, "adrenalineDrain", "Adrenaline Drain", ModifierMask.AdrenalineDrain, AdrenalineDrainPowerKey, AdrenalineDrainDefaultPower, power => DescribeAdrenalineDrain(power, AdrenalineDrainDefaultGainReduction, PlayerDebuffDefaultProcChance, AdrenalineDrainDefaultDuration), procChanceKey: AdrenalineDrainChanceKey),
+        new(ModifierGroup.Affliction, "corrosive", "Corrosive", ModifierMask.Corrosive, CorrosivePowerKey, CorrosiveDefaultPower, power => DescribeCorrosive(power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration), procChanceKey: CorrosiveChanceKey),
+        new(ModifierGroup.Affliction, "toxicDeath", "Toxic Death", ModifierMask.ToxicDeath, ToxicDeathPowerKey, ToxicDeathDefaultPower, power => DescribeToxicDeath(power, ToxicDeathDefaultRadius)),
 
-        new(ModifierGroup.Special, "swift", "Swift", ModifierMask.Swift, SwiftPowerKey, SwiftDefaultPower, GetSwiftSprite, power => $"Increases movement speed, acceleration, and turning speed by {FormatPercent(power)}."),
-        new(ModifierGroup.Special, "attackSpeed", "Attack Speed", ModifierMask.AttackSpeed, AttackSpeedPowerKey, AttackSpeedDefaultPower, GetAttackSpeedSprite, power => $"Increases attack animation speed by {FormatPercent(power)} and shortens both weapon and creature AI attack intervals to {FormatPercent(1f / Mathf.Max(1f, 1f + power))} of normal."),
-        new(ModifierGroup.Special, "vampiric", "Vampiric", ModifierMask.Vampiric, VampiricPowerKey, VampiricDefaultPower, GetVampiricSprite, power => $"Heals the creature for {FormatPercent(power)} of health removed by direct hits. Delayed damage-over-time is excluded."),
-        new(ModifierGroup.Special, "reaping", "Reaping", ModifierMask.Reaping, ReapingPowerKey, ReapingDefaultPower, GetReapingSprite, power => DescribeReaping(power, ReapingDefaultMaxHealthPerKill, ReapingDefaultDamagePerKill, ReapingDefaultScalePerKill)),
-        new(ModifierGroup.Special, "blink", "Blink", ModifierMask.Blink, BlinkPowerKey, BlinkFixedProcChance, GetBlinkSprite, _ => DescribeBlink(BlinkDefaultCooldown, BlinkDefaultMaxRange)),
-        new(ModifierGroup.Special, "omen", "Omen", ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, GetOmenSprite, power => $"When killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player, has a {FormatPercent(power)} chance to force an Enforcer summon check. Cooldown blocking follows the server setting."),
-        new(ModifierGroup.Special, "juggernaut", "Juggernaut", ModifierMask.Knockback, KnockbackPowerKey, KnockbackDefaultPower, GetKnockbackSprite, power => DescribeKnockback(power, KnockbackDefaultCooldown), ClampKnockbackPower),
-        new(ModifierGroup.Special, "blamer", "Blamer", ModifierMask.Blamer, BlamerKarmaPerSecondKey, BlamerDefaultKarmaPerSecond, GetBlamerSprite, power => DescribeBlamer(power, BlamerDefaultMaxKarmaGain, BlamerDefaultFleeHealthRatio), ResolveBlamerKarmaPerSecond)
+        new(ModifierGroup.Special, "swift", "Swift", ModifierMask.Swift, SwiftPowerKey, SwiftDefaultPower, power => $"Increases movement speed, acceleration, and turning speed by {FormatPercent(power)}."),
+        new(ModifierGroup.Special, "attackSpeed", "Attack Speed", ModifierMask.AttackSpeed, AttackSpeedPowerKey, AttackSpeedDefaultPower, power => $"Increases attack animation speed by {FormatPercent(power)} and shortens both weapon and creature AI attack intervals to {FormatPercent(1f / Mathf.Max(1f, 1f + power))} of normal."),
+        new(ModifierGroup.Special, "vampiric", "Vampiric", ModifierMask.Vampiric, VampiricPowerKey, VampiricDefaultPower, power => $"Heals the creature for {FormatPercent(power)} of health removed by direct hits. Delayed damage-over-time is excluded."),
+        new(ModifierGroup.Special, "reaping", "Reaping", ModifierMask.Reaping, ReapingPowerKey, ReapingDefaultPower, power => DescribeReaping(power, ReapingDefaultMaxHealthPerKill, ReapingDefaultDamagePerKill, ReapingDefaultScalePerKill)),
+        new(ModifierGroup.Special, "blink", "Blink", ModifierMask.Blink, BlinkPowerKey, BlinkFixedProcChance, _ => DescribeBlink(BlinkDefaultCooldown, BlinkDefaultMaxRange)),
+        new(ModifierGroup.Special, "omen", "Omen", ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, power => $"When killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player, has a {FormatPercent(power)} chance to force an Enforcer summon check. Cooldown blocking follows the server setting."),
+        new(ModifierGroup.Special, "juggernaut", "Juggernaut", ModifierMask.Knockback, KnockbackPowerKey, KnockbackDefaultPower, power => DescribeKnockback(power, KnockbackDefaultCooldown), ClampKnockbackPower),
+        new(ModifierGroup.Special, "blamer", "Blamer", ModifierMask.Blamer, BlamerKarmaPerSecondKey, BlamerDefaultKarmaPerSecond, power => DescribeBlamer(power, BlamerDefaultMaxKarmaGain, BlamerDefaultFleeHealthRatio), ResolveBlamerKarmaPerSecond)
     };
     private static readonly ModifierGroup[] ModifierGroupOrder =
     {
@@ -1329,7 +1376,6 @@ internal static class CreatureModifierManager
             ModifierMask mask,
             string powerKey,
             float defaultPower,
-            Func<Sprite> sprite,
             Func<float, string> description,
             Func<float?, float>? powerClamp = null,
             string? procChanceKey = null)
@@ -1340,7 +1386,6 @@ internal static class CreatureModifierManager
             Mask = mask;
             PowerKey = powerKey;
             DefaultPower = defaultPower;
-            Sprite = sprite;
             ProcChanceKey = procChanceKey;
             _powerClamp = powerClamp ?? (value => ClampPower(value, defaultPower));
             _description = description;
@@ -1352,7 +1397,6 @@ internal static class CreatureModifierManager
         internal ModifierMask Mask { get; }
         internal string PowerKey { get; }
         internal float DefaultPower { get; }
-        internal Func<Sprite> Sprite { get; }
         internal string? ProcChanceKey { get; }
 
         internal float ResolvePower(float? configuredPower)
@@ -1513,7 +1557,7 @@ internal static class CreatureModifierManager
     {
         if (TryGetModifierSpec(modifier, out ModifierSpec spec))
         {
-            sprite = spec.Sprite();
+            sprite = GetModifierIconSprite(spec.Key);
             return true;
         }
 
@@ -6731,13 +6775,13 @@ internal static class CreatureModifierManager
             return;
         }
 
-        RegisterPlayerDebuffStatusEffect(objectDb, ExposedStatusName, ExposedStatusHash, "$cm_modifier_exposed_name", "$cm_status_exposed_tooltip", GetExposedSprite());
-        RegisterPlayerDebuffStatusEffect(objectDb, WeakenedStatusName, WeakenedStatusHash, "$cm_modifier_weakened_name", "$cm_status_weakened_tooltip", GetWeakenedSprite());
-        RegisterPlayerDebuffStatusEffect(objectDb, WitheredStatusName, WitheredStatusHash, "$cm_modifier_withered_name", "$cm_status_withered_tooltip", GetWitheredSprite());
-        RegisterPlayerDebuffStatusEffect(objectDb, CripplingStatusName, CripplingStatusHash, "$cm_modifier_crippling_name", "$cm_status_crippling_tooltip", GetCripplingSprite(), ControlDebuffDuration);
-        RegisterPlayerDebuffStatusEffect(objectDb, DisruptiveStatusName, DisruptiveStatusHash, "$cm_modifier_disruptive_name", "$cm_status_disruptive_tooltip", GetDisruptiveSprite(), ControlDebuffDuration);
-        RegisterPlayerDebuffStatusEffect(objectDb, AdrenalineDrainStatusName, AdrenalineDrainStatusHash, "$cm_modifier_adrenaline_drain_name", "$cm_status_adrenaline_drain_tooltip", GetAdrenalineDrainSprite(), AdrenalineDrainDefaultDuration);
-        RegisterPlayerDebuffStatusEffect(objectDb, CorrosiveStatusName, CorrosiveStatusHash, "$cm_modifier_corrosive_name", "$cm_status_corrosive_tooltip", GetCorrosiveSprite());
+        RegisterPlayerDebuffStatusEffect(objectDb, ExposedStatusName, ExposedStatusHash, "$cm_modifier_exposed_name", "$cm_status_exposed_tooltip", GetModifierIconSprite("exposed"));
+        RegisterPlayerDebuffStatusEffect(objectDb, WeakenedStatusName, WeakenedStatusHash, "$cm_modifier_weakened_name", "$cm_status_weakened_tooltip", GetModifierIconSprite("weakened"));
+        RegisterPlayerDebuffStatusEffect(objectDb, WitheredStatusName, WitheredStatusHash, "$cm_modifier_withered_name", "$cm_status_withered_tooltip", GetModifierIconSprite("withered"));
+        RegisterPlayerDebuffStatusEffect(objectDb, CripplingStatusName, CripplingStatusHash, "$cm_modifier_crippling_name", "$cm_status_crippling_tooltip", GetModifierIconSprite("crippling"), ControlDebuffDuration);
+        RegisterPlayerDebuffStatusEffect(objectDb, DisruptiveStatusName, DisruptiveStatusHash, "$cm_modifier_disruptive_name", "$cm_status_disruptive_tooltip", GetModifierIconSprite("disruptive"), ControlDebuffDuration);
+        RegisterPlayerDebuffStatusEffect(objectDb, AdrenalineDrainStatusName, AdrenalineDrainStatusHash, "$cm_modifier_adrenaline_drain_name", "$cm_status_adrenaline_drain_tooltip", GetModifierIconSprite("adrenalineDrain"), AdrenalineDrainDefaultDuration);
+        RegisterPlayerDebuffStatusEffect(objectDb, CorrosiveStatusName, CorrosiveStatusHash, "$cm_modifier_corrosive_name", "$cm_status_corrosive_tooltip", GetModifierIconSprite("corrosive"));
     }
 
     private static void RegisterPlayerDebuffStatusEffect(ObjectDB objectDb, string internalName, int hash, string displayName, string tooltip, Sprite icon, float duration = PlayerDebuffDuration)
@@ -7966,9 +8010,8 @@ internal static class CreatureModifierManager
         {
             int level = Mathf.Max(1, zdo.GetInt(ZDOVars.s_level, 1));
             maxHealth = Mathf.Max(0.01f, prefabCharacter.m_health * level);
-            if (zdo.GetBool(LevelHealthAppliedKey, false))
+            if (CreatureLevelManager.TryGetStoredHealthMultiplier(zdo, out float healthMultiplier))
             {
-                float healthMultiplier = zdo.GetFloat(LevelHealthMultiplierKey, float.NaN);
                 if (float.IsNaN(healthMultiplier) || float.IsInfinity(healthMultiplier) || healthMultiplier <= 0f)
                 {
                     rejectionReason = "the authoritative maximum-health multiplier is invalid";
@@ -9627,7 +9670,7 @@ internal static class CreatureModifierManager
             rect.pivot = new Vector2(0.5f, 0f);
             rect.anchoredPosition = new Vector2(0f, BlamerActiveIconGap);
             rect.localScale = Vector3.one;
-            icon.sprite = GetBlamerSprite();
+            icon.sprite = GetModifierIconSprite("blamer");
             icon.color = Color.white;
             icon.preserveAspect = true;
             icon.raycastTarget = false;
@@ -11507,7 +11550,7 @@ internal static class CreatureModifierManager
         }
 
         image.enabled = spec != null;
-        image.sprite = spec?.Sprite();
+        image.sprite = spec != null ? GetModifierIconSprite(spec.Key) : null;
         image.color = Color.white;
         LayoutElement? layoutElement = image.GetComponent<LayoutElement>();
         bool ignoreLayout = packEmptySlots && spec == null;
@@ -11532,106 +11575,15 @@ internal static class CreatureModifierManager
         };
     }
 
-    private static Sprite GetArmoredSprite() =>
-        GetModifierIconSprite(ref ArmoredSprite, "armored");
-
-    private static Sprite GetEnragedSprite() =>
-        GetModifierIconSprite(ref EnragedSprite, "enraged");
-
-    private static Sprite GetDeathwardSprite() =>
-        GetModifierIconSprite(ref DeathwardSprite, "deathward");
-
-    private static Sprite GetSwiftSprite() =>
-        GetModifierIconSprite(ref SwiftSprite, "swift");
-
-    private static Sprite GetRegeneratingSprite() =>
-        GetModifierIconSprite(ref RegeneratingSprite, "regenerating");
-
-    private static Sprite GetVampiricSprite() =>
-        GetModifierIconSprite(ref VampiricSprite, "vampiric");
-
-    private static Sprite GetFireSprite() =>
-        GetModifierIconSprite(ref FireSprite, "fire");
-
-    private static Sprite GetFrostSprite() =>
-        GetModifierIconSprite(ref FrostSprite, "frost");
-
-    private static Sprite GetLightningSprite() =>
-        GetModifierIconSprite(ref LightningSprite, "lightning");
-
-    private static Sprite GetSpiritSprite() =>
-        GetModifierIconSprite(ref SpiritSprite, "spirit");
-
-    private static Sprite GetToxicDeathSprite() =>
-        GetModifierIconSprite(ref ToxicDeathSprite, "toxicDeath");
-
-    private static Sprite GetArmorPiercingSprite() =>
-        GetModifierIconSprite(ref ArmorPiercingSprite, "armorPiercing");
-
-    private static Sprite GetStaggeringSprite() =>
-        GetModifierIconSprite(ref StaggeringSprite, "staggering");
-
-    private static Sprite GetUndodgeableSprite() =>
-        GetModifierIconSprite(ref UndodgeableSprite, "undodgeable");
-
-    private static Sprite GetAttackSpeedSprite() =>
-        GetModifierIconSprite(ref AttackSpeedSprite, "attackSpeed");
-
-    private static Sprite GetExposedSprite() =>
-        GetModifierIconSprite(ref ExposedSprite, "exposed");
-
-    private static Sprite GetWeakenedSprite() =>
-        GetModifierIconSprite(ref WeakenedSprite, "weakened");
-
-    private static Sprite GetWitheredSprite() =>
-        GetModifierIconSprite(ref WitheredSprite, "withered");
-
-    private static Sprite GetReflectionSprite() =>
-        GetModifierIconSprite(ref ReflectionSprite, "reflection");
-
-    private static Sprite GetVortexSprite() =>
-        GetModifierIconSprite(ref VortexSprite, "vortex");
-
-    private static Sprite GetCripplingSprite() =>
-        GetModifierIconSprite(ref CripplingSprite, "crippling");
-
-    private static Sprite GetDisruptiveSprite() =>
-        GetModifierIconSprite(ref DisruptiveSprite, "disruptive");
-
-    private static Sprite GetAdrenalineDrainSprite() =>
-        GetModifierIconSprite(ref AdrenalineDrainSprite, "adrenalineDrain");
-
-    private static Sprite GetCorrosiveSprite() =>
-        GetModifierIconSprite(ref CorrosiveSprite, "corrosive");
-
-    private static Sprite GetAdaptiveSprite() =>
-        GetModifierIconSprite(ref AdaptiveSprite, "adaptive");
-
-    private static Sprite GetUnflinchingSprite() =>
-        GetModifierIconSprite(ref UnflinchingSprite, "unflinching");
-
-    private static Sprite GetChameleonSprite() =>
-        GetModifierIconSprite(ref ChameleonSprite, "chameleon");
-
-    private static Sprite GetOmenSprite() =>
-        GetModifierIconSprite(ref OmenSprite, "omen");
-
-    private static Sprite GetReapingSprite() =>
-        GetModifierIconSprite(ref ReapingSprite, "reaping");
-
-    private static Sprite GetBlinkSprite() =>
-        GetModifierIconSprite(ref BlinkSprite, "blink");
-
-    private static Sprite GetKnockbackSprite() =>
-        GetModifierIconSprite(ref KnockbackSprite, "juggernaut");
-
-    private static Sprite GetBlamerSprite() =>
-        GetModifierIconSprite(ref BlamerSprite, "blamer");
-
-    private static Sprite GetModifierIconSprite(ref Sprite? cached, string key)
+    private static Sprite GetModifierIconSprite(string key)
     {
-        cached ??= CreateModifierIconSprite(key);
-        return cached!;
+        if (!ModifierIconSprites.TryGetValue(key, out Sprite sprite) || sprite == null)
+        {
+            sprite = CreateModifierIconSprite(key);
+            ModifierIconSprites[key] = sprite;
+        }
+
+        return sprite;
     }
 
     private static Sprite CreateModifierIconSprite(string key)

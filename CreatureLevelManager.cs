@@ -85,8 +85,8 @@ internal static class CreatureLevelManager
     {
         internal readonly bool RollLevel;
         internal readonly LevelRuleScope? GeneralScope;
-        internal readonly LevelRuleScope? HealthScope;
-        internal readonly bool AllowHealthDistanceScaling;
+        internal readonly LevelRuleScope? StatScope;
+        internal readonly bool AllowStatDistanceScaling;
         internal readonly ModifierApplicationMode ModifierMode;
         internal readonly LevelRuleScope ModifierScope;
         internal readonly bool AllowModifierDistanceScaling;
@@ -96,16 +96,16 @@ internal static class CreatureLevelManager
         internal SpawnPolicy(
             bool rollLevel,
             LevelRuleScope? generalScope,
-            LevelRuleScope? healthScope,
-            bool allowHealthDistanceScaling,
+            LevelRuleScope? statScope,
+            bool allowStatDistanceScaling,
             ModifierApplicationMode modifierMode,
             LevelRuleScope modifierScope,
             bool allowModifierDistanceScaling)
         {
             RollLevel = rollLevel;
             GeneralScope = generalScope;
-            HealthScope = healthScope;
-            AllowHealthDistanceScaling = allowHealthDistanceScaling;
+            StatScope = statScope;
+            AllowStatDistanceScaling = allowStatDistanceScaling;
             ModifierMode = modifierMode;
             ModifierScope = modifierScope;
             AllowModifierDistanceScaling = allowModifierDistanceScaling;
@@ -209,6 +209,7 @@ internal static class CreatureLevelManager
             if (zdo.GetBool(ProcessingCompleteKey, false))
             {
                 SynchronizeStoredRuntimeState(character, zdo);
+                ApplyRuntimeVisuals(character);
                 if (nview.IsOwner())
                 {
                     CreatureModifierManager.TryRollModifiers(character);
@@ -221,6 +222,7 @@ internal static class CreatureLevelManager
             if (ShouldPreserveExistingRolls(character))
             {
                 SynchronizeStoredRuntimeState(character, zdo);
+                ApplyRuntimeVisuals(character);
                 ForgetPendingLevelCharacter(character, zdo.m_uid);
                 continue;
             }
@@ -311,55 +313,65 @@ internal static class CreatureLevelManager
             return;
         }
 
+        if (!TryApplyLevelState(character))
+        {
+            return;
+        }
+
+        ApplyRuntimeVisuals(character);
+        CreatureModifierManager.TryRollModifiers(character);
+    }
+
+    private static bool TryApplyLevelState(Character character)
+    {
         if (!CreatureDomainManager.IsSynchronizedConfigurationReady())
         {
             PendingLevelCharacters[character.GetInstanceID()] = character;
-            return;
+            return false;
         }
 
         if (!IsLevelSystemEnabled())
         {
             ForgetPendingLevelCharacter(character, character.GetZDOID());
-            return;
+            return false;
         }
 
         ZNetView? nview = character.m_nview;
         if (nview == null || !nview.IsValid())
         {
-            return;
+            return false;
         }
 
         if (!nview.IsOwner())
         {
             PendingLevelCharacters[character.GetInstanceID()] = character;
-            return;
+            return false;
         }
 
         ZDO zdo = nview.GetZDO();
         if (zdo == null)
         {
-            return;
+            return false;
         }
 
         if (IsDeadOrWithoutHealth(character, zdo))
         {
             ForgetPendingLevelCharacter(character, zdo.m_uid);
-            return;
+            return false;
         }
 
         if (zdo.GetBool(ProcessingCompleteKey, false))
         {
             SynchronizeStoredRuntimeState(character, zdo);
-            CreatureModifierManager.TryRollModifiers(character);
             ForgetPendingLevelCharacter(character, zdo.m_uid);
-            return;
+            return true;
         }
 
         if (ShouldPreserveExistingRolls(character))
         {
             SynchronizeStoredRuntimeState(character, zdo);
             ForgetPendingLevelCharacter(character, zdo.m_uid);
-            return;
+            return true;
         }
 
         if (!zdo.GetBool(AppliedKey, false))
@@ -373,7 +385,7 @@ internal static class CreatureLevelManager
                 if (!TryResolveKarmaBonus(character, zdo, out int karmaBonus))
                 {
                     PendingLevelCharacters[character.GetInstanceID()] = character;
-                    return;
+                    return false;
                 }
 
                 int level = 1;
@@ -408,10 +420,9 @@ internal static class CreatureLevelManager
             zdo.Set(DamageAppliedKey, true);
         }
 
-        ApplyRuntimeVisuals(character);
         zdo.Set(ProcessingCompleteKey, true);
-        CreatureModifierManager.TryRollModifiers(character);
         ForgetPendingLevelCharacter(character, zdo.m_uid);
+        return true;
     }
 
     private static bool TryResolveKarmaBonus(Character character, ZDO zdo, out int bonus)
@@ -848,7 +859,6 @@ internal static class CreatureLevelManager
         }
 
         RestoreStoredHealthMultiplier(character, zdo);
-        ApplyRuntimeVisuals(character);
     }
 
     private static void RestoreStoredHealthMultiplier(Character character, ZDO zdo)
@@ -1531,40 +1541,40 @@ internal static class CreatureLevelManager
             CreatureSpawnSourceKind.Command => new SpawnPolicy(
                 rollLevel: false,
                 generalScope: LevelRuleScope.BaselineOnly,
-                healthScope: LevelRuleScope.BaselineOnly,
-                allowHealthDistanceScaling: true,
+                statScope: LevelRuleScope.BaselineOnly,
+                allowStatDistanceScaling: true,
                 modifierMode: ModifierApplicationMode.Block,
                 modifierScope: LevelRuleScope.Full,
                 allowModifierDistanceScaling: false),
             CreatureSpawnSourceKind.PlayerSummon => new SpawnPolicy(
                 rollLevel: false,
                 generalScope: LevelRuleScope.BaselineOnly,
-                healthScope: LevelRuleScope.BaselineOnly,
-                allowHealthDistanceScaling: false,
+                statScope: LevelRuleScope.BaselineOnly,
+                allowStatDistanceScaling: false,
                 modifierMode: ModifierApplicationMode.Block,
                 modifierScope: LevelRuleScope.Full,
                 allowModifierDistanceScaling: false),
             CreatureSpawnSourceKind.Breeding or CreatureSpawnSourceKind.Egg => new SpawnPolicy(
                 rollLevel: false,
                 generalScope: LevelRuleScope.BaselineOnly,
-                healthScope: LevelRuleScope.BaselineOnly,
-                allowHealthDistanceScaling: false,
+                statScope: LevelRuleScope.BaselineOnly,
+                allowStatDistanceScaling: false,
                 modifierMode: ModifierApplicationMode.Roll,
                 modifierScope: LevelRuleScope.BaselineOnly,
                 allowModifierDistanceScaling: false),
             CreatureSpawnSourceKind.Growup or CreatureSpawnSourceKind.TamedRestore => new SpawnPolicy(
                 rollLevel: false,
                 generalScope: null,
-                healthScope: null,
-                allowHealthDistanceScaling: false,
+                statScope: null,
+                allowStatDistanceScaling: false,
                 modifierMode: ModifierApplicationMode.Keep,
                 modifierScope: LevelRuleScope.Full,
                 allowModifierDistanceScaling: false),
             _ => new SpawnPolicy(
                 rollLevel: true,
                 generalScope: LevelRuleScope.Full,
-                healthScope: LevelRuleScope.Full,
-                allowHealthDistanceScaling: true,
+                statScope: LevelRuleScope.Full,
+                allowStatDistanceScaling: true,
                 modifierMode: ModifierApplicationMode.Roll,
                 modifierScope: LevelRuleScope.Full,
                 allowModifierDistanceScaling: true)
@@ -1576,17 +1586,12 @@ internal static class CreatureLevelManager
         return TryGetGeneralRuleScope(character, out scope);
     }
 
-    private static bool TryGetHealthRuleScope(Character character, out LevelRuleScope scope, out bool allowDistanceScaling)
+    private static bool TryGetStatRuleScope(Character character, out LevelRuleScope scope, out bool allowDistanceScaling)
     {
         SpawnPolicy policy = GetSpawnPolicy(character);
-        scope = policy.HealthScope.GetValueOrDefault(LevelRuleScope.Full);
-        allowDistanceScaling = policy.AllowHealthDistanceScaling;
-        return policy.HealthScope.HasValue;
-    }
-
-    private static bool TryGetDamageRuleScope(Character character, out LevelRuleScope scope, out bool allowDistanceScaling)
-    {
-        return TryGetHealthRuleScope(character, out scope, out allowDistanceScaling);
+        scope = policy.StatScope.GetValueOrDefault(LevelRuleScope.Full);
+        allowDistanceScaling = policy.AllowStatDistanceScaling;
+        return policy.StatScope.HasValue;
     }
 
     private static bool TryGetGeneralRuleScope(Character character, out LevelRuleScope scope)
@@ -1657,7 +1662,7 @@ internal static class CreatureLevelManager
     private static bool TrySelectHealthMultiplier(Character character, out float multiplier)
     {
         multiplier = 1f;
-        if (!TryGetHealthRuleScope(character, out LevelRuleScope scope, out bool allowDistanceScaling))
+        if (!TryGetStatRuleScope(character, out LevelRuleScope scope, out bool allowDistanceScaling))
         {
             return false;
         }
@@ -1710,7 +1715,7 @@ internal static class CreatureLevelManager
             return false;
         }
 
-        if (!TryGetDamageRuleScope(character, out LevelRuleScope scope, out bool allowDistanceScaling))
+        if (!TryGetStatRuleScope(character, out LevelRuleScope scope, out bool allowDistanceScaling))
         {
             return false;
         }
@@ -1788,6 +1793,18 @@ internal static class CreatureLevelManager
         return !Mathf.Approximately(multiplier, 1f);
     }
 
+    internal static bool TryGetStoredHealthMultiplier(ZDO zdo, out float multiplier)
+    {
+        multiplier = float.NaN;
+        if (zdo == null || !zdo.GetBool(HealthAppliedKey, false))
+        {
+            return false;
+        }
+
+        multiplier = zdo.GetFloat(HealthMultiplierKey, float.NaN);
+        return true;
+    }
+
     internal static bool ReplacesVanillaLevelDamage(Character? character)
     {
         if (!IsLevelSystemEnabled() || character == null || character.IsPlayer())
@@ -1821,30 +1838,28 @@ internal static class CreatureLevelManager
         }
 
         LevelRuleSearch search = GetRuleSearch(character, scope);
+        Dictionary<string, ModifierDefinition> modifiers = GetEffectiveModifierDefinitions(search);
+        if (!CreatureModifierManager.ApplyModifierChances(chances, modifiers))
+        {
+            return false;
+        }
+
         float distanceMultiplier = 1f;
         if (allowDistanceScaling)
         {
             TrySelectModifierDistanceScalingMultiplier(search, out distanceMultiplier);
         }
 
-        bool hasChance = false;
         foreach (string modifier in CreatureModifierManager.GetKnownModifierKeys())
         {
-            if (!TrySelectModifierChance(search, modifier, out float chance) ||
-                !CreatureModifierManager.TrySetModifierChance(chances, modifier, Mathf.Clamp(chance * distanceMultiplier, 0f, 100f)))
+            float? chance = chances.Get(modifier);
+            if (chance.HasValue)
             {
-                continue;
+                chances.Set(modifier, Mathf.Clamp(chance.Value * distanceMultiplier, 0f, 100f));
             }
-
-            hasChance = true;
         }
 
-        return hasChance;
-    }
-
-    private static bool TrySelectModifierChance(LevelRuleSearch search, string modifier, out float chance)
-    {
-        return TrySelectModifierValue(search, modifier, static value => value.Chance, out chance);
+        return true;
     }
 
     internal static bool TrySelectModifierPowers(Character character, out ModifierPowerDefinition powers)
@@ -1860,357 +1875,69 @@ internal static class CreatureLevelManager
             return false;
         }
 
-        LevelRuleSearch search = GetRuleSearch(character, scope);
-        bool hasPower = false;
+        Dictionary<string, ModifierDefinition> modifiers =
+            GetEffectiveModifierDefinitions(GetRuleSearch(character, scope));
+        if (!CreatureModifierManager.ApplyModifierPowers(powers, modifiers))
+        {
+            return false;
+        }
+
         foreach (string modifier in CreatureModifierManager.GetKnownModifierKeys())
         {
-            if (!TrySelectModifierPower(search, modifier, out float power) ||
-                !CreatureModifierManager.TrySetModifierPower(powers, modifier, CreatureModifierManager.ResolveModifierPower(modifier, power)))
+            float? power = powers.Get(modifier);
+            if (power.HasValue)
             {
-                continue;
+                powers.Set(modifier, CreatureModifierManager.ResolveModifierPower(modifier, power));
             }
-
-            hasPower = true;
         }
 
-        if (TrySelectModifierCooldown(search, "deathward", out float deathwardCooldown))
-        {
-            powers.DeathwardCooldown = Mathf.Max(0f, deathwardCooldown);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierInteger(search, "deathward", value => value.MaxActivations, out int deathwardMaxActivations))
-        {
-            powers.DeathwardMaxActivations = Math.Max(1, deathwardMaxActivations);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(
-                search,
-                "regenerating",
-                value => value.RegeneratingHealthPerSecondCap,
-                out float regeneratingHealthPerSecondCap))
-        {
-            powers.RegeneratingHealthPerSecondCap = Mathf.Max(0f, regeneratingHealthPerSecondCap);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierCooldown(search, "blink", out float blinkCooldown))
-        {
-            powers.BlinkCooldown = Mathf.Max(0f, blinkCooldown);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierCooldown(search, "juggernaut", out float knockbackCooldown))
-        {
-            powers.KnockbackCooldown = Mathf.Max(0f, knockbackCooldown);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "blamer", value => value.MaxKarmaGain, out float blamerMaxKarmaGain))
-        {
-            powers.BlamerMaxKarmaGain = Mathf.Max(0f, blamerMaxKarmaGain);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "blamer", value => value.FleeHealthRatio, out float blamerFleeHealthRatio))
-        {
-            powers.BlamerFleeHealthRatio = Mathf.Clamp01(blamerFleeHealthRatio);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierMaxRange(search, "blink", out float blinkMaxRange))
-        {
-            powers.BlinkMaxRange = Mathf.Max(0f, blinkMaxRange);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierStartEffect(search, "blink", out string blinkStartEffect))
-        {
-            powers.BlinkStartEffect = blinkStartEffect;
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "exposed", value => value.ProcChance, out float exposedProcChance))
-        {
-            powers.ExposedProcChance = Mathf.Clamp01(exposedProcChance);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "exposed", value => value.Duration, out float exposedDuration))
-        {
-            powers.ExposedDuration = Mathf.Max(0.1f, exposedDuration);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "weakened", value => value.ProcChance, out float weakenedProcChance))
-        {
-            powers.WeakenedProcChance = Mathf.Clamp01(weakenedProcChance);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "weakened", value => value.Duration, out float weakenedDuration))
-        {
-            powers.WeakenedDuration = Mathf.Max(0.1f, weakenedDuration);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "withered", value => value.ProcChance, out float witheredProcChance))
-        {
-            powers.WitheredProcChance = Mathf.Clamp01(witheredProcChance);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "withered", value => value.Duration, out float witheredDuration))
-        {
-            powers.WitheredDuration = Mathf.Max(0.1f, witheredDuration);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "corrosive", value => value.ProcChance, out float corrosiveProcChance))
-        {
-            powers.CorrosiveProcChance = Mathf.Clamp01(corrosiveProcChance);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "corrosive", value => value.Duration, out float corrosiveDuration))
-        {
-            powers.CorrosiveDuration = Mathf.Max(0.1f, corrosiveDuration);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "crippling", value => value.SecondaryPower, out float cripplingJump))
-        {
-            powers.CripplingJump = Mathf.Clamp01(cripplingJump);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "crippling", value => value.ProcChance, out float cripplingProcChance))
-        {
-            powers.CripplingProcChance = Mathf.Clamp01(cripplingProcChance);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "crippling", value => value.Duration, out float cripplingDuration))
-        {
-            powers.CripplingDuration = Mathf.Max(0.1f, cripplingDuration);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "disruptive", value => value.SecondaryPower, out float disruptiveEitr))
-        {
-            powers.DisruptiveEitr = Mathf.Clamp01(disruptiveEitr);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "disruptive", value => value.ProcChance, out float disruptiveProcChance))
-        {
-            powers.DisruptiveProcChance = Mathf.Clamp01(disruptiveProcChance);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "disruptive", value => value.Duration, out float disruptiveDuration))
-        {
-            powers.DisruptiveDuration = Mathf.Max(0.1f, disruptiveDuration);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "reflection", value => value.ProcChance, out float reflectionProcChance))
-        {
-            powers.ReflectionProcChance = Mathf.Clamp01(reflectionProcChance);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "adrenalineDrain", value => value.SecondaryPower, out float adrenalineDrainGainReduction))
-        {
-            powers.AdrenalineDrainGainReduction = Mathf.Clamp01(adrenalineDrainGainReduction);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "adrenalineDrain", value => value.ProcChance, out float adrenalineDrainProcChance))
-        {
-            powers.AdrenalineDrainProcChance = Mathf.Clamp01(adrenalineDrainProcChance);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "adrenalineDrain", value => value.Duration, out float adrenalineDrainDuration))
-        {
-            powers.AdrenalineDrainDuration = Mathf.Max(0.1f, adrenalineDrainDuration);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "toxicDeath", value => value.Radius, out float toxicDeathRadius))
-        {
-            powers.ToxicDeathRadius = Mathf.Max(0f, toxicDeathRadius);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierText(search, "toxicDeath", value => value.TriggerEffect, out string toxicDeathTriggerEffect))
-        {
-            powers.ToxicDeathTriggerEffect = toxicDeathTriggerEffect;
-            hasPower = true;
-        }
-
-        if (TrySelectModifierInteger(search, "reaping", value => value.ReapingHealMaxActivations, out int reapingHealMaxActivations))
-        {
-            powers.ReapingHealMaxActivations = Math.Max(1, reapingHealMaxActivations);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "reaping", value => value.ReapingMaxHealthPerKill, out float reapingMaxHealthPerKill))
-        {
-            powers.ReapingMaxHealthPerKill = Mathf.Max(0f, reapingMaxHealthPerKill);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "reaping", value => value.ReapingMaxHealthCap, out float reapingMaxHealthCap))
-        {
-            powers.ReapingMaxHealthCap = Mathf.Max(0f, reapingMaxHealthCap);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "reaping", value => value.ReapingDamagePerKill, out float reapingDamagePerKill))
-        {
-            powers.ReapingDamagePerKill = Mathf.Max(0f, reapingDamagePerKill);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "reaping", value => value.ReapingDamageCap, out float reapingDamageCap))
-        {
-            powers.ReapingDamageCap = Mathf.Max(0f, reapingDamageCap);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "reaping", value => value.ReapingScalePerKill, out float reapingScalePerKill))
-        {
-            powers.ReapingScalePerKill = Mathf.Max(0f, reapingScalePerKill);
-            hasPower = true;
-        }
-
-        if (TrySelectModifierValue(search, "reaping", value => value.ReapingScaleCap, out float reapingScaleCap))
-        {
-            powers.ReapingScaleCap = Mathf.Max(0f, reapingScaleCap);
-            hasPower = true;
-        }
-
-        return hasPower;
+        return true;
     }
 
-    private static bool TrySelectModifierPower(LevelRuleSearch search, string modifier, out float power)
+    private static Dictionary<string, ModifierDefinition> GetEffectiveModifierDefinitions(LevelRuleSearch search)
     {
-        return TrySelectModifierValue(search, modifier, static value => value.Power, out power);
-    }
+        if (search.EffectiveModifiers != null)
+        {
+            return search.EffectiveModifiers;
+        }
 
-    private static bool TrySelectModifierCooldown(LevelRuleSearch search, string modifier, out float cooldown)
-    {
-        return TrySelectModifierValue(search, modifier, static value => value.Cooldown, out cooldown);
-    }
-
-    private static bool TrySelectModifierMaxRange(LevelRuleSearch search, string modifier, out float maxRange)
-    {
-        return TrySelectModifierValue(search, modifier, static value => value.MaxRange, out maxRange);
-    }
-
-    private static bool TrySelectModifierInteger(
-        LevelRuleSearch search,
-        string modifier,
-        Func<ModifierDefinition, int?> selector,
-        out int result)
-    {
-        result = 0;
+        List<Dictionary<string, ModifierDefinition>> layers = new();
         foreach (LevelRuleCandidate candidate in search.Candidates)
         {
             LevelDefinition rule = candidate.Definition;
             if (rule.ModifiersCleared)
             {
-                return false;
+                break;
             }
 
-            ModifierDefinition? definition = TryGetModifier(rule, modifier);
-            int? value = definition == null ? null : selector(definition);
-            if (!value.HasValue)
+            if (rule.Modifiers is { Count: > 0 })
             {
-                continue;
+                layers.Add(rule.Modifiers);
             }
-
-            result = value.Value;
-            return true;
         }
 
-        return false;
-    }
-
-    private static bool TrySelectModifierStartEffect(LevelRuleSearch search, string modifier, out string startEffect)
-    {
-        return TrySelectModifierText(search, modifier, static value => value.StartEffect, out startEffect);
-    }
-
-    private static bool TrySelectModifierText(
-        LevelRuleSearch search,
-        string modifier,
-        Func<ModifierDefinition, string?> selector,
-        out string value)
-    {
-        value = "";
-        foreach (LevelRuleCandidate candidate in search.Candidates)
+        Dictionary<string, ModifierDefinition> effective = new(StringComparer.OrdinalIgnoreCase);
+        for (int index = layers.Count - 1; index >= 0; index--)
         {
-            LevelDefinition rule = candidate.Definition;
-            if (rule.ModifiersCleared)
+            foreach (KeyValuePair<string, ModifierDefinition> entry in layers[index])
             {
-                return false;
-            }
+                if (entry.Value == null)
+                {
+                    continue;
+                }
 
-            ModifierDefinition? selected = TryGetModifier(rule, modifier);
-            string? configured = selected != null ? selector(selected) : null;
-            if (configured == null)
-            {
-                continue;
-            }
+                if (!effective.TryGetValue(entry.Key, out ModifierDefinition current))
+                {
+                    effective[entry.Key] = entry.Value.Clone();
+                    continue;
+                }
 
-            value = configured;
-            return true;
+                current.OverlayFrom(entry.Value);
+            }
         }
 
-        return false;
-    }
-
-    private static bool TrySelectModifierValue(
-        LevelRuleSearch search,
-        string modifier,
-        Func<ModifierDefinition, float?> selector,
-        out float value)
-    {
-        value = 0f;
-        foreach (LevelRuleCandidate candidate in search.Candidates)
-        {
-            LevelDefinition rule = candidate.Definition;
-            if (rule.ModifiersCleared)
-            {
-                return false;
-            }
-
-            ModifierDefinition? selected = TryGetModifier(rule, modifier);
-            float? configured = selected != null ? selector(selected) : null;
-            if (!configured.HasValue)
-            {
-                continue;
-            }
-
-            value = configured.Value;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static ModifierDefinition? TryGetModifier(LevelDefinition rule, string modifier)
-    {
-        if (rule.Modifiers == null || !rule.Modifiers.TryGetValue(modifier, out ModifierDefinition definition))
-        {
-            return null;
-        }
-
-        return definition;
+        search.EffectiveModifiers = effective;
+        return effective;
     }
 
     private static bool HasDistanceScalingValue(List<float>? scaling, int index)
@@ -2663,6 +2390,7 @@ internal static class CreatureLevelManager
 
         internal LevelRuleContext Context { get; }
         internal List<LevelRuleCandidate> Candidates { get; }
+        internal Dictionary<string, ModifierDefinition>? EffectiveModifiers { get; set; }
     }
 
     private static string GetPrefabName(GameObject gameObject)

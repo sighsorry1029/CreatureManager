@@ -181,7 +181,7 @@ Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains
 - Roll 32 combat modifiers across Offense, Defense, Affliction, and Special groups.
 - Add regional Karma progression and configurable Enforcer encounters.
 - Inspect loaded creatures, attacks, AI, loadouts, projectiles, textures, and level visuals through generated references.
-- Hot-reload YAML and local PNG textures while keeping synchronized gameplay definitions server-authoritative.
+- Hot-reload YAML and server-owned PNG textures; connected clients cache and apply the authoritative files automatically.
 
 ## Getting Started
 
@@ -211,7 +211,7 @@ Every modifier tuple requires `chance` first. Later values form an optional trai
 | `levels.yml` | Configure level weights, stat scaling, distance scaling, visuals, and modifiers. |
 | `karma.yml` | Configure regional Karma and Enforcer encounters. |
 | `localization/<Language>.yml` | Define server-authoritative localized text using Valheim language names such as `English.yml` and `Korean.yml`. |
-| `textures/` | Store local PNG textures used by creature texture overrides. With the client-local `Generate Sample Textures` option on by default, bundled samples are generated only when missing, so existing replacements are preserved. |
+| `textures/` | Store top-level PNG files used by creature texture overrides. The server synchronizes only files referenced by active creature definitions; clients keep verified SHA-256 content in `cache/synced-textures`. With `Generate Sample Textures` on by default, bundled samples are generated only when missing, so existing replacements are preserved. |
 
 The creature, attack, projectile, AI, and level domains load both `.yml` and `.yaml` base or split files, such as `creatures.yml`, `creatures.yaml`, and `creatures_*.yaml`. The generated `creatures.sample.yml` and `attacks.sample.yml` names do not match those active patterns, so the examples remain inactive. Copy selected entries into the active files, or install MonsterLabZ and rename them to `creatures_sample.yml` and `attacks_sample.yml` to activate the complete sample set. Bonebeard, Vincent, and Root Witch require MonsterLabZ. Vitrfell's `boar2.png` is included in the bundled default texture set and is generated when the client-local `Generate Sample Textures` option is On. Faction and Karma configuration intentionally accept only the single canonical files `factions.yml` and `karma.yml`.
 
@@ -304,7 +304,7 @@ Use `karma.yml` to tune Karma gain and decay, then assign outdoor or dungeon Enf
 
 **Reskin a creature**
 
-Inspect `textures.reference.txt`, place a PNG in the `textures` directory when needed, and reference it from the creature's texture slots. CreatureManager creates a target-specific ragdoll prefab for configured scale, textures, or appearance instead of changing the shared source ragdoll. Texture entries are also attempted on matching ragdoll renderer names/paths; a ragdoll without a matching renderer logs a warning and leaves that slot unchanged. Existing `EffectData` scale flags run unchanged during creation, after which CreatureManager restores the exact configured scale on its target-specific ragdoll. Runtime texture property blocks keep configured body textures authoritative when `appearance.modelIndex` updates the ragdoll model.
+Inspect `textures.reference.txt`, place a PNG directly in the server's `textures` directory when needed, and reference it from the creature's texture slots. Rooted paths, subdirectories, traversal names, links, and non-PNG local files are rejected. The synchronized manifest is content-addressed, so clients request only missing hashes and keep the previous complete texture generation if a transfer or validation fails. CreatureManager creates a target-specific ragdoll prefab for configured scale, textures, or appearance instead of changing the shared source ragdoll. Texture entries are also attempted on matching ragdoll renderer names/paths; a ragdoll without a matching renderer logs a warning and leaves that slot unchanged. Existing `EffectData` scale flags run unchanged during creation, after which CreatureManager restores the exact configured scale on its target-specific ragdoll. Runtime texture property blocks keep configured body textures authoritative when `appearance.modelIndex` updates the ragdoll model.
 
 ## Console Commands
 

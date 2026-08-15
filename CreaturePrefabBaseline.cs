@@ -82,55 +82,59 @@ internal enum CreaturePrefabBaselineGroup : ulong
 /// </summary>
 internal static class CreaturePrefabBaseline
 {
-    private static readonly CreaturePrefabBaselineGroup[] IndividualGroups =
-    {
-        CreaturePrefabBaselineGroup.AttackDamage,
-        CreaturePrefabBaselineGroup.AttackTuple,
-        CreaturePrefabBaselineGroup.AttackStatusEffect,
-        CreaturePrefabBaselineGroup.AttackProjectile,
-        CreaturePrefabBaselineGroup.AttackAi,
-        CreaturePrefabBaselineGroup.ProjectileSpawnOnHit,
-        CreaturePrefabBaselineGroup.ProjectileRandomSpawnOnHit,
-        CreaturePrefabBaselineGroup.SpawnAbilitySpawnPrefabs,
-        CreaturePrefabBaselineGroup.CharacterIdentity,
-        CreaturePrefabBaselineGroup.CharacterBoss,
-        CreaturePrefabBaselineGroup.CharacterGlobalKey,
-        CreaturePrefabBaselineGroup.CharacterHealth,
-        CreaturePrefabBaselineGroup.CharacterDamageModifiers,
-        CreaturePrefabBaselineGroup.CharacterSpeed,
-        CreaturePrefabBaselineGroup.CharacterJump,
-        CreaturePrefabBaselineGroup.CharacterSwim,
-        CreaturePrefabBaselineGroup.CharacterFlight,
-        CreaturePrefabBaselineGroup.BaseAiSenses,
-        CreaturePrefabBaselineGroup.BaseAiIdleSound,
-        CreaturePrefabBaselineGroup.BaseAiMovement,
-        CreaturePrefabBaselineGroup.BaseAiSerpent,
-        CreaturePrefabBaselineGroup.BaseAiRandomMove,
-        CreaturePrefabBaselineGroup.BaseAiFlight,
-        CreaturePrefabBaselineGroup.BaseAiAvoid,
-        CreaturePrefabBaselineGroup.BaseAiFlee,
-        CreaturePrefabBaselineGroup.BaseAiAggressive,
-        CreaturePrefabBaselineGroup.BaseAiMessages,
-        CreaturePrefabBaselineGroup.MonsterAiAlertRange,
-        CreaturePrefabBaselineGroup.MonsterAiHunt,
-        CreaturePrefabBaselineGroup.MonsterAiChase,
-        CreaturePrefabBaselineGroup.MonsterAiCircle,
-        CreaturePrefabBaselineGroup.MonsterAiHurtFlee,
-        CreaturePrefabBaselineGroup.MonsterAiCharge,
-        CreaturePrefabBaselineGroup.MonsterAiSleep,
-        CreaturePrefabBaselineGroup.MonsterAiAvoidLand,
-        CreaturePrefabBaselineGroup.HumanoidDefaultItems,
-        CreaturePrefabBaselineGroup.HumanoidRandomWeapon,
-        CreaturePrefabBaselineGroup.HumanoidRandomArmor,
-        CreaturePrefabBaselineGroup.HumanoidRandomShield,
-        CreaturePrefabBaselineGroup.HumanoidRandomItems,
-        CreaturePrefabBaselineGroup.HumanoidRandomSets,
-        CreaturePrefabBaselineGroup.VisualScale,
-        CreaturePrefabBaselineGroup.RagdollReferences,
-        CreaturePrefabBaselineGroup.Appearance
-    };
+    private static readonly CreaturePrefabBaselineGroup[] IndividualGroups = BuildIndividualGroups();
 
     private static readonly Dictionary<int, Entry> Entries = new();
+
+    private static CreaturePrefabBaselineGroup[] BuildIndividualGroups()
+    {
+        CreaturePrefabBaselineGroup[] groups = Enum.GetValues(typeof(CreaturePrefabBaselineGroup))
+            .Cast<CreaturePrefabBaselineGroup>()
+            .Where(IsSingleBit)
+            .Distinct()
+            .OrderBy(group => (ulong)group)
+            .ToArray();
+
+        CreaturePrefabBaselineGroup combined = groups.Aggregate(
+            CreaturePrefabBaselineGroup.None,
+            static (current, group) => current | group);
+        if (combined != CreaturePrefabBaselineGroup.All)
+        {
+            throw new InvalidOperationException(
+                $"Creature prefab baseline single-bit groups ({combined}) do not match All ({CreaturePrefabBaselineGroup.All}).");
+        }
+
+        foreach (CreaturePrefabBaselineGroup group in groups)
+        {
+            int ownerCount = 0;
+            if ((group & CreaturePrefabBaselineGroup.AttackAll) != 0) ownerCount++;
+            if ((group & CreaturePrefabBaselineGroup.CharacterAll) != 0) ownerCount++;
+            if ((group & CreaturePrefabBaselineGroup.BaseAiAll) != 0) ownerCount++;
+            if ((group & CreaturePrefabBaselineGroup.MonsterAiAll) != 0) ownerCount++;
+            if ((group & CreaturePrefabBaselineGroup.HumanoidAll) != 0) ownerCount++;
+            if ((group & CreaturePrefabBaselineGroup.ProjectileAll) != 0) ownerCount++;
+            if (group == CreaturePrefabBaselineGroup.VisualScale ||
+                group == CreaturePrefabBaselineGroup.RagdollReferences ||
+                group == CreaturePrefabBaselineGroup.Appearance)
+            {
+                ownerCount++;
+            }
+
+            if (ownerCount != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Creature prefab baseline group '{group}' must belong to exactly one capture/restore owner.");
+            }
+        }
+
+        return groups;
+    }
+
+    private static bool IsSingleBit(CreaturePrefabBaselineGroup group)
+    {
+        ulong value = (ulong)group;
+        return value != 0UL && (value & (value - 1UL)) == 0UL;
+    }
 
     internal static void BeginApplyPass()
     {

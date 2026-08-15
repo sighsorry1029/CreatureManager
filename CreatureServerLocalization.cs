@@ -16,6 +16,7 @@ internal static class CreatureServerLocalization
     private const string SyncedPayloadKey = "LocalizationBundle";
     private const long ReloadDebounceTicks = TimeSpan.TicksPerSecond / 4;
     private const long SyncedApplyDebounceTicks = TimeSpan.TicksPerSecond / 10;
+    private const long WatcherRetryTicks = TimeSpan.TicksPerSecond * 5;
     private const int MaxSyncedPayloadBytes = 2 * 1024 * 1024;
     private static readonly UTF8Encoding Utf8WithoutBom = new(false);
     private static readonly object Sync = new();
@@ -516,7 +517,11 @@ internal static class CreatureServerLocalization
         {
             Watcher?.Dispose();
             Watcher = null;
-            CreatureManagerPlugin.Log.LogError($"Failed to watch server localization files: {ex.Message}");
+            WatcherResetPending = true;
+            DiskReloadPending = true;
+            PendingDiskReloadTime = DateTime.UtcNow.AddTicks(WatcherRetryTicks);
+            CreatureManagerPlugin.Log.LogError(
+                $"Failed to watch server localization files; retrying in 5 seconds: {ex.Message}");
         }
     }
 

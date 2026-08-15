@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using BepInEx;
-using BepInEx.Bootstrap;
 using HarmonyLib;
 using UnityEngine;
 using YamlDotNet.Serialization;
@@ -14,36 +12,15 @@ namespace LocalizationManager;
 
 internal static class Localizer
 {
-    private static BaseUnityPlugin? _plugin;
-
-    private static BaseUnityPlugin plugin
-    {
-        get
-        {
-            if (_plugin is null)
-            {
-                IEnumerable<TypeInfo> types;
-                try
-                {
-                    types = Assembly.GetExecutingAssembly().DefinedTypes.ToList();
-                }
-                catch (ReflectionTypeLoadException e)
-                {
-                    types = e.Types.Where(t => t != null).Select(t => t.GetTypeInfo());
-                }
-
-                _plugin = (BaseUnityPlugin)Chainloader.ManagerObject.GetComponent(types.First(t => t.IsClass && typeof(BaseUnityPlugin).IsAssignableFrom(t)));
-            }
-
-            return _plugin;
-        }
-    }
-
-    private static readonly List<string> fileExtensions = [".json", ".yml"];
+    private const string ModName = CreatureManager.CreatureManagerPlugin.ModName;
+    private const string LocalizationExtension = ".yml";
+    private static readonly Assembly ModAssembly = typeof(CreatureManager.CreatureManagerPlugin).Assembly;
+    private static readonly IDeserializer Deserializer = new DeserializerBuilder()
+        .IgnoreFields()
+        .Build();
 
     internal static void Load(Harmony harmony)
     {
-        _ = plugin;
         harmony.Patch(
             AccessTools.DeclaredMethod(typeof(Localization), nameof(Localization.SetupLanguage), new[] { typeof(string) }),
             prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(BeforeLanguageSetup)), Priority.First),
@@ -51,11 +28,6 @@ internal static class Localizer
         harmony.Patch(
             AccessTools.DeclaredMethod(typeof(FejdStartup), nameof(FejdStartup.SetupGui), Type.EmptyTypes),
             postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalizationLater)), Priority.Last));
-    }
-
-    internal static void Unload()
-    {
-        _plugin = null;
     }
 
     private static void LoadLocalizationLater()
@@ -90,7 +62,7 @@ internal static class Localizer
         catch (Exception ex)
         {
             Debug.LogError(
-                $"Failed to load {plugin.Info.Metadata.Name} localization for '{language}'. " +
+                $"Failed to load {ModName} localization for '{language}'. " +
                 $"Vanilla localization will remain active. {ex.Message}");
         }
 
@@ -107,19 +79,24 @@ internal static class Localizer
     private static void LoadLocalization(Localization __instance, string language)
     {
         Dictionary<string, string> localizationFiles = new();
-        foreach (string file in Directory.GetFiles(Path.GetDirectoryName(Paths.PluginPath)!, $"{plugin.Info.Metadata.Name}.*", SearchOption.AllDirectories).Where(f => fileExtensions.IndexOf(Path.GetExtension(f)) >= 0))
+        string? pluginDirectory = Path.GetDirectoryName(ModAssembly.Location);
+        IEnumerable<string> files = pluginDirectory != null && Directory.Exists(pluginDirectory)
+            ? Directory.EnumerateFiles(pluginDirectory, $"{ModName}.*", SearchOption.TopDirectoryOnly)
+            : Enumerable.Empty<string>();
+        foreach (string file in files.Where(file =>
+                     Path.GetExtension(file).Equals(LocalizationExtension, StringComparison.OrdinalIgnoreCase)))
         {
-            string[] parts = Path.GetFileNameWithoutExtension(file).Split('.');
-            if (parts.Length < 2)
+            string fileName = Path.GetFileNameWithoutExtension(file);
+            if (fileName.Length <= ModName.Length + 1 || fileName[ModName.Length] != '.')
             {
                 continue;
             }
 
-            string key = parts[1];
+            string key = fileName.Substring(ModName.Length + 1);
             if (localizationFiles.ContainsKey(key))
             {
                 // Handle duplicate key
-                Debug.LogWarning($"Duplicate key {key} found for {plugin.Info.Metadata.Name}. The duplicate file found at {file} will be skipped.");
+                Debug.LogWarning($"Duplicate key {key} found for {ModName}. The duplicate file found at {file} will be skipped.");
             }
             else
             {
@@ -129,13 +106,13 @@ internal static class Localizer
 
         if (LoadTranslationFromAssembly("English") is not { } englishAssemblyData)
         {
-            throw new Exception($"Found no English localizations in mod {plugin.Info.Metadata.Name}. Expected an embedded resource translations/English.json or translations/English.yml.");
+            throw new Exception($"Found no English localizations in mod {ModName}. Expected an embedded resource translations/English.yml.");
         }
 
-        Dictionary<string, string>? localizationTexts = new DeserializerBuilder().IgnoreFields().Build().Deserialize<Dictionary<string, string>?>(Encoding.UTF8.GetString(englishAssemblyData));
+        Dictionary<string, string>? localizationTexts = Deserializer.Deserialize<Dictionary<string, string>?>(Encoding.UTF8.GetString(englishAssemblyData));
         if (localizationTexts is null)
         {
-            throw new Exception($"Localization for mod {plugin.Info.Metadata.Name} failed: Localization file was empty.");
+            throw new Exception($"Localization for mod {ModName} failed: Localization file was empty.");
         }
 
         string? localizationData = null;
@@ -158,7 +135,7 @@ internal static class Localizer
 
         if (localizationData is not null)
         {
-            foreach (KeyValuePair<string, string> kv in new DeserializerBuilder().IgnoreFields().Build().Deserialize<Dictionary<string, string>?>(localizationData) ?? new Dictionary<string, string>())
+            foreach (KeyValuePair<string, string> kv in Deserializer.Deserialize<Dictionary<string, string>?>(localizationData) ?? new Dictionary<string, string>())
             {
                 localizationTexts[kv.Key] = kv.Value;
             }
@@ -172,24 +149,15 @@ internal static class Localizer
 
     private static byte[]? LoadTranslationFromAssembly(string language)
     {
-        foreach (string extension in fileExtensions)
-        {
-            if (ReadEmbeddedFileBytes("translations." + language + extension) is { } data)
-            {
-                return data;
-            }
-        }
-
-        return null;
+        return ReadEmbeddedFileBytes("translations." + language + LocalizationExtension);
     }
 
-    public static byte[]? ReadEmbeddedFileBytes(string resourceFileName, Assembly? containingAssembly = null)
+    private static byte[]? ReadEmbeddedFileBytes(string resourceFileName)
     {
         using MemoryStream stream = new();
-        containingAssembly ??= Assembly.GetCallingAssembly();
-        if (containingAssembly.GetManifestResourceNames().FirstOrDefault(str => str.EndsWith(resourceFileName, StringComparison.Ordinal)) is { } name)
+        if (ModAssembly.GetManifestResourceNames().FirstOrDefault(str => str.EndsWith(resourceFileName, StringComparison.Ordinal)) is { } name)
         {
-            containingAssembly.GetManifestResourceStream(name)?.CopyTo(stream);
+            ModAssembly.GetManifestResourceStream(name)?.CopyTo(stream);
         }
 
         return stream.Length == 0 ? null : stream.ToArray();

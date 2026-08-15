@@ -130,6 +130,7 @@ internal static class CreatureKarmaManager
     private static readonly List<ZDOID> StaleTrackedEnforcerIds = new();
     private static readonly List<ZDOID> AbandonedEnforcerIds = new();
     private static readonly List<ZDO> EnforcerBootstrapScanBuffer = new();
+    private static readonly List<string> EnforcerBootstrapPrefabNames = new();
     private static readonly HashSet<ZDOID> TrackedBossZdoIds = new();
     private static readonly HashSet<ZDOID> ReportedBlockerZdoIds = new();
     private static readonly Dictionary<ZDOID, bool> ObservedPlayerDeathStates = new();
@@ -149,6 +150,10 @@ internal static class CreatureKarmaManager
     private static float NextEnforcerAbandonmentCheckTime;
     private static int LastEnforcerAbandonmentDespawnSeconds = -1;
     private static bool EnforcerBootstrapScanPending = true;
+    private static bool EnforcerBootstrapScanInitialized;
+    private static int EnforcerBootstrapPrefabPosition;
+    private static int EnforcerBootstrapZdoScanIndex;
+    private static int EnforcerBootstrapRestoredCount;
     private static float NextSectorPruneTime;
     private static float NextSectorCapacityWarningTime;
     private static readonly Dictionary<string, List<Vector3>> DungeonComponentPositionCache = new(StringComparer.Ordinal);
@@ -354,6 +359,7 @@ internal static class CreatureKarmaManager
         StaleTrackedEnforcerIds.Clear();
         AbandonedEnforcerIds.Clear();
         EnforcerBootstrapScanBuffer.Clear();
+        EnforcerBootstrapPrefabNames.Clear();
         TrackedBossZdoIds.Clear();
         ReportedBlockerZdoIds.Clear();
         ServerPendingCreatureDeaths.Clear();
@@ -367,6 +373,10 @@ internal static class CreatureKarmaManager
         NextEnforcerAbandonmentCheckTime = 0f;
         LastEnforcerAbandonmentDespawnSeconds = -1;
         EnforcerBootstrapScanPending = true;
+        EnforcerBootstrapScanInitialized = false;
+        EnforcerBootstrapPrefabPosition = 0;
+        EnforcerBootstrapZdoScanIndex = 0;
+        EnforcerBootstrapRestoredCount = 0;
         NextSectorPruneTime = 0f;
         NextSectorCapacityWarningTime = 0f;
         NextKarmaStatusRequestTime = 0f;
@@ -381,31 +391,14 @@ internal static class CreatureKarmaManager
     internal static string BuildDefaultYaml()
     {
         return """
-# CreatureManager Karma configuration.
-# Karma uses a sliding 3x3 vanilla zone neighborhood. Kill creatures in a neighborhood to raise its Karma.
-# Outdoor and dungeon neighborhoods keep independent Karma, levels, decay, Enforcer cooldowns, and consumption.
-# The thresholds and gain rules below are shared; dungeonMultiplier affects only the dungeon neighborhood.
-# Higher Karma can add level bonuses to future spawns in that neighborhood.
-# Enforcer summons a boss-style non-boss creature with minions in a high-Karma neighborhood.
-# Overlapping player-centered 3x3 windows join transitively into one connected check region.
-# Each connected region rolls once; its highest-Karma eligible window supplies the table and spawn location.
-# Blockers and cooldowns scan the full region, while Karma consumption and cooldown writes use that anchor window.
-# Feature mode, Enforcer cap, summon blocking, and Karma-gain blocking are configured in BepInEx section '3 - Karma'.
-# Karma gain, decay, thresholds, and Enforcer checks are global live rules; reload does not clear stored regional Karma.
-# Spawn-time Karma level bonuses, modifiers, loot, and Enforcer creature definitions affect later spawns, not existing Enforcers.
-# In any modifiers field, omission or {} keeps normal inheritance/fallback; [] is a terminal clear that blocks every lower modifier source.
-# A mapping overrides listed values only. Candidates inherit Enforcer.modifiers, and Enforcer.modifiers inherits omitted values from levels.yml.
-# Every modifier tuple requires chance% first. Trailing values may be omitted only from the right.
-# Omitted trailing values inherit per field, then use runtime defaults. Explicit 0 is a supplied value subject to normal validation; empty slots such as '10, , 5' are invalid.
-# Full tuples remain below so their effective default values are visible.
-# Safety limits per candidate: at most 16 minion entries/16 total minions and 32 loot entries/64 total loot items.
+# Outdoor and dungeon Karma are stored separately; the rules below apply to both.
 
 karma:
-  thresholds: [60, 120, 180]             # Karma values reached for +1, +2, +3 level bonus; append more to extend levels. Positive gain stops at the highest value; [] leaves gain uncapped.
-  decay: [15, 30, 100]                   # [afterMinutes, karmaPerMinute, playerDeathClearKarma].
-  gain: [1, 25, 0.3, 0.15, 4]            # [kill, bossKill, karmaScaling, bossKarmaScaling, dungeonMultiplier].
-  prefabs:                               # Per-prefab Karma gain overrides.
-    Troll: 5                             # This prefab grants this exact Karma amount before dungeonMultiplier.
+  thresholds: [60, 120, 180]             # +1, +2, ... level at each value; the last value caps gain. [] disables bonuses and the cap.
+  decay: [15, 30, 100]                   # [delayMinutes, karmaPerMinute, karmaRemovedOnPlayerDeath].
+  gain: [1, 25, 0.3, 0.15, 4]            # [kill, bossKill, killScalingPerExtraLevel, bossScalingPerExtraLevel, dungeonMultiplier].
+  prefabs:                               # Base gain overrides; level and dungeon scaling still apply.
+    Troll: 5
     Abomination: 5
     StoneGolem: 5
     GoblinBrute: 3
@@ -418,8 +411,8 @@ karma:
 
 Enforcer:
   settings: [40, 30, 2]                  # [requiredKarma, consumeKarma, levelBonus].
-  checks: [50, 1200, 60, 24~48]          # [chance% per connected-region check, cooldownSeconds, checkIntervalSeconds, outdoorSpawnRadius].
-  modifiers:                             # Partial Enforcer table. Omitted entries and trailing values inherit levels.yml; [] blocks that fallback.
+  checks: [50, 1200, 60, 24~48]          # [chance%, cooldownSeconds, intervalSeconds, outdoorRadiusMin~MaxMeters].
+  modifiers:                             # Partial map; omitted/{} inherits levels.yml, [] clears fallback, and trailing tuple values may be omitted.
     # Offense: Enraged to Undodgeable
     enraged: 10, 0.15                    # chance%, outgoingDamageBonus.
     fire: 10, 0.2                        # chance%, addedFireDamage.
@@ -428,15 +421,15 @@ Enforcer:
     spirit: 10, 0.05                     # chance%, addedSpiritDoT.
     armorPiercing: 10, 0.3               # chance%, ignoredPlayerArmor.
     staggering: 10, 0.6                  # chance%, staggerBonus.
-    undodgeable: 10, 0.25                # chance%, damageReduction; attacks against players ignore dodge invulnerability.
+    undodgeable: 10, 0.25                # chance%, damageReduction.
     # Defense: Armored to Chameleon
     armored: 10, 0.3                     # chance%, damageReduction.
-    deathward: 10, 0.2, 10, 3            # chance%, restoredHealth, cooldownSeconds, maxActivations.
-    regenerating: 10, 0.005, 20          # chance%, maxHealthRatioPerSecond, healthPerSecondCap. 0 cap is unlimited.
+    deathward: 10, 0.2, 10, 3            # chance%, restoredMaxHealthRatio, cooldownSeconds, maxActivations.
+    regenerating: 10, 0.005, 20          # chance%, maxHealthRatioPerSecond, healthPerSecondCap (0 = unlimited).
     reflection: 10, 0.1, 0.5             # chance%, actualMeleeDamageReflected, procChance.
     vortex: 10, 0.5                      # chance%, projectileIgnoreProc.
     adaptive: 10, 0.5                    # chance%, rememberedTypeDamageReduction.
-    unflinching: 10                      # chance%; prevents normal-hit and perfect-parry stagger.
+    unflinching: 10                      # chance%.
     chameleon: 10, 10                    # chance%, immunitySwitchSeconds.
     # Affliction: Exposed to ToxicDeath
     exposed: 10, 0.2, 0.5, 5             # chance%, damageTaken, proc, duration.
@@ -445,29 +438,27 @@ Enforcer:
     crippling: 10, 0.5, 0.5, 0.5, 5     # chance%, moveReduction, jumpReduction, proc, duration.
     disruptive: 10, 0.5, 0.5, 0.5, 5    # chance%, staminaRegenReduction, eitrRegenReduction, proc, duration.
     adrenalineDrain: 10, 0.5, 0.5, 0.5, 5 # chance%, currentAdrenalineRemoved, adrenalineGainReduction, procChance, duration.
-    corrosive: 10, 0.5, 0.5, 5           # chance%, durabilityLossBonus, procChance, duration. Equipped armor, weapons, and shield only.
+    corrosive: 10, 0.5, 0.5, 5           # chance%, durabilityLossBonus, procChance, duration.
     toxicDeath: 10, 0.3, 4, blob_aoe     # chance%, maxHealthDamage, radius, triggerEffect.
     # Special: Swift to Blamer
     swift: 10, 0.4                       # chance%, movementSpeedBonus.
     attackSpeed: 10, 0.3                 # chance%, attackSpeedBonus.
     vampiric: 10, 0.3                    # chance%, actualDirectDamageHealing.
-    reaping: 10, 0.05, 20, 0.1, 2, 0.01, 0.2, 0.05, 0.5 # chance%, heal/base, healMaxActivations, maxHealth/base, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap. New scale gains are disabled in dungeons.
+    reaping: 10, 0.05, 20, 0.1, 2, 0.01, 0.2, 0.05, 0.5 # chance%, heal/base, healMaxActivations, maxHealth/base, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap.
     blink: 10, 6, 16, fx_Adrenaline1    # chance%, cooldown, maxRange, startEffect.
     omen: 10, 0.5                        # chance%, forcedEnforcerChance.
     juggernaut: 10, 150, 5               # chance%, minimumPushForce, cooldownSeconds.
-    blamer: 0, 1, 60, 0.75               # chance%, karmaPerSecond, maxKarmaGain, fleeHealthRatio. 0 cap is unlimited.
+    blamer: 0, 1, 60, 0.75               # chance%, karmaPerSecond, maxKarmaGain, fleeHealthRatio (0 maxKarmaGain = unlimited).
 
-# Biome-specific Enforcer tables. Global can be used as fallback.
-# Enforcer and minion AI always hunts the player.
-# Non-boss Enforcers use a boss-style HUD; original boss prefabs keep their boss gameplay flag.
+# Use top-level Global as the fallback table for unmatched biomes.
 BlackForest:
-  enabled: true                          # If false, disables Enforcer summons for this biome.
-  enforcers:                             # Candidate entries may use summon, settings, weight, loot, and modifiers.
+  enabled: true
+  enforcers:                             # Outdoor candidates.
     - summon: [Greydwarf_Elite, Greydwarf:2, Greydwarf_Shaman] # [enforcerPrefab, minionPrefab[:count], ...]
-      settings: [40, 30, 1]             # Optional [requiredKarma, consumeKarma, levelBonus].
-      weight: 1                          # Optional weighted random chance among eligible candidates.
-      loot: [TrophyGreydwarfBrute:1, Amber:3] # Optional guaranteed bonus drops as itemPrefab:amount; original creature drops are retained.
-      modifiers:                         # Optional partial map; omitted entries inherit Enforcer.modifiers. {} is the same as omitting this field.
+      settings: [40, 30, 1]             # [requiredKarma, consumeKarma, levelBonus]; omit to inherit Enforcer.settings.
+      weight: 1                          # Relative selection weight; default 1.
+      loot: [TrophyGreydwarfBrute:1, Amber:3] # Guaranteed extras as itemPrefab:amount; normal drops remain.
+      modifiers:                         # Partial map; omitted/{} inherits Enforcer.modifiers, while [] clears fallback.
         staggering: 30, 0.6              # chance%, staggerBonus.
         deathward: 30, 0.2, 10, 3        # chance%, restored max-health ratio, cooldown seconds, max activations.
         toxicDeath: 30, 0.3, 4, blob_aoe
@@ -476,13 +467,14 @@ BlackForest:
       settings: [50, 40, 1]
       weight: 3
       loot: [TrophyBjorn:1, Amber:3]
-      modifiers:                         # Optional partial map; omitted entries inherit Enforcer.modifiers. {} is the same as omitting this field.
+      modifiers:
         lightning: 10, 0.1
         deathward: 20, 0.2, 10, 3
         disruptive: 10, 0.5, 0.5, 0.5, 5
         blink: 10, 6, 16, fx_Adrenaline1
-  dungeonEnforcers:
+  dungeonEnforcers:                      # Matching location > unrestricted dungeon > outdoor fallback.
     - summon: [Skeleton_Poison, Skeleton:2]
+      # location: MountainCave02          # Optional; quote names containing ':'.
       weight: 2
       loot: [TrophySkeletonPoison:1, TrophySkeleton:1, Amber:3]
     - summon: [Ghost, Skeleton]
@@ -537,17 +529,6 @@ AshLands:
     - summon: [Morgen_NonSleeping, Charred_Twitcher:2]
       loot: [TrophyMorgen:1, SilverNecklace:2]
 
-# Location-specific dungeon Enforcer entries.
-# Use location: LocationPrefab to restrict a dungeon entry to that location.
-# Quote Expand World Data clone names because the colon is part of the value.
-#Mountain:
-#  dungeonEnforcers:
-#    - summon: [Fenring_Cultist, Ulv:2]
-#      location: MountainCave02
-#    - summon: [AlphaWolf]
-#      location: SomeModLocation
-#    - summon: [AlphaWolf]
-#      location: "MountainCave02:cloned"
 """;
     }
 
@@ -560,7 +541,7 @@ AshLands:
             parsed = new ParsedConfiguration(() =>
             {
                 Settings = loaded;
-                EnforcerBootstrapScanPending = true;
+                ResetEnforcerBootstrapScan();
             });
             return true;
         }
@@ -1324,7 +1305,11 @@ AshLands:
         {
             EnforcerNoPlayerSince.Clear();
             LastEnforcerAbandonmentDespawnSeconds = -1;
-            EnforcerBootstrapScanPending = true;
+            if (!EnforcerBootstrapScanPending || EnforcerBootstrapScanInitialized)
+            {
+                ResetEnforcerBootstrapScan();
+            }
+
             return;
         }
 
@@ -1334,9 +1319,17 @@ AshLands:
         }
 
         float now = Time.time;
-        if (EnforcerBootstrapScanPending && TryBootstrapTrackedEnforcers())
+        if (EnforcerBootstrapScanPending)
         {
-            EnforcerBootstrapScanPending = false;
+            if (AdvanceEnforcerBootstrapScan())
+            {
+                EnforcerBootstrapScanPending = false;
+            }
+
+            if (EnforcerBootstrapScanPending)
+            {
+                return;
+            }
         }
 
         UpdateAbandonedEnforcers(now);
@@ -1610,11 +1603,59 @@ AshLands:
         return false;
     }
 
-    private static bool TryBootstrapTrackedEnforcers()
+    private static void ResetEnforcerBootstrapScan()
+    {
+        EnforcerBootstrapScanPending = true;
+        EnforcerBootstrapScanInitialized = false;
+        EnforcerBootstrapPrefabNames.Clear();
+        EnforcerBootstrapScanBuffer.Clear();
+        EnforcerBootstrapPrefabPosition = 0;
+        EnforcerBootstrapZdoScanIndex = 0;
+        EnforcerBootstrapRestoredCount = 0;
+    }
+
+    private static bool AdvanceEnforcerBootstrapScan()
     {
         if (ZDOMan.instance == null || ZoneSystem.instance == null)
         {
             return false;
+        }
+
+        EnsureEnforcerBootstrapScanInitialized();
+        if (EnforcerBootstrapPrefabPosition >= EnforcerBootstrapPrefabNames.Count)
+        {
+            CompleteEnforcerBootstrapScan();
+            return true;
+        }
+
+        string prefab = EnforcerBootstrapPrefabNames[EnforcerBootstrapPrefabPosition];
+        bool prefabComplete = ZDOMan.instance.GetAllZDOsWithPrefabIterative(
+            prefab,
+            EnforcerBootstrapScanBuffer,
+            ref EnforcerBootstrapZdoScanIndex);
+        if (!prefabComplete)
+        {
+            return false;
+        }
+
+        RegisterEnforcerBootstrapResults();
+        EnforcerBootstrapPrefabPosition++;
+        EnforcerBootstrapZdoScanIndex = 0;
+        EnforcerBootstrapScanBuffer.Clear();
+        if (EnforcerBootstrapPrefabPosition < EnforcerBootstrapPrefabNames.Count)
+        {
+            return false;
+        }
+
+        CompleteEnforcerBootstrapScan();
+        return true;
+    }
+
+    private static void EnsureEnforcerBootstrapScanInitialized()
+    {
+        if (EnforcerBootstrapScanInitialized)
+        {
+            return;
         }
 
         HashSet<string> candidatePrefabs = new(StringComparer.Ordinal);
@@ -1633,45 +1674,50 @@ AshLands:
             }
         }
 
-        int restored = 0;
-        foreach (string prefab in candidatePrefabs)
+        EnforcerBootstrapPrefabNames.AddRange(
+            candidatePrefabs.OrderBy(static prefab => prefab, StringComparer.Ordinal));
+        EnforcerBootstrapScanInitialized = true;
+    }
+
+    private static void RegisterEnforcerBootstrapResults()
+    {
+        foreach (ZDO zdo in EnforcerBootstrapScanBuffer)
         {
-            EnforcerBootstrapScanBuffer.Clear();
-            int index = 0;
-            while (!ZDOMan.instance.GetAllZDOsWithPrefabIterative(prefab, EnforcerBootstrapScanBuffer, ref index))
+            if (zdo == null ||
+                zdo.m_uid.IsNone() ||
+                !zdo.GetBool(EnforcerKey, false) ||
+                !IsTrackedCharacterZdoAlive(zdo) ||
+                zdo.GetBool(ZDOVars.s_tamed, false))
             {
+                continue;
             }
 
-            foreach (ZDO zdo in EnforcerBootstrapScanBuffer)
+            bool alreadyTracked = TrackedEnforcerZdoIds.Contains(zdo.m_uid);
+            TrackPotentialBlockerZdo(zdo, isBoss: false);
+            if (!alreadyTracked)
             {
-                if (zdo == null ||
-                    zdo.m_uid.IsNone() ||
-                    !zdo.GetBool(EnforcerKey, false) ||
-                    !IsTrackedCharacterZdoAlive(zdo) ||
-                    zdo.GetBool(ZDOVars.s_tamed, false))
-                {
-                    continue;
-                }
-
-                bool alreadyTracked = TrackedEnforcerZdoIds.Contains(zdo.m_uid);
-                TrackPotentialBlockerZdo(zdo, isBoss: false);
-                if (!alreadyTracked)
-                {
-                    restored++;
-                }
-
-                StoreEnforcerPresenceAnchor(zdo);
+                EnforcerBootstrapRestoredCount++;
             }
+
+            StoreEnforcerPresenceAnchor(zdo);
         }
+    }
 
+    private static void CompleteEnforcerBootstrapScan()
+    {
+        int restored = EnforcerBootstrapRestoredCount;
+        EnforcerBootstrapScanInitialized = false;
+        EnforcerBootstrapPrefabNames.Clear();
         EnforcerBootstrapScanBuffer.Clear();
+        EnforcerBootstrapPrefabPosition = 0;
+        EnforcerBootstrapZdoScanIndex = 0;
+        EnforcerBootstrapRestoredCount = 0;
+
         if (restored > 0)
         {
             CreatureManagerPlugin.Log.LogInfo(
                 $"Restored tracking for {restored} persisted Karma Enforcer(s) from server ZDO data.");
         }
-
-        return true;
     }
 
     private static void DespawnAbandonedEnforcer(ZDO enforcerZdo)

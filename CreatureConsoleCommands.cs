@@ -17,6 +17,7 @@ internal static class CreatureConsoleCommands
 
     private const string SpawnCommandName = "cm:spawn";
     private const int MaximumCommandSpawnLevel = 100;
+    private const string ReferenceScopeSyntax = "creature|ai|attack|loadout|projectile|texture|levelvisual";
     private static readonly List<string> ReferenceDomainOptions = new() { "creature", "ai", "attack", "loadout", "projectile", "texture", "levelvisual" };
     private static readonly List<string> FullDomainOptions = new() { "creature" };
     private static readonly List<string> EmptyAutocompleteOptions = new();
@@ -34,7 +35,7 @@ internal static class CreatureConsoleCommands
         Registered = true;
         new Terminal.ConsoleCommand(
             "cm:reference",
-            "Write generated CreatureManager reference files. Usage: cm:reference creature|ai|attack|loadout|projectile|texture|levelvisual",
+            $"Write generated CreatureManager reference files. Usage: cm:reference {ReferenceScopeSyntax}",
             WriteReference,
             optionsFetcher: GetReferenceDomainOptions);
         new Terminal.ConsoleCommand(
@@ -268,7 +269,7 @@ internal static class CreatureConsoleCommands
     {
         CreatureAssetOwnerCatalog.RefreshMappings();
         string scope = GetScope(args);
-        if (!IsKnownScope(scope, args, "cm:reference", includeTexture: true))
+        if (!IsKnownScope(scope, args, "cm:reference"))
         {
             return;
         }
@@ -288,7 +289,7 @@ internal static class CreatureConsoleCommands
 
         if (wrote)
         {
-            args.Context?.AddString($"Wrote {NormalizeScope(scope)} reference to {path}");
+            args.Context?.AddString($"Wrote {scope} reference to {path}");
         }
         else
         {
@@ -312,7 +313,7 @@ internal static class CreatureConsoleCommands
 
         if (wrote)
         {
-            args.Context?.AddString($"Wrote {NormalizeScope(scope)} full scaffold to {path}");
+            args.Context?.AddString($"Wrote {scope} full scaffold to {path}");
         }
         else
         {
@@ -697,36 +698,15 @@ internal static class CreatureConsoleCommands
         return args.Length >= 2 ? (args[1] ?? "").Trim().ToLowerInvariant() : "";
     }
 
-    private static bool IsKnownScope(string scope, Terminal.ConsoleEventArgs args, string command, bool includeTexture)
+    private static bool IsKnownScope(string scope, Terminal.ConsoleEventArgs args, string command)
     {
-        if (scope is "creature" or "ai" or "attack")
+        if (scope is "creature" or "ai" or "attack" or "loadout" or "projectile" or "texture" or "levelvisual")
         {
             return true;
         }
 
-        if (includeTexture && scope is ("loadout" or "projectile" or "texture" or "levelvisual"))
-        {
-            return true;
-        }
-
-        args.Context?.AddString(includeTexture
-            ? $"Syntax: {command} creature|ai|attack|loadout|projectile|texture|levelvisual"
-            : $"Syntax: {command} creature|ai|attack");
+        args.Context?.AddString($"Syntax: {command} {ReferenceScopeSyntax}");
         return false;
-    }
-
-    private static string NormalizeScope(string scope)
-    {
-        return scope switch
-        {
-            "ai" => "ai",
-            "attack" => "attack",
-            "loadout" => "loadout",
-            "projectile" => "projectile",
-            "texture" => "texture",
-            "levelvisual" => "levelvisual",
-            _ => "creature"
-        };
     }
 
 }

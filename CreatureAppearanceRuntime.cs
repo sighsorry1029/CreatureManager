@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace CreatureManager;
 
-internal static class CreatureManagerRandomHairRuntime
+internal static class CreatureAppearanceRuntime
 {
     private const string SetHairEquippedMethodName = "SetHairEquipped";
     private const string SetBeardEquippedMethodName = "SetBeardEquipped";
@@ -773,26 +773,7 @@ internal static class CreatureManagerRandomHairRuntime
             return;
         }
 
-        Color materialColor = Utils.Vec3ToColor(color);
-        foreach (Renderer renderer in hairInstance.GetComponentsInChildren<Renderer>(includeInactive: true))
-        {
-            foreach (Material material in renderer.materials)
-            {
-                if (material == null)
-                {
-                    continue;
-                }
-
-                if (material.HasProperty("_SkinColor"))
-                {
-                    material.SetColor("_SkinColor", materialColor);
-                }
-                else if (material.HasProperty("_Color"))
-                {
-                    material.SetColor("_Color", materialColor);
-                }
-            }
-        }
+        ApplySupportedAppearanceColor(hairInstance, color);
 
         AppliedHairColors[visualId] = color;
     }

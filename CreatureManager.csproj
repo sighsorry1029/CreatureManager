@@ -149,6 +149,7 @@
         <Compile Include="CreatureReferenceWriter.cs"/>
         <Compile Include="CreatureServerLocalization.cs"/>
         <Compile Include="CreatureSwiftMovementSystem.cs"/>
+        <Compile Include="CreatureTextureSync.cs"/>
         <Compile Include="CreatureTextureRegistry.cs"/>
         <Compile Include="CreatureYaml.cs"/>
         <Compile Include="LocalizationManager.cs"/>

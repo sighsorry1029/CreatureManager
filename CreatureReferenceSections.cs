@@ -13,10 +13,10 @@ internal static class CreatureReferenceSections
     internal const string VanillaOwnerName = "Valheim";
     internal const string UnknownOwnerName = "Unknown / Untracked";
 
-    private sealed class GroupedPrefab
+    private sealed class OwnerEntry<T>
     {
-        public GameObject Prefab { get; set; } = null!;
-        public string PrefabName { get; set; } = "";
+        public T Value { get; set; } = default!;
+        public string EntryName { get; set; } = "";
         public string OwnerName { get; set; } = UnknownOwnerName;
     }
 
@@ -25,27 +25,40 @@ internal static class CreatureReferenceSections
         IEnumerable<GameObject> prefabs,
         Action<StringBuilder, GameObject> appendEntry)
     {
-        List<IGrouping<string, GroupedPrefab>> sections = prefabs
-            .Where(prefab => prefab != null)
-            .Select(prefab =>
+        AppendOwnerSections(
+            builder,
+            prefabs.Where(prefab => prefab != null),
+            prefab => CreaturePrefabOwnerResolver.GetOwnerName(prefab.name),
+            prefab => prefab.name,
+            appendEntry);
+    }
+
+    internal static void AppendOwnerSections<T>(
+        StringBuilder builder,
+        IEnumerable<T> values,
+        Func<T, string> getOwnerName,
+        Func<T, string> getEntryName,
+        Action<StringBuilder, T> appendEntry)
+    {
+        List<IGrouping<string, OwnerEntry<T>>> sections = values
+            .Select(value =>
             {
-                string prefabName = (prefab.name ?? "").Trim();
-                string ownerName = CreaturePrefabOwnerResolver.GetOwnerName(prefabName);
-                return new GroupedPrefab
+                string ownerName = getOwnerName(value);
+                return new OwnerEntry<T>
                 {
-                    Prefab = prefab,
-                    PrefabName = prefabName,
+                    Value = value,
+                    EntryName = (getEntryName(value) ?? "").Trim(),
                     OwnerName = string.IsNullOrWhiteSpace(ownerName) ? UnknownOwnerName : ownerName.Trim()
                 };
             })
             .OrderBy(entry => GetOwnerSortBucket(entry.OwnerName))
             .ThenBy(entry => entry.OwnerName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(entry => entry.PrefabName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.EntryName, StringComparer.OrdinalIgnoreCase)
             .GroupBy(entry => entry.OwnerName, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         bool wroteSection = false;
-        foreach (IGrouping<string, GroupedPrefab> section in sections)
+        foreach (IGrouping<string, OwnerEntry<T>> section in sections)
         {
             if (wroteSection)
             {
@@ -55,14 +68,14 @@ internal static class CreatureReferenceSections
             AppendSectionHeaderComment(builder, section.Key);
 
             bool wroteEntry = false;
-            foreach (GroupedPrefab entry in section)
+            foreach (OwnerEntry<T> entry in section)
             {
                 if (wroteEntry)
                 {
                     builder.AppendLine();
                 }
 
-                appendEntry(builder, entry.Prefab);
+                appendEntry(builder, entry.Value);
                 wroteEntry = true;
             }
 
@@ -86,19 +99,67 @@ internal static class CreatureReferenceSections
 
         return string.Equals(ownerName, UnknownOwnerName, StringComparison.OrdinalIgnoreCase) ? 2 : 1;
     }
+
+    internal static string NormalizeAssetName(string? name, bool removeInstanceMarker = false)
+    {
+        string normalized = (name ?? "").Replace("(Clone)", "");
+        if (removeInstanceMarker)
+        {
+            normalized = normalized.Replace("(Instance)", "");
+        }
+
+        return normalized.Trim();
+    }
+
+    internal static IEnumerable<string> EnumerateLookupCandidates(
+        string? name,
+        bool removeInstanceMarker = false)
+    {
+        string normalizedName = NormalizeAssetName(name, removeInstanceMarker);
+        if (normalizedName.Length == 0)
+        {
+            yield break;
+        }
+
+        yield return normalizedName;
+        int aliasSeparatorIndex = normalizedName.IndexOf(':');
+        if (aliasSeparatorIndex > 0)
+        {
+            string alias = NormalizeAssetName(
+                normalizedName.Substring(0, aliasSeparatorIndex),
+                removeInstanceMarker);
+            if (alias.Length > 0 && !alias.Equals(normalizedName, StringComparison.OrdinalIgnoreCase))
+            {
+                yield return alias;
+            }
+        }
+    }
+
+    internal static bool IsTextureAssetPath(string assetPath)
+    {
+        return assetPath.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+               assetPath.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+               assetPath.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+               assetPath.EndsWith(".tga", StringComparison.OrdinalIgnoreCase) ||
+               assetPath.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) ||
+               assetPath.EndsWith(".tiff", StringComparison.OrdinalIgnoreCase) ||
+               assetPath.EndsWith(".psd", StringComparison.OrdinalIgnoreCase) ||
+               assetPath.EndsWith(".exr", StringComparison.OrdinalIgnoreCase) ||
+               assetPath.EndsWith(".hdr", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 internal static class CreaturePrefabOwnerResolver
 {
     internal static string GetOwnerName(string? prefabName)
     {
-        string normalizedName = NormalizeName(prefabName);
+        string normalizedName = CreatureReferenceSections.NormalizeAssetName(prefabName);
         if (normalizedName.Length == 0)
         {
             return CreatureReferenceSections.UnknownOwnerName;
         }
 
-        foreach (string candidate in EnumerateLookupCandidates(normalizedName))
+        foreach (string candidate in CreatureReferenceSections.EnumerateLookupCandidates(normalizedName))
         {
             if (CreatureVanillaAssetCatalog.IsVanillaPrefab(candidate))
             {
@@ -108,51 +169,23 @@ internal static class CreaturePrefabOwnerResolver
 
         return CreatureAssetOwnerCatalog.GetOwnerName(normalizedName);
     }
-
-    private static IEnumerable<string> EnumerateLookupCandidates(string normalizedName)
-    {
-        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-        AddIfNew(normalizedName);
-
-        int aliasSeparatorIndex = normalizedName.IndexOf(':');
-        if (aliasSeparatorIndex > 0)
-        {
-            AddIfNew(normalizedName.Substring(0, aliasSeparatorIndex));
-        }
-
-        foreach (string candidate in seen)
-        {
-            yield return candidate;
-        }
-
-        void AddIfNew(string candidate)
-        {
-            string normalizedCandidate = NormalizeName(candidate);
-            if (normalizedCandidate.Length > 0)
-            {
-                seen.Add(normalizedCandidate);
-            }
-        }
-    }
-
-    private static string NormalizeName(string? name)
-    {
-        return (name ?? "").Replace("(Clone)", "").Trim();
-    }
-
 }
 
 internal static class CreatureTextureOwnerResolver
 {
     internal static string GetOwnerName(string? textureName)
     {
-        string normalizedName = NormalizeName(textureName);
+        string normalizedName = CreatureReferenceSections.NormalizeAssetName(
+            textureName,
+            removeInstanceMarker: true);
         if (normalizedName.Length == 0)
         {
             return CreatureReferenceSections.UnknownOwnerName;
         }
 
-        foreach (string candidate in EnumerateLookupCandidates(normalizedName))
+        foreach (string candidate in CreatureReferenceSections.EnumerateLookupCandidates(
+                     normalizedName,
+                     removeInstanceMarker: true))
         {
             if (CreatureVanillaAssetCatalog.IsVanillaTexture(candidate))
             {
@@ -162,38 +195,6 @@ internal static class CreatureTextureOwnerResolver
 
         return CreatureAssetOwnerCatalog.GetOwnerName(normalizedName);
     }
-
-    private static IEnumerable<string> EnumerateLookupCandidates(string normalizedName)
-    {
-        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-        AddIfNew(normalizedName);
-
-        int aliasSeparatorIndex = normalizedName.IndexOf(':');
-        if (aliasSeparatorIndex > 0)
-        {
-            AddIfNew(normalizedName.Substring(0, aliasSeparatorIndex));
-        }
-
-        foreach (string candidate in seen)
-        {
-            yield return candidate;
-        }
-
-        void AddIfNew(string candidate)
-        {
-            string normalizedCandidate = NormalizeName(candidate);
-            if (normalizedCandidate.Length > 0)
-            {
-                seen.Add(normalizedCandidate);
-            }
-        }
-    }
-
-    private static string NormalizeName(string? name)
-    {
-        return (name ?? "").Replace("(Clone)", "").Replace("(Instance)", "").Trim();
-    }
-
 }
 
 internal static class CreatureVanillaAssetCatalog
@@ -269,7 +270,7 @@ internal static class CreatureVanillaAssetCatalog
                 {
                     PrefabNames.Add(assetName);
                 }
-                else if (IsTextureAssetPath(assetPath))
+                else if (CreatureReferenceSections.IsTextureAssetPath(assetPath))
                 {
                     TextureNames.Add(assetName);
                 }
@@ -281,18 +282,6 @@ internal static class CreatureVanillaAssetCatalog
         }
     }
 
-    private static bool IsTextureAssetPath(string assetPath)
-    {
-        return assetPath.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".tga", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".tiff", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".psd", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".exr", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".hdr", StringComparison.OrdinalIgnoreCase);
-    }
 }
 
 internal static class CreatureAssetOwnerCatalog
@@ -314,7 +303,7 @@ internal static class CreatureAssetOwnerCatalog
     internal static string GetOwnerName(string assetName)
     {
         PrepareMappings();
-        foreach (string candidate in EnumerateLookupCandidates(assetName))
+        foreach (string candidate in CreatureReferenceSections.EnumerateLookupCandidates(assetName))
         {
             if (AssetOwners.TryGetValue(candidate, out string ownerName) &&
                 !string.IsNullOrWhiteSpace(ownerName))
@@ -407,31 +396,7 @@ internal static class CreatureAssetOwnerCatalog
     {
         return assetPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) ||
                assetPath.EndsWith(".asset", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".tga", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".tiff", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".psd", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".exr", StringComparison.OrdinalIgnoreCase) ||
-               assetPath.EndsWith(".hdr", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static IEnumerable<string> EnumerateLookupCandidates(string assetName)
-    {
-        string normalizedName = (assetName ?? "").Replace("(Clone)", "").Trim();
-        if (normalizedName.Length == 0)
-        {
-            yield break;
-        }
-
-        yield return normalizedName;
-        int aliasSeparatorIndex = normalizedName.IndexOf(':');
-        if (aliasSeparatorIndex > 0)
-        {
-            yield return normalizedName.Substring(0, aliasSeparatorIndex);
-        }
+               CreatureReferenceSections.IsTextureAssetPath(assetPath);
     }
 
     private static List<PluginResourceSnapshot> GetPluginResources()

@@ -428,6 +428,28 @@ try
         CreatureModifierCatalog.Keys.Count == 32 &&
         CreatureModifierCatalog.Keys.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 32,
         "The pure modifier catalog is incomplete or contains duplicate keys.");
+    IReadOnlyList<ModifierIconSpec> modifierIcons = ModifierIconSource.All;
+    Require(
+        modifierIcons.Count == CreatureModifierCatalog.Keys.Count &&
+        modifierIcons.Select(icon => icon.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count() == modifierIcons.Count &&
+        new HashSet<string>(modifierIcons.Select(icon => icon.Key), StringComparer.OrdinalIgnoreCase)
+            .SetEquals(CreatureModifierCatalog.Keys),
+        "Modifier icon keys do not match the complete modifier catalog.");
+    foreach (ModifierIconSpec icon in modifierIcons)
+    {
+        for (int y = 0; y < ModifierIconSource.Size; y++)
+        {
+            for (int x = 0; x < ModifierIconSource.Size; x++)
+            {
+                ModifierIconTone tone = icon.GetTone(x, y);
+                if (tone != ModifierIconTone.Clear)
+                {
+                    _ = icon.GetColor(tone);
+                }
+            }
+        }
+    }
+
     ModifierChanceDefinition modifierChances = new();
     modifierChances.Set("EnRaGeD", 25f);
     Require(
@@ -561,13 +583,13 @@ try
         !CreatureYaml.TryReadDefinitions<CreatureDefinition>(negativeAppearanceModelYaml, "negative appearance model contract", out _),
         "A negative appearance.modelIndex was accepted.");
 
-    const string legacyAppearanceTupleYaml = """
-        - prefab: legacy_appearance_tuple
+    const string unsupportedAppearanceTupleYaml = """
+        - prefab: unsupported_appearance_tuple
           appearance: 'Hair, Beard, #FFFFFF, #FFFFFF, 0'
         """;
     Require(
-        !CreatureYaml.TryReadDefinitions<CreatureDefinition>(legacyAppearanceTupleYaml, "legacy appearance tuple contract", out _),
-        "The legacy scalar appearance tuple was accepted.");
+        !CreatureYaml.TryReadDefinitions<CreatureDefinition>(unsupportedAppearanceTupleYaml, "unsupported appearance tuple contract", out _),
+        "The unsupported scalar appearance tuple was accepted.");
 
     Require(
         CreatureYaml.TryParseAppearanceColor("#00A1FF", out _),

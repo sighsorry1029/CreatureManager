@@ -17,7 +17,7 @@ internal static class CreatureDomainManager
 {
     private const long ReloadDebounceTicks = TimeSpan.TicksPerSecond / 4;
     private const long SyncedApplyDebounceTicks = TimeSpan.TicksPerSecond / 10;
-    private const int SyncedYamlBundleVersion = 4;
+    private const int SyncedYamlBundleVersion = 5;
     private const string ReferenceLogicVersion = "2026-07-21-ragdoll-visual-v2";
     private const string MainTextureProperty = "_MainTex";
     private const string RagdollCloneSuffix = "_CreatureManagerRagdoll";
@@ -156,6 +156,8 @@ internal static class CreatureDomainManager
         internal List<ProjectileDefinition> Projectiles = new();
         internal List<CreatureDefinition> Creatures = new();
         internal string KarmaYaml = "";
+        internal CreatureTextureSync.ManifestData TextureManifest = CreatureTextureSync.CreateEmptyManifest();
+        internal CreatureTextureSync.ServerSnapshot? ServerTextures;
     }
 
     private sealed class SyncedYamlBundleData
@@ -168,6 +170,7 @@ internal static class CreatureDomainManager
         public List<ProjectileDefinition>? Projectiles { get; set; }
         public List<CreatureDefinition>? Creatures { get; set; }
         public string? Karma { get; set; }
+        public CreatureTextureSync.ManifestData? Textures { get; set; }
     }
 
     internal static string ConfigDirectoryPath => Path.Combine(Paths.ConfigPath, CreatureManagerPlugin.ModName);
@@ -201,6 +204,7 @@ internal static class CreatureDomainManager
         SyncedYamlBundle = new CustomSyncedValue<string>(configSync, "YamlBundle", "", 100);
         SyncedYamlBundle.ValueChanged += RequestSyncedYamlApply;
         configSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
+        CreatureTextureSync.ClientManifestReady += OnClientTextureManifestReady;
 
         EnsureDirectoriesAndDefaultFiles();
         if (configSync.IsSourceOfTruth)
@@ -209,6 +213,7 @@ internal static class CreatureDomainManager
         }
         else
         {
+            CreatureTextureSync.BeginRemoteSession();
             RequestSyncedYamlApply();
         }
         SetupWatcher();
@@ -230,6 +235,9 @@ internal static class CreatureDomainManager
             ConfigSync.SourceOfTruthChanged -= OnSourceOfTruthChanged;
             ConfigSync = null;
         }
+
+        CreatureTextureSync.ClientManifestReady -= OnClientTextureManifestReady;
+        CreatureTextureSync.ResetRuntimeState();
 
         DiskReloadPending = false;
         SyncedApplyPending = false;
@@ -267,6 +275,7 @@ internal static class CreatureDomainManager
 
     internal static void Update()
     {
+        CreatureTextureSync.Update();
         if (!DiskReloadPending && !SyncedApplyPending && !TextureRefreshPending && !GameDataRefreshPending)
         {
             return;
@@ -399,6 +408,22 @@ internal static class CreatureDomainManager
         CreaturePrefabRegistry.ResetOwnedClones();
         CreatureConsoleCommands.InvalidateSpawnAutocompleteOptions();
         CreatureAssetOwnerCatalog.InvalidateMappings();
+        if (ConfigSync?.IsSourceOfTruth == false)
+        {
+            // A client can reconnect from one remote server to another without a
+            // SourceOfTruthChanged transition. Drop only volatile generation state here;
+            // content-addressed files remain available for the next manifest.
+            CreatureTextureSync.BeginRemoteSession();
+        }
+        else
+        {
+            CreatureTextureSync.ResetClientState();
+        }
+
+        // Texture overrides and ragdoll tracking above have now been detached, making this the
+        // safe point to release synchronized Unity textures from superseded generations.
+        CreatureTextureRegistry.PruneInactiveSynchronizedTextures();
+        CreatureTextureRegistry.InvalidateResourceTextures();
         GameDataReady = false;
         LoadedHumanoidsRefreshedForCurrentGameData = false;
         ReferenceCaptureAttemptedForCurrentGameData = false;
@@ -456,10 +481,22 @@ internal static class CreatureDomainManager
         }
 
         bool keepPreparedClones = false;
+        bool keepServerTextures = false;
         string? previousSyncedBundle = null;
         bool synchronizedBundlePublished = false;
+        CreatureTextureSync.ServerSnapshot? previousServerTextures = null;
+        bool serverTexturesInstalled = false;
         try
         {
+            if (snapshot.ServerTextures == null)
+            {
+                CreatureManagerPlugin.Log.LogError(
+                    "Cannot publish the synchronized YAML bundle because its server texture snapshot is missing.");
+                return;
+            }
+
+            previousServerTextures = CreatureTextureSync.InstallServerSnapshot(snapshot.ServerTextures);
+            serverTexturesInstalled = true;
             if (serializedBundle != null)
             {
                 SuppressSyncedApply = true;
@@ -472,8 +509,11 @@ internal static class CreatureDomainManager
                     }
 
                     previousSyncedBundle = SyncedYamlBundle.Value;
-                    SyncedYamlBundle.AssignLocalValue(serializedBundle);
-                    synchronizedBundlePublished = true;
+                    if (!string.Equals(previousSyncedBundle, serializedBundle, StringComparison.Ordinal))
+                    {
+                        SyncedYamlBundle.AssignLocalValue(serializedBundle);
+                        synchronizedBundlePublished = true;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -491,6 +531,14 @@ internal static class CreatureDomainManager
 
             if (!TrySetActiveDefinitions(snapshot, "local YAML bundle", clonePreparationStarted))
             {
+                // Restore the blobs before republishing their manifest so an old-root request
+                // can never observe the rollback bundle without its matching snapshot.
+                if (serverTexturesInstalled)
+                {
+                    CreatureTextureSync.RestoreServerSnapshot(previousServerTextures);
+                    serverTexturesInstalled = false;
+                }
+
                 if (synchronizedBundlePublished && SyncedYamlBundle != null && previousSyncedBundle != null)
                 {
                     SuppressSyncedApply = true;
@@ -514,9 +562,15 @@ internal static class CreatureDomainManager
 
             CreatureKarmaManager.CommitParsedConfiguration(karma);
             keepPreparedClones = true;
+            keepServerTextures = true;
         }
         finally
         {
+            if (serverTexturesInstalled && !keepServerTextures)
+            {
+                CreatureTextureSync.RestoreServerSnapshot(previousServerTextures);
+            }
+
             EndDefinitionClonePreparation(clonePreparationStarted, keepPreparedClones);
         }
     }
@@ -785,6 +839,7 @@ internal static class CreatureDomainManager
     {
         if (isSourceOfTruth)
         {
+            CreatureTextureSync.ResetClientState();
             RemoteBundleReady = false;
             SyncedApplyPending = false;
             PendingSyncedApplyTime = DateTime.MaxValue;
@@ -796,13 +851,30 @@ internal static class CreatureDomainManager
         DiskReloadPending = false;
         PendingDiskReloadTime = DateTime.MaxValue;
         RemoteBundleReady = false;
-        if (WatcherResetPending)
+        CreatureTextureSync.BeginRemoteSession();
+        RequestSyncedYamlApply();
+    }
+
+    private static void OnClientTextureManifestReady(string rootHash)
+    {
+        if (ConfigSync?.IsSourceOfTruth != false)
         {
-            TextureRefreshPending = true;
-            PendingTextureRefreshTime = DateTime.UtcNow;
+            return;
         }
 
-        RequestSyncedYamlApply();
+        DefinitionSnapshot snapshot;
+        lock (Sync)
+        {
+            snapshot = ActiveSnapshot;
+        }
+
+        if (!snapshot.TextureManifest.RootHash.Equals(rootHash, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        TextureRefreshPending = true;
+        PendingTextureRefreshTime = DateTime.UtcNow;
     }
 
     private static void ApplySyncedYaml()
@@ -845,6 +917,13 @@ internal static class CreatureDomainManager
             }
 
             CreatureKarmaManager.CommitParsedConfiguration(karma);
+            if (ConfigSync?.IsSourceOfTruth == false &&
+                !CreatureTextureSync.AcceptServerManifest(snapshot.TextureManifest, out string textureError))
+            {
+                CreatureManagerPlugin.Log.LogWarning(
+                    $"Kept the last-known-good synchronized textures because the new server manifest could not be staged: {textureError}");
+            }
+
             committed = true;
         }
         finally
@@ -861,10 +940,48 @@ internal static class CreatureDomainManager
         bool aiLoaded = TryLoadOverrideFiles("ai", CreatureYaml.TryReadDefinitions<AiDefinition>, out snapshot.Ai);
         bool attacksLoaded = TryLoadOverrideFiles("attacks", CreatureYaml.TryReadDefinitions<AttackDefinition>, out snapshot.Attacks);
         bool projectilesLoaded = TryLoadOverrideFiles("projectile", CreatureYaml.TryReadDefinitions<ProjectileDefinition>, out snapshot.Projectiles);
-        RemoveProjectileReferenceMetadata(snapshot.Projectiles);
         bool creaturesLoaded = TryLoadOverrideFiles("creatures", CreatureYaml.TryReadDefinitions<CreatureDefinition>, out snapshot.Creatures);
+        StripReferenceMetadata(snapshot);
+        bool texturesLoaded = creaturesLoaded && TryBuildServerTextureSnapshot(snapshot);
         bool karmaLoaded = TryReadTextFile(KarmaConfigurationPath, "Karma", out snapshot.KarmaYaml);
-        return factionsLoaded && levelsLoaded && aiLoaded && attacksLoaded && projectilesLoaded && creaturesLoaded && karmaLoaded;
+        return factionsLoaded && levelsLoaded && aiLoaded && attacksLoaded && projectilesLoaded && creaturesLoaded && texturesLoaded && karmaLoaded;
+    }
+
+    private static bool TryBuildServerTextureSnapshot(DefinitionSnapshot snapshot)
+    {
+        List<string> referencedTextureNames = new();
+        foreach (CreatureDefinition definition in snapshot.Creatures.Where(definition => definition.IsEnabled))
+        {
+            foreach (string textureOverride in definition.Textures ?? Enumerable.Empty<string>())
+            {
+                if (!TryParseTextureOverride(
+                        textureOverride,
+                        out _,
+                        out _,
+                        out string textureName,
+                        out string parseError))
+                {
+                    CreatureManagerPlugin.Log.LogError(
+                        $"Failed to collect synchronized textures from creature '{definition.Prefab}': {parseError}");
+                    return false;
+                }
+
+                referencedTextureNames.Add(textureName);
+            }
+        }
+
+        if (!CreatureTextureSync.TryBuildServerSnapshot(
+                referencedTextureNames,
+                out CreatureTextureSync.ServerSnapshot textures,
+                out string error))
+        {
+            CreatureManagerPlugin.Log.LogError(error);
+            return false;
+        }
+
+        snapshot.ServerTextures = textures;
+        snapshot.TextureManifest = textures.GetManifestCopy();
+        return true;
     }
 
     private static bool TryReadTextFile(string path, string domain, out string text)
@@ -903,7 +1020,8 @@ internal static class CreatureDomainManager
                 Attacks = snapshot.Attacks,
                 Projectiles = snapshot.Projectiles,
                 Creatures = snapshot.Creatures,
-                Karma = snapshot.KarmaYaml
+                Karma = snapshot.KarmaYaml,
+                Textures = snapshot.TextureManifest
             };
             serialized = Serializer.Serialize(bundle);
         }
@@ -913,7 +1031,13 @@ internal static class CreatureDomainManager
             return false;
         }
 
-        return TryDeserializeBundle(serialized, "local synchronized YAML bundle round-trip", out verified);
+        if (!TryDeserializeBundle(serialized, "local synchronized YAML bundle round-trip", out verified))
+        {
+            return false;
+        }
+
+        verified.ServerTextures = snapshot.ServerTextures;
+        return true;
     }
 
     private static bool TryDeserializeBundle(string yaml, string source, out DefinitionSnapshot snapshot)
@@ -937,9 +1061,9 @@ internal static class CreatureDomainManager
             }
 
             if (bundle.Factions == null || bundle.Levels == null || bundle.Ai == null || bundle.Attacks == null || bundle.Projectiles == null ||
-                bundle.Creatures == null || bundle.Karma == null)
+                bundle.Creatures == null || bundle.Karma == null || bundle.Textures == null)
             {
-                CreatureManagerPlugin.Log.LogError($"Failed to read {source}: all seven configuration domains must be present.");
+                CreatureManagerPlugin.Log.LogError($"Failed to read {source}: all seven configuration domains and the texture manifest must be present.");
                 return false;
             }
 
@@ -953,14 +1077,24 @@ internal static class CreatureDomainManager
                 return false;
             }
 
+            if (!CreatureTextureSync.TryValidateManifest(
+                    bundle.Textures,
+                    out CreatureTextureSync.ManifestData textureManifest,
+                    out string textureError))
+            {
+                CreatureManagerPlugin.Log.LogError($"Failed to read {source}: {textureError}");
+                return false;
+            }
+
             snapshot.Factions = bundle.Factions;
             snapshot.Levels = bundle.Levels;
             snapshot.Ai = bundle.Ai;
             snapshot.Attacks = bundle.Attacks;
-            RemoveProjectileReferenceMetadata(bundle.Projectiles);
             snapshot.Projectiles = bundle.Projectiles;
             snapshot.Creatures = bundle.Creatures;
+            StripReferenceMetadata(snapshot);
             snapshot.KarmaYaml = bundle.Karma;
+            snapshot.TextureManifest = textureManifest;
             return true;
         }
         catch (Exception ex)
@@ -981,11 +1115,16 @@ internal static class CreatureDomainManager
         PendingSyncedApplyTime = DateTime.UtcNow.AddTicks(SyncedApplyDebounceTicks);
     }
 
-    private static void RemoveProjectileReferenceMetadata(IEnumerable<ProjectileDefinition> definitions)
+    private static void StripReferenceMetadata(DefinitionSnapshot snapshot)
     {
-        foreach (ProjectileDefinition definition in definitions)
+        foreach (ProjectileDefinition definition in snapshot.Projectiles)
         {
             definition.UsedByAttacks = null;
+        }
+
+        foreach (CreatureDefinition definition in snapshot.Creatures)
+        {
+            definition.AvailableAttackAnimations = null;
         }
     }
 
@@ -1094,11 +1233,13 @@ internal static class CreatureDomainManager
         List<AttackDefinition> attackDefinitions = snapshot.Attacks.ToList();
         List<ProjectileDefinition> projectileDefinitions = snapshot.Projectiles.ToList();
         List<CreatureDefinition> creatureDefinitions = snapshot.Creatures.ToList();
-        if (!TryBuildCloneMaterializationOrder(
+        List<CloneMaterializationRequest> cloneOrder = new();
+        if (!cloneTransactionPrepared &&
+            !TryBuildCloneMaterializationOrder(
                 projectileDefinitions,
                 attackDefinitions,
                 creatureDefinitions,
-                out List<CloneMaterializationRequest> cloneOrder))
+                out cloneOrder))
         {
             CreatureManagerPlugin.Log.LogError("CreatureManager definitions were not applied because their clonedFrom graph is invalid.");
             return false;
@@ -1246,7 +1387,7 @@ internal static class CreatureDomainManager
                     LoadedHumanoidsRefreshedForCurrentGameData = true;
                     try
                     {
-                        CreatureManagerRandomHairRuntime.RefreshLoadedHumanoids();
+                        CreatureAppearanceRuntime.RefreshLoadedHumanoids();
                     }
                     catch (Exception ex)
                     {
@@ -1649,6 +1790,7 @@ internal static class CreatureDomainManager
             .GroupBy(definition => definition.Ai!.Trim(), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
         HashSet<string> explicitCreatureAiTargets = BuildExplicitCreatureAiTargetSet(snapshot.Creatures);
+        WarnAboutOrderDependentAiPrefabCopies(snapshot.Creatures, aiDefinitions, source);
 
         foreach (KeyValuePair<string, AiDefinition> entry in aiDefinitions)
         {
@@ -1908,6 +2050,45 @@ internal static class CreatureDomainManager
         CreatureManagerPlugin.Log.LogWarning(
             $"CreatureManager rejected {source} before publishing prefab changes because {errors.Count} required component/reference validation error(s) were found.");
         return false;
+    }
+
+    private static void WarnAboutOrderDependentAiPrefabCopies(
+        IEnumerable<CreatureDefinition> creatureDefinitions,
+        IReadOnlyDictionary<string, AiDefinition> aiDefinitions,
+        string source)
+    {
+        List<CreatureDefinition> enabledDefinitions = creatureDefinitions
+            .Where(definition =>
+                definition.IsEnabled &&
+                !string.IsNullOrWhiteSpace(definition.Prefab) &&
+                !string.IsNullOrWhiteSpace(definition.Ai))
+            .ToList();
+        HashSet<string> overriddenPrefabNames = enabledDefinitions
+            .Select(definition => definition.Prefab!.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string[] orderDependentCopies = enabledDefinitions
+            .Select(definition => new
+            {
+                Target = definition.Prefab!.Trim(),
+                Source = definition.Ai!.Trim()
+            })
+            .Where(reference =>
+                !reference.Target.Equals(reference.Source, StringComparison.OrdinalIgnoreCase) &&
+                !aiDefinitions.ContainsKey(reference.Source) &&
+                overriddenPrefabNames.Contains(reference.Source))
+            .Select(reference => $"{reference.Target} -> {reference.Source}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(reference => reference, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (orderDependentCopies.Length == 0)
+        {
+            return;
+        }
+
+        CreatureManagerPlugin.Log.LogWarning(
+            $"AI prefab-copy result may depend on creatures.yml entry order in {source}: " +
+            $"{string.Join(", ", orderDependentCopies)}. Each source prefab also receives an AI override in this snapshot; " +
+            "use a named ai.yml preset for deterministic copying.");
     }
 
     private static void PreflightAppearanceItemReference(
@@ -2244,7 +2425,7 @@ internal static class CreatureDomainManager
             return;
         }
 
-        GameObject? prefab = ResolveTargetPrefab(definition);
+        GameObject? prefab = CreaturePrefabRegistry.GetPrefab(definition.Prefab!.Trim());
         if (prefab == null)
         {
             CreatureManagerPlugin.Log.LogWarning($"Skipping creature '{definition.Prefab}': prefab not found.");
@@ -2871,7 +3052,7 @@ internal static class CreatureDomainManager
             return;
         }
 
-        GameObject? prefab = ResolveProjectilePrefab(definition);
+        GameObject? prefab = CreaturePrefabRegistry.GetPrefab(definition.Prefab!.Trim());
         if (prefab == null)
         {
             CreatureManagerPlugin.Log.LogWarning($"Skipping projectile '{definition.Prefab}': prefab not found.");
@@ -3023,25 +3204,6 @@ internal static class CreatureDomainManager
         }
     }
 
-    private static GameObject? ResolveProjectilePrefab(ProjectileDefinition definition)
-    {
-        string targetName = definition.Prefab!.Trim();
-        string sourceName = (definition.ClonedFrom ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(sourceName))
-        {
-            return CreaturePrefabRegistry.GetPrefab(targetName);
-        }
-
-        GameObject? source = CreaturePrefabRegistry.GetPrefab(sourceName);
-        if (source == null)
-        {
-            CreatureManagerPlugin.Log.LogWarning($"Projectile clone source '{sourceName}' for '{targetName}' was not found.");
-            return null;
-        }
-
-        return CreaturePrefabRegistry.ClonePrefab(source, targetName);
-    }
-
     private static void ApplyAttackDefinition(AttackDefinition definition)
     {
         if (string.IsNullOrWhiteSpace(definition.Prefab))
@@ -3050,7 +3212,7 @@ internal static class CreatureDomainManager
             return;
         }
 
-        GameObject? prefab = ResolveAttackPrefab(definition);
+        GameObject? prefab = CreaturePrefabRegistry.GetPrefab(definition.Prefab!.Trim());
         if (prefab == null)
         {
             CreatureManagerPlugin.Log.LogWarning($"Skipping attack '{definition.Prefab}': prefab not found.");
@@ -3084,56 +3246,6 @@ internal static class CreatureDomainManager
         ApplyAttackStatusEffectTuple(prefab, shared, definition.StatusEffect);
         ApplyProjectileTuple(prefab, shared.m_attack, definition.Projectile);
         ApplyAttackAiTuple(prefab, shared, definition.Ai);
-    }
-
-    private static GameObject? ResolveAttackPrefab(AttackDefinition definition)
-    {
-        string targetName = definition.Prefab!.Trim();
-        string sourceName = (definition.ClonedFrom ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(sourceName))
-        {
-            return CreaturePrefabRegistry.GetPrefab(targetName);
-        }
-
-        GameObject? source = CreaturePrefabRegistry.GetPrefab(sourceName);
-        if (source == null)
-        {
-            CreatureManagerPlugin.Log.LogWarning($"Attack clone source '{sourceName}' for '{targetName}' was not found.");
-            return null;
-        }
-
-        return CreaturePrefabRegistry.ClonePrefab(source, targetName);
-    }
-
-    private static GameObject? ResolveTargetPrefab(CreatureDefinition definition)
-    {
-        string targetName = definition.Prefab!.Trim();
-        string sourceName = (definition.ClonedFrom ?? "").Trim();
-        if (string.Equals(targetName, "Player", StringComparison.OrdinalIgnoreCase))
-        {
-            CreatureManagerPlugin.Log.LogWarning("Creature prefab 'Player' is not managed by CreatureManager.");
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(sourceName))
-        {
-            return CreaturePrefabRegistry.GetPrefab(targetName);
-        }
-
-        GameObject? source = CreaturePrefabRegistry.GetPrefab(sourceName);
-        if (source == null)
-        {
-            CreatureManagerPlugin.Log.LogWarning($"Clone source '{sourceName}' for '{targetName}' was not found.");
-            return null;
-        }
-
-        if (CreaturePrefabRegistry.IsPlayerPrefab(source))
-        {
-            CreatureManagerPlugin.Log.LogWarning($"Clone source '{sourceName}' for '{targetName}' is a Player prefab and is not managed by CreatureManager.");
-            return null;
-        }
-
-        return CreaturePrefabRegistry.ClonePrefab(source, targetName);
     }
 
     private static void ApplyAttackDamage(ItemDrop.ItemData.SharedData shared, AttackDamageDefinition? definition)
@@ -4042,6 +4154,7 @@ internal static class CreatureDomainManager
 
     private static void BeginTextureOverrideApply()
     {
+        CreatureTextureRegistry.BeginResourceLookupPass();
         foreach (TextureMaterialOverride textureOverride in TextureMaterialOverrides.Values)
         {
             textureOverride.Active = false;
@@ -4752,8 +4865,17 @@ internal static class CreatureDomainManager
                               e is RenamedEventArgs renamed && IsTextureFile(renamed.OldFullPath);
         if (textureChanged)
         {
-            TextureRefreshPending = true;
-            PendingTextureRefreshTime = DateTime.UtcNow.AddTicks(ReloadDebounceTicks);
+            CreatureTextureRegistry.MarkFileTextureDirty(e.FullPath);
+            if (e is RenamedEventArgs renamedTexture)
+            {
+                CreatureTextureRegistry.MarkFileTextureDirty(renamedTexture.OldFullPath);
+            }
+
+            if (ConfigSync?.IsSourceOfTruth != false)
+            {
+                RequestConfigurationReload();
+            }
+
             return;
         }
 
@@ -4772,6 +4894,7 @@ internal static class CreatureDomainManager
         CreatureManagerPlugin.Log.LogWarning(
             $"CreatureManager configuration watcher lost file events and will be rebuilt: {args.GetException().Message}");
         WatcherResetPending = true;
+        CreatureTextureRegistry.MarkAllFileTexturesDirty();
         if (ConfigSync?.IsSourceOfTruth == false)
         {
             TextureRefreshPending = true;
@@ -5043,121 +5166,56 @@ internal static class CreatureDomainManager
         builder.AppendLine(text);
     }
 
-    private static string FormatLevelFloat(float value)
-    {
-        return value.ToString("0.###", CultureInfo.InvariantCulture);
-    }
-
     private static string BuildDefaultLevelOverrideYaml()
     {
         StringBuilder builder = new();
-        AppendTemplateComment(builder, "CreatureManager level configuration.");
-        AppendTemplateComment(builder, "Loaded files: levels.yml, levels.yaml, levels_*.yml, levels_*.yaml.");
-        AppendTemplateComment(builder, "A YAML reload does not reroll completed creatures: stored levels, health/damage multipliers, and modifier state remain unchanged.");
-        AppendTemplateComment(builder, "Visual scale is resolved again when visuals rebuild, and an external SetLevel recalculates health, damage, and visual scale from the current rules.");
-        AppendTemplateComment(builder, "BepInEx 'Enable Level System' is the master switch. BepInEx 'Biome Level Preset' adds built-in biome rules.");
-        AppendTemplateComment(builder, "BepInEx 'Global Modifiers', 'Boss Modifiers', and 'Enforcer Modifiers' independently gate modifier rolls/effects for those creature classes.");
-        AppendTemplateComment(builder, "Top-level targets: Global, Boss, biome names, group names, or prefab names.");
-        AppendTemplateComment(builder, "Non-boss and Enforcer specificity: prefab > group > biome > Global. Omitted fields fall back independently.");
-        AppendTemplateComment(builder, "Regular boss specificity: prefab > group > Boss. Missing fields never fall back to Global; level may use the opt-in biome preset.");
-        AppendTemplateComment(builder, "For any modifiers field, omission or {} keeps lower-priority fallback; a mapping overrides only listed values.");
-        AppendTemplateComment(builder, "Use modifiers: [] as a terminal clear that blocks every lower-priority modifier source for that target.");
-        AppendTemplateComment(builder, "Every modifier tuple requires chance% first. Trailing values may be omitted only from the right.");
-        AppendTemplateComment(builder, "Omitted trailing values inherit per field, then use runtime defaults. Explicit 0 is a supplied value subject to normal validation; empty slots such as '10, , 5' are invalid.");
-        AppendTemplateComment(builder, "The generated entries below keep full tuples so their effective default values remain visible.");
-        AppendTemplateComment(builder, "Enforcer summons ignore Boss and continue to use prefab/group, biome, and Global rules even when their source prefab is a boss.");
-        AppendTemplateComment(builder, "Nested biome rules under a prefab/group beat the same target without a biome. User biome targets do not affect regular bosses; built-in preset biome levels can be opted in by config.");
-        AppendTemplateComment(builder, "Rules are selected by the current network owner from the server-synchronized definitions when a creature is processed.");
-        AppendTemplateComment(builder, "Modifiers are rolled at most once per group. Group totals below 100 leave the remainder as no modifier; totals above 100 are normalized as weights.");
-        AppendTemplateComment(builder, "Reaping healing, max health, and damage work in dungeons, but new Reaping scale gains are disabled there.");
-        AppendTemplateComment(builder, "CreatureManager does not manage loot/drop from this domain.");
+        AppendTemplateComment(builder, "Targets: Global, Boss, biome, group, or prefab; omitted fields inherit independently.");
+        AppendTemplateComment(builder, "Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss.");
+        AppendTemplateComment(builder, "Nested biome blocks override their parent target in that biome.");
+        AppendTemplateComment(builder, "modifiers: omit/{} = inherit, [] = clear; tuples start with chance% and may omit only trailing values.");
         AppendTemplateBlankLine(builder);
 
         builder.AppendLine("Global:");
-        AppendIndented(builder, 1, "level: [80, 20]                       # Fallback level weights. [80, 20] = level 1 weight 80, level 2 weight 20.");
-        AppendIndented(builder, 1, "scalePerLevel: 0.1                    # Visual LevelEffects scale per level above 1. Always skipped in dungeons; saddle-able creatures are controlled by config.");
-        AppendIndented(builder, 1, "damage: 1                            # Level-1 damage multiplier against Characters. Without damagePerLevel, vanilla level growth remains.");
-        AppendIndented(builder, 1, "damagePerLevel: 0.25                 # Replaces vanilla +50%/level against Characters: damage * (1 + (level - 1) * value).");
-        AppendIndented(builder, 1, "health: 1                            # Base max-health multiplier. Omit or keep 1 to keep level 1 baseline.");
-        AppendIndented(builder, 1, "healthPerLevel: 1                    # Max-health growth per level above 1, based on level 1 health. 1 keeps vanilla level growth.");
-        AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # damagePerStep, healthPerStep, interval, maxSteps. maxSteps 0 = no cap.");
-        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.03, 1000, 8] # Each chance * (1 + 0.03 * steps), 1 step per 1000 distance, max 8; e.g. 20% becomes 20.6% at 1000 and 24.8% at 8000+.");
+        AppendIndented(builder, 1, "level: [80, 20]                       # Weights by level: level 1 = 80, level 2 = 20.");
+        AppendIndented(builder, 1, "scalePerLevel: 0.1                    # Visual scale per level above 1; skipped in dungeons.");
+        AppendIndented(builder, 1, "damage: 1                            # Level-1 damage multiplier.");
+        AppendIndented(builder, 1, "damagePerLevel: 0.25                 # Replaces vanilla growth: damage * (1 + (level - 1) * value).");
+        AppendIndented(builder, 1, "health: 1                            # Level-1 max-health multiplier.");
+        AppendIndented(builder, 1, "healthPerLevel: 1                    # Health = base * health * (1 + (level - 1) * value).");
+        AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # damageStep, healthStep, stepMeters, maxSteps (0 = unlimited).");
+        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.03, 1000, 8] # chanceStep, stepMeters, maxSteps; 20% -> 20.6% at 1000m, 24.8% at 8000m+.");
         AppendDefaultLevelModifiers(builder, bossDefaults: false);
         builder.AppendLine();
 
-        builder.AppendLine("Boss:");
-        AppendIndented(builder, 1, "level: [100]                           # Boss fallback level weights. Keeps bosses at level 1 unless overridden or Karma adds bonus levels.");
-        AppendIndented(builder, 1, "scalePerLevel: 0.1                   # Boss level scale per level above 1. Enforcer boss summons use Global.scalePerLevel instead.");
-        AppendIndented(builder, 1, "damage: 1                            # Boss level-1 damage multiplier against Characters. Without damagePerLevel, vanilla level growth remains.");
-        AppendIndented(builder, 1, "damagePerLevel: 0.1                  # Replaces vanilla boss +50%/level against Characters: damage * (1 + (level - 1) * value).");
-        AppendIndented(builder, 1, "health: 1                            # Boss base max-health multiplier. Keep 1 to avoid changing level 1 bosses.");
-        AppendIndented(builder, 1, "healthPerLevel: 0.5                  # Boss max-health growth per level above 1, based on level 1 health.");
-        AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # Boss damage/health distance scaling tuple.");
-        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.02, 1000, 6] # Optional Boss scaling. Omit to leave boss modifier chances unscaled by distance.");
+        builder.AppendLine("Boss:                                  # Regular bosses only; Enforcers use non-boss rules.");
+        AppendIndented(builder, 1, "# level: [100]                       # Boss fallback: level 1; omit to allow the enabled built-in biome preset ([] is invalid).");
+        AppendIndented(builder, 1, "scalePerLevel: 0.1");
+        AppendIndented(builder, 1, "damage: 1");
+        AppendIndented(builder, 1, "damagePerLevel: 0.1");
+        AppendIndented(builder, 1, "health: 1");
+        AppendIndented(builder, 1, "healthPerLevel: 0.5");
         AppendDefaultLevelModifiers(builder, bossDefaults: true);
         builder.AppendLine();
 
         builder.AppendLine("TentaRoot:");
-        AppendIndented(builder, 1, "modifiers: []                       # Terminal clear: disable modifier rolls and block lower-specificity fallback for this prefab.");
+        AppendIndented(builder, 1, "modifiers: []                       # Clears inherited modifiers for this prefab.");
         builder.AppendLine();
 
-        AppendTemplateComment(builder, "Optional examples. Uncomment or copy only the blocks you want to use.");
+        AppendTemplateComment(builder, "Optional examples; uncomment only what you need.");
         AppendTemplateLine(builder, 0, "groups:");
         AppendTemplateLine(builder, 1, "ForestBrutes:");
         AppendTemplateLine(builder, 2, "- Troll");
         AppendTemplateLine(builder, 2, "- Greydwarf_Elite");
-        AppendTemplateLine(builder, 2, "- Greydwarf_Shaman");
         AppendTemplateBlankLine(builder);
         AppendTemplateLine(builder, 0, "Meadows:");
-        AppendTemplateLine(builder, 1, "level: [100]                         # Biome rule for non-boss creatures in Meadows.");
-        AppendTemplateLine(builder, 1, "health: 2                            # Level 1 max health becomes 2x baseline.");
-        AppendTemplateLine(builder, 1, "healthPerLevel: 0.5                  # Health = level1Health * 2 * (1 + (level - 1) * 0.5): level 1=2x, level 2=3x, level 3=4x.");
+        AppendTemplateLine(builder, 1, "level: [100]");
         AppendTemplateBlankLine(builder);
         AppendTemplateLine(builder, 0, "ForestBrutes:");
-        AppendTemplateLine(builder, 1, "level: [50, 30, 20]                  # Group rule. Applies to prefabs listed in groups.ForestBrutes.");
-        AppendTemplateLine(builder, 1, "damage: 1.05");
         AppendTemplateLine(builder, 1, "health: 1.1");
-        AppendTemplateLine(builder, 1, "distanceScaling: [0.05, 0.1, 1000]  # maxSteps omitted or 0 = no cap.");
-        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.02, 1000, 6]");
-        AppendTemplateLine(builder, 1, "modifiers:");
-        AppendIndented(builder, 2, "# Offense: Enraged to Undodgeable");
-        AppendTemplateLine(builder, 2, "enraged: 10");
-        AppendTemplateLine(builder, 2, "spirit: 5, 0.25");
-        AppendIndented(builder, 2, "# Defense: Armored to Chameleon");
-        AppendTemplateLine(builder, 2, "armored: 20, 0.4");
-        AppendTemplateLine(builder, 2, "deathward: 5, 0.25, 60, 3");
-        AppendTemplateLine(builder, 2, "vortex: 5, 0.5");
-        AppendTemplateLine(builder, 2, "unflinching: 5");
-        AppendTemplateLine(builder, 2, "chameleon: 5, 10");
-        AppendIndented(builder, 2, "# Affliction: Exposed to ToxicDeath");
-        AppendTemplateLine(builder, 2, "withered: 10, 0.5, 0.5, 5");
-        AppendIndented(builder, 2, "# Special: Swift to Blamer");
-        AppendTemplateLine(builder, 2, "reaping: 5, 0.15, 20, 0.1, 2, 0.05, 1, 0.02, 0.4");
-        AppendTemplateLine(builder, 2, "blink: 5, 1, 16, fx_Adrenaline1");
-        AppendTemplateLine(builder, 2, "omen: 5, 0.25");
-        AppendTemplateLine(builder, 2, "juggernaut: 5, 80, 5");
-        AppendTemplateLine(builder, 2, "blamer: 5, 1, 60, 0.75");
         AppendTemplateBlankLine(builder);
         AppendTemplateLine(builder, 0, "Troll:");
-        AppendTemplateLine(builder, 1, "level: [0, 0, 10, 5]                # Prefab rule. 0 weights skip lower levels.");
-        AppendTemplateLine(builder, 1, "damage: 1.15");
-        AppendTemplateLine(builder, 1, "damagePerLevel: 0.5");
-        AppendTemplateLine(builder, 1, "health: 1.25");
-        AppendTemplateLine(builder, 1, "healthPerLevel: 0.75");
-        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0, 1000, 0] # Disable inherited modifier chance distance scaling for this prefab.");
-        AppendTemplateLine(builder, 1, "modifiers:");
-        AppendIndented(builder, 2, "# Offense: Enraged to Undodgeable");
-        AppendTemplateLine(builder, 2, "enraged: 25, 0.6");
-        AppendIndented(builder, 2, "# Defense: Armored to Chameleon");
-        AppendTemplateLine(builder, 2, "armored: 50, 0.5");
-        AppendTemplateLine(builder, 2, "reflection: 10, 0.2, 0.5");
-        AppendTemplateBlankLine(builder);
-        AppendTemplateLine(builder, 0, "VC_Vaettr:");
-        AppendTemplateLine(builder, 1, "Meadows:");
-        AppendTemplateLine(builder, 2, "level: [100]                       # Nested biome rule: only this prefab/group in Meadows.");
-        AppendTemplateLine(builder, 2, "damage: 0.4");
-        AppendTemplateBlankLine(builder);
-        AppendLevelPresetTemplateComments(builder);
+        AppendTemplateLine(builder, 1, "BlackForest:");
+        AppendTemplateLine(builder, 2, "damage: 1.2");
         return builder.ToString();
     }
 
@@ -5168,66 +5226,43 @@ internal static class CreatureDomainManager
         string blamerChance = bossDefaults ? "0" : chance;
         string blamerKarmaPerSecond = bossDefaults ? "1" : "0.5";
         string blamerMaxKarmaGain = bossDefaults ? "60" : "45";
-        AppendIndented(builder, 1, "modifiers:                           # At most one modifier per group. chance% is required; trailing tuple values are optional.");
+        AppendIndented(builder, 1, "modifiers:                           # One per group; totals below 100 allow none, above 100 are weights.");
         AppendIndented(builder, 2, "# Offense: Enraged to Undodgeable");
-        AppendIndented(builder, 2, $"enraged: {chance}, 0.15                 # chance%, outgoingDamageBonus.");
-        AppendIndented(builder, 2, $"fire: {chance}, 0.2                     # chance%, addedFireDamage.");
-        AppendIndented(builder, 2, $"frost: {chance}, 0.1                    # chance%, addedFrostDamage.");
-        AppendIndented(builder, 2, $"lightning: {chance}, 0.1                # chance%, addedLightningDamage.");
-        AppendIndented(builder, 2, $"spirit: {chance}, 0.05                  # chance%, addedSpiritDoT.");
-        AppendIndented(builder, 2, $"armorPiercing: {chance}, 0.3            # chance%, ignoredPlayerArmor.");
-        AppendIndented(builder, 2, $"staggering: {chance}, 0.6               # chance%, staggerBonus.");
-        AppendIndented(builder, 2, $"undodgeable: {chance}, 0.25             # chance%, damageReduction; attacks against players ignore dodge invulnerability.");
+        AppendIndented(builder, 2, $"enraged: {chance}, 0.15                 # chance%, outgoingDamageBonus");
+        AppendIndented(builder, 2, $"fire: {chance}, 0.2                     # chance%, addedFireDamage");
+        AppendIndented(builder, 2, $"frost: {chance}, 0.1                    # chance%, addedFrostDamage");
+        AppendIndented(builder, 2, $"lightning: {chance}, 0.1                # chance%, addedLightningDamage");
+        AppendIndented(builder, 2, $"spirit: {chance}, 0.05                  # chance%, addedSpiritDoT");
+        AppendIndented(builder, 2, $"armorPiercing: {chance}, 0.3            # chance%, ignoredPlayerArmor");
+        AppendIndented(builder, 2, $"staggering: {chance}, 0.6               # chance%, staggerBonus");
+        AppendIndented(builder, 2, $"undodgeable: {chance}, 0.25             # chance%, damageReduction");
         AppendIndented(builder, 2, "# Defense: Armored to Chameleon");
-        AppendIndented(builder, 2, $"armored: {chance}, 0.3                 # chance%, damageReduction.");
-        AppendIndented(builder, 2, $"deathward: {chance}, 0.2, 10, 3         # chance%, restoredHealth, cooldownSeconds, maxActivations.");
-        AppendIndented(builder, 2, $"regenerating: {chance}, {regenerationPerSecond}, 20      # chance%, maxHealthRatioPerSecond, healthPerSecondCap. 0 cap is unlimited.");
-        AppendIndented(builder, 2, $"reflection: {chance}, 0.1, 0.5         # chance%, actualMeleeDamageReflected, procChance.");
-        AppendIndented(builder, 2, $"vortex: {chance}, 0.5                  # chance%, projectileIgnoreProc.");
-        AppendIndented(builder, 2, $"adaptive: {chance}, 0.5                # chance%, rememberedTypeDamageReduction.");
-        AppendIndented(builder, 2, $"unflinching: {chance}                    # chance%; prevents normal-hit and perfect-parry stagger.");
-        AppendIndented(builder, 2, $"chameleon: {chance}, 10                  # chance%, immunitySwitchSeconds.");
+        AppendIndented(builder, 2, $"armored: {chance}, 0.3                 # chance%, damageReduction");
+        AppendIndented(builder, 2, $"deathward: {chance}, 0.2, 10, 3         # chance%, restoredHealth, cooldownSeconds, maxActivations");
+        AppendIndented(builder, 2, $"regenerating: {chance}, {regenerationPerSecond}, 20      # chance%, maxHealthRatioPerSecond, healthPerSecondCap (0 = unlimited)");
+        AppendIndented(builder, 2, $"reflection: {chance}, 0.1, 0.5         # chance%, actualMeleeDamageReflected, procChance");
+        AppendIndented(builder, 2, $"vortex: {chance}, 0.5                  # chance%, projectileIgnoreProc");
+        AppendIndented(builder, 2, $"adaptive: {chance}, 0.5                # chance%, rememberedTypeDamageReduction");
+        AppendIndented(builder, 2, $"unflinching: {chance}                    # chance%");
+        AppendIndented(builder, 2, $"chameleon: {chance}, 10                  # chance%, immunitySwitchSeconds");
         AppendIndented(builder, 2, "# Affliction: Exposed to ToxicDeath");
-        AppendIndented(builder, 2, $"exposed: {chance}, 0.2, 0.5, 5          # chance%, damageTaken, proc, duration.");
-        AppendIndented(builder, 2, $"weakened: {chance}, 0.2, 0.5, 5         # chance%, outgoingDamageReduction, proc, duration.");
-        AppendIndented(builder, 2, $"withered: {chance}, 0.5, 0.5, 5         # chance%, healingReduction, proc, duration.");
-        AppendIndented(builder, 2, $"crippling: {chance}, 0.5, 0.5, 0.5, 5  # chance%, moveReduction, jumpReduction, proc, duration.");
-        AppendIndented(builder, 2, $"disruptive: {chance}, 0.5, 0.5, 0.5, 5  # chance%, staminaRegenReduction, eitrRegenReduction, proc, duration.");
-        AppendIndented(builder, 2, $"adrenalineDrain: {chance}, 0.5, 0.5, 0.5, 5 # chance%, currentAdrenalineRemoved, adrenalineGainReduction, procChance, duration.");
-        AppendIndented(builder, 2, $"corrosive: {chance}, 0.5, 0.5, 5          # chance%, durabilityLossBonus, procChance, duration. Equipped armor, weapons, and shield only.");
-        AppendIndented(builder, 2, "toxicDeath: 10, 0.3, 4, blob_aoe   # chance%, maxHealthDamage, radius, triggerEffect.");
+        AppendIndented(builder, 2, $"exposed: {chance}, 0.2, 0.5, 5          # chance%, damageTaken, proc, duration");
+        AppendIndented(builder, 2, $"weakened: {chance}, 0.2, 0.5, 5         # chance%, outgoingDamageReduction, proc, duration");
+        AppendIndented(builder, 2, $"withered: {chance}, 0.5, 0.5, 5         # chance%, healingReduction, proc, duration");
+        AppendIndented(builder, 2, $"crippling: {chance}, 0.5, 0.5, 0.5, 5  # chance%, moveReduction, jumpReduction, proc, duration");
+        AppendIndented(builder, 2, $"disruptive: {chance}, 0.5, 0.5, 0.5, 5  # chance%, staminaRegenReduction, eitrRegenReduction, proc, duration");
+        AppendIndented(builder, 2, $"adrenalineDrain: {chance}, 0.5, 0.5, 0.5, 5 # chance%, currentAdrenalineRemoved, adrenalineGainReduction, procChance, duration");
+        AppendIndented(builder, 2, $"corrosive: {chance}, 0.5, 0.5, 5          # chance%, durabilityLossBonus, procChance, duration");
+        AppendIndented(builder, 2, "toxicDeath: 10, 0.3, 4, blob_aoe   # chance%, maxHealthDamage, radius, triggerEffect");
         AppendIndented(builder, 2, "# Special: Swift to Blamer");
-        AppendIndented(builder, 2, $"swift: {chance}, 0.4                  # chance%, movementSpeedBonus.");
-        AppendIndented(builder, 2, $"attackSpeed: {chance}, 0.3            # chance%, attackSpeedBonus.");
-        AppendIndented(builder, 2, $"vampiric: {chance}, 0.3               # chance%, actualDirectDamageHealing.");
-        AppendIndented(builder, 2, $"reaping: {chance}, 0.05, 20, 0.1, 2, 0.01, 0.2, 0.05, 0.5 # chance%, heal/base, healMaxActivations, maxHealth/base, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap. New scale gains are disabled in dungeons.");
-        AppendIndented(builder, 2, $"blink: {chance}, 6, 16, fx_Adrenaline1  # chance%, cooldown, maxRange, startEffect.");
-        AppendIndented(builder, 2, $"omen: {chance}, 0.5                  # chance%, forcedEnforcerChance.");
-        AppendIndented(builder, 2, $"juggernaut: {chance}, 150, 5           # chance%, minimumPushForce, cooldownSeconds.");
-        AppendIndented(builder, 2, $"blamer: {blamerChance}, {blamerKarmaPerSecond}, {blamerMaxKarmaGain}, 0.75           # chance%, karmaPerSecond, maxKarmaGain, fleeHealthRatio. 0 cap is unlimited.");
-    }
-
-    private static void AppendLevelPresetTemplateComments(StringBuilder builder)
-    {
-        AppendTemplateComment(builder, "Built-in biome level distributions used by the BepInEx 'Biome Level Preset' option.");
-        AppendTemplateComment(builder, "The selected preset supplies these biome defaults. To customize, uncomment or copy only the biome blocks you want to override.");
-        AppendTemplateComment(builder, "All other biomes keep following the selected preset.");
-        foreach (CreatureManagerPlugin.LevelBiomePreset preset in new[]
-                 {
-                     CreatureManagerPlugin.LevelBiomePreset.Easy,
-                     CreatureManagerPlugin.LevelBiomePreset.Normal,
-                     CreatureManagerPlugin.LevelBiomePreset.Hard,
-                     CreatureManagerPlugin.LevelBiomePreset.VeryHard
-                 })
-        {
-            AppendTemplateBlankLine(builder);
-            AppendTemplateComment(builder, $"{preset} preset:");
-            foreach (KeyValuePair<string, float[]> entry in GetLevelPresetWeights(preset))
-            {
-                AppendTemplateLine(builder, 0, $"{entry.Key}:");
-                AppendTemplateLine(builder, 1, $"level: [{string.Join(", ", entry.Value.Select(FormatLevelFloat))}]");
-            }
-        }
+        AppendIndented(builder, 2, $"swift: {chance}, 0.4                  # chance%, movementSpeedBonus");
+        AppendIndented(builder, 2, $"attackSpeed: {chance}, 0.3            # chance%, attackSpeedBonus");
+        AppendIndented(builder, 2, $"vampiric: {chance}, 0.3               # chance%, actualDirectDamageHealing");
+        AppendIndented(builder, 2, $"reaping: {chance}, 0.05, 20, 0.1, 2, 0.01, 0.2, 0.05, 0.5 # chance%, heal/base, healMaxActivations, maxHealth/base, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap");
+        AppendIndented(builder, 2, $"blink: {chance}, 6, 16, fx_Adrenaline1  # chance%, cooldown, maxRange, startEffect");
+        AppendIndented(builder, 2, $"omen: {chance}, 0.5                  # chance%, forcedEnforcerChance");
+        AppendIndented(builder, 2, $"juggernaut: {chance}, 150, 5           # chance%, minimumPushForce, cooldownSeconds");
+        AppendIndented(builder, 2, $"blamer: {blamerChance}, {blamerKarmaPerSecond}, {blamerMaxKarmaGain}, 0.75           # chance%, karmaPerSecond, maxKarmaGain (0 = unlimited), fleeHealthRatio");
     }
 
     private static string BuildDefaultOverrideYaml()

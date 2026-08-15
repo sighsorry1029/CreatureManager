@@ -71,41 +71,12 @@ internal static class CreatureReferenceWriter
         builder.AppendLine("# Owner sections are best-effort guesses from the Valheim manifest and loaded asset bundles.");
         builder.AppendLine();
 
-        bool wroteSection = false;
-        foreach (IGrouping<string, CreatureLoadoutReferenceEntry> section in entries
-                     .OrderBy(entry => CreatureReferenceSections.GetOwnerSortBucket(entry.OwnerName))
-                     .ThenBy(entry => entry.OwnerName, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
-                     .GroupBy(entry => entry.OwnerName, StringComparer.OrdinalIgnoreCase))
-        {
-            if (wroteSection)
-            {
-                builder.AppendLine();
-            }
-
-            builder.Append("# ===== ");
-            builder.Append(section.Key);
-            builder.AppendLine(" =====");
-
-            bool wroteEntry = false;
-            foreach (CreatureLoadoutReferenceEntry entry in section)
-            {
-                if (wroteEntry)
-                {
-                    builder.AppendLine();
-                }
-
-                builder.AppendLine(entry.Name);
-                builder.AppendLine($"  usedBy: {FormatInlineList(entry.UsedBy)}");
-                if (!string.IsNullOrWhiteSpace(entry.AttackAnimation))
-                {
-                    builder.AppendLine($"  attackAnimation: {FormatYamlString(entry.AttackAnimation)}");
-                }
-                wroteEntry = true;
-            }
-
-            wroteSection = true;
-        }
+        CreatureReferenceSections.AppendOwnerSections(
+            builder,
+            entries,
+            entry => entry.OwnerName,
+            entry => entry.Name,
+            AppendCreatureLoadoutReferenceEntry);
 
         return builder.ToString();
     }
@@ -130,57 +101,52 @@ internal static class CreatureReferenceWriter
         builder.AppendLine("# Owner sections are best-effort guesses from the Valheim manifest and loaded asset bundles.");
         builder.AppendLine();
 
-        bool wroteSection = false;
-        foreach (IGrouping<string, ProjectileReferenceEntry> section in entries
-                     .OrderBy(entry => CreatureReferenceSections.GetOwnerSortBucket(entry.OwnerName))
-                     .ThenBy(entry => entry.OwnerName, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
-                     .GroupBy(entry => entry.OwnerName, StringComparer.OrdinalIgnoreCase))
-        {
-            if (wroteSection)
-            {
-                builder.AppendLine();
-            }
-
-            builder.Append("# ===== ");
-            builder.Append(section.Key);
-            builder.AppendLine(" =====");
-
-            bool wroteEntry = false;
-            foreach (ProjectileReferenceEntry entry in section)
-            {
-                if (wroteEntry)
-                {
-                    builder.AppendLine();
-                }
-
-                AppendListEntry(builder, 0, "prefab", entry.Name);
-                AppendLine(builder, 1, $"usedByAttacks: {FormatInlineList(entry.UsedByAttacks)}");
-                if (entry.HasProjectile)
-                {
-                    AppendLine(builder, 1, "projectile:");
-                    AppendLine(builder, 2, $"spawnOnHit: {(entry.ProjectileSpawnOnHit == null ? "null" : FormatYamlString(entry.ProjectileSpawnOnHit))}");
-                    if (entry.ProjectileRandomSpawnOnHit.Count > 0)
-                    {
-                        AppendLine(builder, 2,
-                            $"randomSpawnOnHit: {FormatWeightedPrefabInlineList(entry.ProjectileRandomSpawnOnHit)}");
-                        AppendLine(builder, 2, $"randomSpawnOnHitCount: {entry.ProjectileRandomSpawnOnHitCount}");
-                    }
-                }
-
-                if (entry.HasSpawnAbility)
-                {
-                    AppendLine(builder, 1, "spawnAbility:");
-                    AppendLine(builder, 2, $"spawnPrefabs: {FormatWeightedPrefabInlineList(entry.SpawnAbilityPrefabs)}");
-                }
-
-                wroteEntry = true;
-            }
-
-            wroteSection = true;
-        }
+        CreatureReferenceSections.AppendOwnerSections(
+            builder,
+            entries,
+            entry => entry.OwnerName,
+            entry => entry.Name,
+            AppendProjectileReferenceEntry);
 
         return builder.ToString();
+    }
+
+    private static void AppendCreatureLoadoutReferenceEntry(
+        StringBuilder builder,
+        CreatureLoadoutReferenceEntry entry)
+    {
+        builder.AppendLine(entry.Name);
+        builder.AppendLine($"  usedBy: {FormatInlineList(entry.UsedBy)}");
+        if (!string.IsNullOrWhiteSpace(entry.AttackAnimation))
+        {
+            builder.AppendLine($"  attackAnimation: {FormatYamlString(entry.AttackAnimation)}");
+        }
+    }
+
+    private static void AppendProjectileReferenceEntry(
+        StringBuilder builder,
+        ProjectileReferenceEntry entry)
+    {
+        AppendListEntry(builder, 0, "prefab", entry.Name);
+        AppendLine(builder, 1, $"usedByAttacks: {FormatInlineList(entry.UsedByAttacks)}");
+        if (entry.HasProjectile)
+        {
+            AppendLine(builder, 1, "projectile:");
+            AppendLine(builder, 2,
+                $"spawnOnHit: {(entry.ProjectileSpawnOnHit == null ? "null" : FormatYamlString(entry.ProjectileSpawnOnHit))}");
+            if (entry.ProjectileRandomSpawnOnHit.Count > 0)
+            {
+                AppendLine(builder, 2,
+                    $"randomSpawnOnHit: {FormatWeightedPrefabInlineList(entry.ProjectileRandomSpawnOnHit)}");
+                AppendLine(builder, 2, $"randomSpawnOnHitCount: {entry.ProjectileRandomSpawnOnHitCount}");
+            }
+        }
+
+        if (entry.HasSpawnAbility)
+        {
+            AppendLine(builder, 1, "spawnAbility:");
+            AppendLine(builder, 2, $"spawnPrefabs: {FormatWeightedPrefabInlineList(entry.SpawnAbilityPrefabs)}");
+        }
     }
 
     private sealed class CreatureLoadoutUsage

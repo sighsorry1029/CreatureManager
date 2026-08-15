@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.8
+
+- Synchronize server-owned, actively referenced creature PNG overrides through validated SHA-256 manifests, bounded chunk transfers, persistent client caching, and transactional last-known-good activation; hot reload reuses live texture objects while unsafe paths and invalid images are rejected.
+- Make persisted Enforcer discovery incremental on server startup and simplify level, modifier, clone, baseline, reference, faction, appearance, and localization runtime paths to reduce repeated work and failure scope.
+- Narrow the public modifier transport snapshot to modifier-owned state and require the new v2 format, removing v1 snapshot migration along with JSON localization compatibility.
+- Streamline generated `levels.yml` and `karma.yml` guidance, leave `Boss.level` omitted by default so regular bosses can follow the enabled biome preset, retry failed server-localization watchers, and verify all 32 modifier icons in the contract checker.
+
 ## 1.1.7
 
 - Discover modded creature attacks directly from loaded Humanoid loadouts and inspect animator controllers with a lightweight Animator-only probe, allowing non-networked attack holders into generated references without instantiating complete creature prefabs.

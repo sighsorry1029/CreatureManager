@@ -446,10 +446,10 @@ internal static class CreatureManagerVisEquipmentUpdateEquipmentVisualsPatch
     [HarmonyPriority(Priority.Last)]
     private static void Postfix(VisEquipment __instance)
     {
-        CreatureManagerRandomHairRuntime.UpdateConfiguredRagdollAppearance(__instance);
+        CreatureAppearanceRuntime.UpdateConfiguredRagdollAppearance(__instance);
         CreatureDomainManager.ApplyConfiguredRagdollTextures(__instance);
-        CreatureManagerRandomHairRuntime.RestoreEligibility(__instance);
-        CreatureManagerRandomHairRuntime.UpdateVisual(__instance);
+        CreatureAppearanceRuntime.RestoreEligibility(__instance);
+        CreatureAppearanceRuntime.UpdateVisual(__instance);
     }
 }
 
@@ -480,7 +480,7 @@ internal static class CreatureManagerVisEquipmentGetHairItemPatch
         ItemDrop.ItemData.AccessoryType accessory,
         ref int __result)
     {
-        if (!CreatureManagerRandomHairRuntime.TryBypassHelmetHairFilter(
+        if (!CreatureAppearanceRuntime.TryBypassHelmetHairFilter(
                 __instance,
                 itemHash,
                 accessory,
@@ -499,9 +499,9 @@ internal static class CreatureManagerVisEquipmentOnEnableRandomHairPatch
 {
     private static void Postfix(VisEquipment __instance)
     {
-        CreatureManagerRandomHairRuntime.UpdateConfiguredRagdollAppearance(__instance);
+        CreatureAppearanceRuntime.UpdateConfiguredRagdollAppearance(__instance);
         CreatureDomainManager.ApplyConfiguredRagdollTextures(__instance);
-        CreatureManagerRandomHairRuntime.RestoreEligibility(__instance);
+        CreatureAppearanceRuntime.RestoreEligibility(__instance);
     }
 }
 
@@ -511,7 +511,7 @@ internal static class CreatureManagerVisEquipmentOnDisableRandomHairPatch
     private static void Prefix(VisEquipment __instance)
     {
         CreatureDomainManager.ForgetRagdollTextureVisual(__instance);
-        CreatureManagerRandomHairRuntime.Forget(__instance);
+        CreatureAppearanceRuntime.Forget(__instance);
     }
 }
 
@@ -530,8 +530,6 @@ internal static class CreatureManagerCharacterLifecycle
     {
         CreatureKarmaManager.ObservePotentialBlocker(character);
         CreatureLevelManager.TryApplyLevel(character);
-        CreatureLevelManager.ApplyRuntimeVisuals(character);
-        CreatureModifierManager.TryRollModifiers(character);
     }
 }
 
@@ -1035,7 +1033,7 @@ internal static class CreatureManagerZNetSceneOnDestroyPatch
     private static void Prefix()
     {
         CreatureDomainManager.NotifyGameDataUnavailable();
-        CreatureManagerRandomHairRuntime.Reset();
+        CreatureAppearanceRuntime.Reset();
         CreatureManagerSpawnLifecycle.ResetRuntimeState();
         CreatureKarmaManager.ResetRuntimeState();
         CreatureModifierManager.ResetRuntimeState();
@@ -1058,7 +1056,7 @@ internal static class CreatureManagerHumanoidStartPatch
 {
     private static void Postfix(Humanoid __instance)
     {
-        CreatureManagerRandomHairRuntime.Initialize(__instance);
+        CreatureAppearanceRuntime.Initialize(__instance);
         CreatureManagerCharacterLifecycle.ApplyLevelAndModifiers(__instance);
     }
 }
@@ -1069,7 +1067,7 @@ internal static class CreatureManagerHumanoidOnRagdollCreatedRandomHairPatch
     [HarmonyPriority(Priority.Last)]
     private static void Postfix(Humanoid __instance, Ragdoll ragdoll)
     {
-        CreatureManagerRandomHairRuntime.ApplyToRagdoll(__instance, ragdoll);
+        CreatureAppearanceRuntime.ApplyToRagdoll(__instance, ragdoll);
     }
 }
 
@@ -1886,33 +1884,15 @@ internal static class CreatureManagerCharacterModifierUpdatePatch
 {
     private static IEnumerable<MethodBase> TargetMethods()
     {
-        MethodInfo? customFixedUpdate = CreatureHarmonyTargetResolver.FindDeclared(
+        MethodInfo? method = CreatureHarmonyTargetResolver.FindDeclared(
             typeof(Character),
             "CustomFixedUpdate",
             "passive modifier updates",
-            new[] { typeof(float) },
-            warnIfMissing: false);
-        if (customFixedUpdate != null)
+            new[] { typeof(float) });
+        if (method != null)
         {
-            yield return customFixedUpdate;
-            yield break;
+            yield return method;
         }
-
-        MethodInfo? fixedUpdate = CreatureHarmonyTargetResolver.FindDeclared(
-            typeof(Character),
-            "FixedUpdate",
-            "passive modifier update fallback",
-            Type.EmptyTypes,
-            warnIfMissing: false);
-        if (fixedUpdate != null)
-        {
-            yield return fixedUpdate;
-            yield break;
-        }
-
-        CreatureManagerPlugin.Log.LogWarning(
-            "Could not find optional Harmony targets Character.CustomFixedUpdate(float) or Character.FixedUpdate(); " +
-            "passive modifier updates are disabled for this game version.");
     }
 
     private static void Postfix(Character __instance)

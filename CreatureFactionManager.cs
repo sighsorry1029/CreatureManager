@@ -17,12 +17,6 @@ internal static class CreatureFactionManager
     private static Dictionary<string, Character.Faction> RuntimeNameToFaction = new(StringComparer.OrdinalIgnoreCase);
     private static Dictionary<Character.Faction, string> FactionToName = new();
     private static Dictionary<Character.Faction, FactionData> FactionDataByFaction = new();
-    private static HashSet<Character.Faction> Aggravatable = new();
-
-    static CreatureFactionManager()
-    {
-        Load(DefaultFactionDefinitions());
-    }
 
     internal static bool Load(List<FactionDefinition> definitions)
     {
@@ -49,7 +43,6 @@ internal static class CreatureFactionManager
             RuntimeNameToFaction = snapshot.RuntimeNameToFaction;
             FactionToName = snapshot.FactionToName;
             FactionDataByFaction = snapshot.FactionDataByFaction;
-            Aggravatable = snapshot.Aggravatable;
         }
 
         RefreshLiveBaseAis();
@@ -154,7 +147,6 @@ internal static class CreatureFactionManager
         }
 
         Dictionary<Character.Faction, FactionData> data = new();
-        HashSet<Character.Faction> aggravatable = new();
         HashSet<Character.Faction> allFactions = displayNames.Keys.ToHashSet();
         for (int index = 0; index < definitions.Count; index++)
         {
@@ -205,13 +197,9 @@ internal static class CreatureFactionManager
                 alertedFriendly);
 
             data[faction] = factionData;
-            if (factionData.AggravatedFriendly != null)
-            {
-                aggravatable.Add(faction);
-            }
         }
 
-        snapshot = new FactionSnapshot(names, runtimeFactions, displayNames, data, aggravatable);
+        snapshot = new FactionSnapshot(names, runtimeFactions, displayNames, data);
         return errors.Count == 0;
     }
 
@@ -340,9 +328,9 @@ internal static class CreatureFactionManager
         lock (Sync)
         {
             Character.Faction faction = baseAi.m_character.m_faction;
-            if (FactionDataByFaction.ContainsKey(faction))
+            if (FactionDataByFaction.TryGetValue(faction, out FactionData data))
             {
-                baseAi.m_aggravatable = Aggravatable.Contains(faction);
+                baseAi.m_aggravatable = data.AggravatedFriendly != null;
             }
         }
     }
@@ -710,21 +698,18 @@ internal static class CreatureFactionManager
             Dictionary<string, Character.Faction> nameToFaction,
             Dictionary<string, Character.Faction> runtimeNameToFaction,
             Dictionary<Character.Faction, string> factionToName,
-            Dictionary<Character.Faction, FactionData> factionDataByFaction,
-            HashSet<Character.Faction> aggravatable)
+            Dictionary<Character.Faction, FactionData> factionDataByFaction)
         {
             NameToFaction = nameToFaction;
             RuntimeNameToFaction = runtimeNameToFaction;
             FactionToName = factionToName;
             FactionDataByFaction = factionDataByFaction;
-            Aggravatable = aggravatable;
         }
 
         public Dictionary<string, Character.Faction> NameToFaction { get; }
         public Dictionary<string, Character.Faction> RuntimeNameToFaction { get; }
         public Dictionary<Character.Faction, string> FactionToName { get; }
         public Dictionary<Character.Faction, FactionData> FactionDataByFaction { get; }
-        public HashSet<Character.Faction> Aggravatable { get; }
     }
 }
 
