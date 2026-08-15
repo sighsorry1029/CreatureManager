@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.9
+
+- Fix cached synchronized texture generations being committed successfully but reported as failed, ensuring the texture-ready refresh reapplies server PNGs to creature and ragdoll prefabs.
+- Suppress only the transient missing-texture warnings for server-manifest PNGs during the initial remote definition pass; genuine missing files, resource names, decode failures, and post-sync misses remain visible.
+
 ## 1.1.8
 
 - Synchronize server-owned, actively referenced creature PNG overrides through validated SHA-256 manifests, bounded chunk transfers, persistent client caching, and transactional last-known-good activation; hot reload reuses live texture objects while unsafe paths and invalid images are rejected.

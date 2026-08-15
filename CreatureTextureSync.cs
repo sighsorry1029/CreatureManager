@@ -409,7 +409,8 @@ internal static class CreatureTextureSync
         }
 
         string? completedRoot = null;
-        string? commitError = null;
+        string commitError = "";
+        bool commitFailed = false;
         lock (Sync)
         {
             PendingClientStage = stage;
@@ -418,13 +419,16 @@ internal static class CreatureTextureSync
                 if (!TryCommitClientStageLocked(stage, out completedRoot, out commitError))
                 {
                     PendingClientStage = null;
+                    commitFailed = true;
                 }
             }
         }
 
-        if (commitError != null)
+        if (commitFailed)
         {
-            error = commitError;
+            error = commitError.Length > 0
+                ? commitError
+                : "The synchronized texture generation could not be committed.";
             return false;
         }
 
@@ -497,6 +501,31 @@ internal static class CreatureTextureSync
         out string error)
     {
         return TryNormalizeAndValidateManifest(manifest, out normalized, out error);
+    }
+
+    internal static bool ManifestContainsFileTexture(ManifestData? manifest, string textureName)
+    {
+        if (manifest?.Files == null ||
+            !TryNormalizeLogicalName(
+                textureName,
+                requirePngExtension: false,
+                out string logicalName,
+                out _))
+        {
+            return false;
+        }
+
+        return manifest.Files.Any(entry =>
+            entry != null && entry.Name.Equals(logicalName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static bool IsClientManifestReady(string rootHash)
+    {
+        lock (Sync)
+        {
+            return PendingClientStage == null &&
+                   ActiveClientSet.RootHash.Equals(rootHash, StringComparison.Ordinal);
+        }
     }
 
     private static void RPC_TextureRequest(ZRpc rpc, ZPackage package)

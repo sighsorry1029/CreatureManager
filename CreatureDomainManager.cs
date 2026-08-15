@@ -59,6 +59,7 @@ internal static class CreatureDomainManager
     private static bool RemoteBundleReady;
     private static bool WatcherResetPending;
     private static DefinitionSnapshot ActiveSnapshot = new();
+    private static CreatureTextureSync.ManifestData? ApplyingRemoteTextureManifest;
     private static readonly Dictionary<string, Vector3> EquipmentVisualScales = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, GameObject[]> RandomHairPrefabsByCreature = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, CreatureAppearanceRuntimeState> AppearanceByCreature = new(StringComparer.OrdinalIgnoreCase);
@@ -1221,6 +1222,27 @@ internal static class CreatureDomainManager
     }
 
     private static bool ApplyDefinitionsToGameData(
+        DefinitionSnapshot snapshot,
+        bool cloneTransactionPrepared)
+    {
+        CreatureTextureSync.ManifestData? previousApplyingManifest = ApplyingRemoteTextureManifest;
+        bool awaitingRemoteTextures = ConfigSync?.IsSourceOfTruth == false &&
+                                      !CreatureTextureSync.IsClientManifestReady(
+                                          snapshot.TextureManifest.RootHash);
+        ApplyingRemoteTextureManifest = awaitingRemoteTextures
+            ? snapshot.TextureManifest
+            : null;
+        try
+        {
+            return ApplyDefinitionsToGameDataCore(snapshot, cloneTransactionPrepared);
+        }
+        finally
+        {
+            ApplyingRemoteTextureManifest = previousApplyingManifest;
+        }
+    }
+
+    private static bool ApplyDefinitionsToGameDataCore(
         DefinitionSnapshot snapshot,
         bool cloneTransactionPrepared)
     {
@@ -4066,7 +4088,13 @@ internal static class CreatureDomainManager
         Texture? texture = CreatureTextureRegistry.GetTexture(textureName);
         if (texture == null)
         {
-            CreatureManagerPlugin.Log.LogWarning($"Creature '{prefab.name}' texture '{textureName}' was not found.");
+            if (!CreatureTextureSync.ManifestContainsFileTexture(
+                    ApplyingRemoteTextureManifest,
+                    textureName))
+            {
+                CreatureManagerPlugin.Log.LogWarning($"Creature '{prefab.name}' texture '{textureName}' was not found.");
+            }
+
             return null;
         }
 
