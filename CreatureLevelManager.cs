@@ -1411,8 +1411,7 @@ internal static class CreatureLevelManager
 
     internal static bool IsDungeonCreature(Character character)
     {
-        Transform transform = character.transform;
-        return transform.localPosition.y >= 4500f || transform.position.y >= 4500f;
+        return Character.InInterior(character.transform);
     }
 
     private static void ApplyLevelEffectsVisualState(LevelEffects levelEffects, CreatureLevelEffectsState state, int level)

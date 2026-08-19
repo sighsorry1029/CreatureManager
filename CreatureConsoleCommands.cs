@@ -657,7 +657,7 @@ internal static class CreatureConsoleCommands
 
         forward.Normalize();
         Vector3 position = playerPosition + forward * 3f;
-        if (position.y >= 4000f)
+        if (Character.InInterior(position))
         {
             return position + Vector3.up * 0.5f;
         }

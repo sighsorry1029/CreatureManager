@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.10
+
+- Fix natural and Omen-triggered dungeon Enforcers on dedicated servers by using nearby server-owned CreatureSpawner or SpawnArea ZDOs when the remote dungeon scene is unavailable, while retaining full floor, clearance, and path validation in loaded scenes.
+- Align Karma realms, administrator spawn placement, and dungeon level/Modifier scale handling with Valheim's `Character.InInterior` boundary so lower interior layers no longer fall through to outdoor Karma and spawn rules.
+
 ## 1.1.9
 
 - Fix cached synchronized texture generations being committed successfully but reported as failed, ensuring the texture-ready refresh reapplies server PNGs to creature and ragdoll prefabs.

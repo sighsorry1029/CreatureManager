@@ -157,6 +157,7 @@ internal static class CreatureKarmaManager
     private static float NextSectorPruneTime;
     private static float NextSectorCapacityWarningTime;
     private static readonly Dictionary<string, List<Vector3>> DungeonComponentPositionCache = new(StringComparer.Ordinal);
+    private static readonly List<ZDO> DungeonSpawnZdoBuffer = new();
     private static readonly List<Vector3> DungeonSpawnPath = new();
     private static readonly int DungeonSpawnStaticMask = LayerMask.GetMask(
         "Default",
@@ -367,6 +368,7 @@ internal static class CreatureKarmaManager
         ServerProcessedCreatureDeaths.Clear();
         StaleProcessedCreatureDeaths.Clear();
         DungeonComponentPositionCache.Clear();
+        DungeonSpawnZdoBuffer.Clear();
         DungeonSpawnPath.Clear();
         // Registration follows the ZRoutedRpc instance lifetime. It has no unregister API and Register uses Dictionary.Add.
         NextSummonCheckTime = 0f;
@@ -3065,6 +3067,14 @@ AshLands:
     {
         if (IsLikelyDungeonPosition(playerPosition))
         {
+            if (ZoneSystem.instance == null || !ZoneSystem.instance.IsZoneLoaded(playerPosition))
+            {
+                return TryFindDungeonZdoAnchorPosition(
+                    playerPosition,
+                    Settings.Enforcer.DungeonSpawnerSearchRadius,
+                    out position);
+            }
+
             if (TryFindValidDungeonComponentPosition<CreatureSpawner>(
                     prefab,
                     playerPosition,
@@ -3121,6 +3131,74 @@ AshLands:
 
         position = candidate;
         return true;
+    }
+
+    private static bool TryFindDungeonZdoAnchorPosition(
+        Vector3 origin,
+        float radius,
+        out Vector3 position)
+    {
+        position = origin;
+        if (ZDOMan.instance == null || ZNetScene.instance == null)
+        {
+            return false;
+        }
+
+        float searchRadius = Mathf.Max(0f, radius);
+        float searchRadiusSquared = searchRadius * searchRadius;
+        float bestDistanceSquared = float.PositiveInfinity;
+        bool found = false;
+        DungeonSpawnZdoBuffer.Clear();
+        try
+        {
+            Vector2i originZone = ZoneSystem.GetZone(origin);
+            ZDOMan.instance.FindSectorObjects(originZone, 1, 0, DungeonSpawnZdoBuffer);
+            foreach (ZDO zdo in DungeonSpawnZdoBuffer)
+            {
+                if (zdo == null)
+                {
+                    continue;
+                }
+
+                Vector3 candidate = zdo.GetPosition();
+                float deltaX = candidate.x - origin.x;
+                float deltaZ = candidate.z - origin.z;
+                float distanceSquared = deltaX * deltaX + deltaZ * deltaZ;
+                if (!IsFinite(candidate) ||
+                    !IsLikelyDungeonPosition(candidate) ||
+                    Mathf.Abs(candidate.y - origin.y) > DungeonComponentVerticalTolerance ||
+                    distanceSquared > searchRadiusSquared ||
+                    distanceSquared >= bestDistanceSquared)
+                {
+                    continue;
+                }
+
+                GameObject? anchorPrefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+                if (anchorPrefab == null ||
+                    (anchorPrefab.GetComponent<CreatureSpawner>() == null &&
+                     anchorPrefab.GetComponent<SpawnArea>() == null))
+                {
+                    continue;
+                }
+
+                bestDistanceSquared = distanceSquared;
+                position = candidate;
+                found = true;
+            }
+
+            return found;
+        }
+        catch (Exception exception)
+        {
+            CreatureManagerPlugin.Log.LogDebug(
+                $"Dungeon Enforcer ZDO anchor lookup failed near {origin}: {exception.Message}");
+            position = origin;
+            return false;
+        }
+        finally
+        {
+            DungeonSpawnZdoBuffer.Clear();
+        }
     }
 
     private static bool TryFindValidDungeonComponentPosition<T>(
@@ -3704,7 +3782,7 @@ AshLands:
 
     private static bool IsLikelyDungeonPosition(Vector3 position)
     {
-        return position.y >= 4500f;
+        return Character.InInterior(position);
     }
 
     private static KarmaRealm GetKarmaRealm(Vector3 position)
