@@ -1046,7 +1046,6 @@ internal static class CreatureManagerCharacterStartPatch
 {
     private static void Postfix(Character __instance)
     {
-        CreatureKarmaManager.RefreshStoredEnforcerLoot(__instance);
         CreatureManagerCharacterLifecycle.ApplyLevelAndModifiers(__instance);
     }
 }
@@ -1869,6 +1868,7 @@ internal static class CreatureManagerCharacterOnDeathPatch
 {
     private static void Prefix(Character __instance)
     {
+        CreatureKarmaManager.DropStoredEnforcerLoot(__instance);
         CreatureModifierManager.FinalDeathAttribution attribution =
             CreatureModifierManager.CaptureFinalDeathAttribution(__instance);
         CreatureModifierManager.HandleDeath(__instance, attribution);

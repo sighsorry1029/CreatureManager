@@ -33,6 +33,7 @@ internal static class CreatureKarmaManager
     private const string EnforcerIsBossKey = "CreatureManager_KarmaEnforcerIsBoss";
     private const string EnforcerBossHudKey = "CreatureManager_KarmaEnforcerBossHud";
     private const string EnforcerLootKey = "CreatureManager_KarmaEnforcerLoot";
+    private const string EnforcerLootDroppedKey = "CreatureManager_KarmaEnforcerLootDropped";
     private const string EnforcerPresenceAnchorStoredKey = "CreatureManager_KarmaEnforcerPresenceAnchorStored";
     private const string EnforcerPresenceInteriorKey = "CreatureManager_KarmaEnforcerPresenceInterior";
     private const string EnforcerPresenceZoneXKey = "CreatureManager_KarmaEnforcerPresenceZoneX";
@@ -122,7 +123,6 @@ internal static class CreatureKarmaManager
     private static readonly HashSet<int> RuntimeSummonedCreatureIds = new();
     private static readonly Dictionary<int, ResolvedEnforcerSettings> RuntimeEnforcerSettings = new();
     private static readonly Dictionary<int, List<EnforcerLootDefinition>> RuntimeEnforcerLoot = new();
-    private static readonly HashSet<int> AppliedEnforcerLootIds = new();
     private static readonly HashSet<ZDOID> TrackedEnforcerZdoIds = new();
     private static readonly Dictionary<ZDOID, float> EnforcerNoPlayerSince = new();
     private static readonly List<EnforcerPlayerPresence> EnforcerPlayerPresenceBuffer = new();
@@ -326,7 +326,6 @@ internal static class CreatureKarmaManager
         RuntimeSummonedCreatureIds.Remove(id);
         RuntimeEnforcerSettings.Remove(id);
         RuntimeEnforcerLoot.Remove(id);
-        AppliedEnforcerLootIds.Remove(id);
         ZDOID characterId = character.GetZDOID();
         if (!characterId.IsNone())
         {
@@ -352,7 +351,6 @@ internal static class CreatureKarmaManager
         RuntimeSummonedCreatureIds.Clear();
         RuntimeEnforcerSettings.Clear();
         RuntimeEnforcerLoot.Clear();
-        AppliedEnforcerLootIds.Clear();
         TrackedEnforcerZdoIds.Clear();
         EnforcerNoPlayerSince.Clear();
         EnforcerPlayerPresenceBuffer.Clear();
@@ -2381,21 +2379,6 @@ AshLands:
         return AddKarma(position, amount);
     }
 
-    internal static void RefreshStoredEnforcerLoot(Character character)
-    {
-        if (character == null || AppliedEnforcerLootIds.Contains(character.GetInstanceID()) || !TryGetZdo(character, out ZDO zdo))
-        {
-            return;
-        }
-
-        if (!zdo.GetBool(EnforcerKey, false))
-        {
-            return;
-        }
-
-        ApplyEnforcerLoot(character, DeserializeEnforcerLoot(zdo.GetString(EnforcerLootKey, "")));
-    }
-
     internal static bool IsBossHudOnly(Character character)
     {
         if (character == null)
@@ -3532,7 +3515,6 @@ AshLands:
             if (markEnforcer)
             {
                 MarkSummonedEnforcer(character, zdo, nameSuffix, settings, loot);
-                ApplyEnforcerLoot(character, loot);
             }
             else
             {
@@ -3583,40 +3565,71 @@ AshLands:
         }
     }
 
-    private static void ApplyEnforcerLoot(Character character, IReadOnlyList<EnforcerLootDefinition>? loot)
+    internal static void DropStoredEnforcerLoot(Character character)
     {
-        if (!AppliedEnforcerLootIds.Add(character.GetInstanceID()) || loot == null || loot.Count == 0 || ZNetScene.instance == null)
+        try
+        {
+            DropStoredEnforcerLootCore(character);
+        }
+        catch (Exception ex)
+        {
+            // Loot compatibility must never interrupt Character.OnDeath or vanilla drops.
+            CreatureManagerPlugin.Log.LogWarning($"Failed to drop Karma Enforcer loot: {ex.Message}");
+        }
+    }
+
+    private static void DropStoredEnforcerLootCore(Character character)
+    {
+        if (character == null || character.IsPlayer())
         {
             return;
         }
 
-        CharacterDrop dropTable = character.GetComponent<CharacterDrop>() ?? character.gameObject.AddComponent<CharacterDrop>();
-        List<CharacterDrop.Drop> drops = new();
-        if (dropTable.m_drops != null)
+        ZNetView? nview = character.m_nview;
+        if (nview == null || !nview.IsValid() || !nview.IsOwner())
         {
-            foreach (CharacterDrop.Drop drop in dropTable.m_drops)
-            {
-                if (drop == null)
-                {
-                    continue;
-                }
-
-                drops.Add(new CharacterDrop.Drop
-                {
-                    m_prefab = drop.m_prefab,
-                    m_amountMin = drop.m_amountMin,
-                    m_amountMax = drop.m_amountMax,
-                    m_chance = drop.m_chance,
-                    m_onePerPlayer = drop.m_onePerPlayer,
-                    m_levelMultiplier = drop.m_levelMultiplier,
-                    m_dontScale = drop.m_dontScale
-                });
-            }
+            return;
         }
 
-        foreach (EnforcerLootDefinition reward in loot)
+        ZDO zdo = nview.GetZDO();
+        if (zdo == null ||
+            !zdo.GetBool(EnforcerKey, false) ||
+            zdo.GetBool(EnforcerLootDroppedKey, false))
         {
-            GameObject itemPrefab = ZNetScene.instance.GetPrefab(reward.Prefab);
+            return;
+        }
+
+        string serializedLoot = zdo.GetString(EnforcerLootKey, "");
+        if (string.IsNullOrEmpty(serializedLoot) &&
+            RuntimeEnforcerLoot.TryGetValue(character.GetInstanceID(), out List<EnforcerLootDefinition> runtimeLoot) &&
+            runtimeLoot.Count > 0)
+        {
+            StoreEnforcerLoot(zdo, runtimeLoot);
+            serializedLoot = zdo.GetString(EnforcerLootKey, "");
+        }
+
+        if (string.IsNullOrEmpty(serializedLoot))
+        {
+            return;
+        }
+
+        List<EnforcerLootDefinition> rewards = DeserializeEnforcerLoot(serializedLoot);
+        if (rewards.Count == 0)
+        {
+            zdo.Set(EnforcerLootDroppedKey, true);
+            return;
+        }
+
+        ZNetScene? scene = ZNetScene.instance;
+        if (scene == null)
+        {
+            return;
+        }
+
+        List<KeyValuePair<GameObject, int>> drops = new(rewards.Count);
+        foreach (EnforcerLootDefinition reward in rewards)
+        {
+            GameObject itemPrefab = scene.GetPrefab(reward.Prefab);
             if (itemPrefab == null)
             {
                 CreatureManagerPlugin.Log.LogWarning($"Karma Enforcer loot skipped: missing prefab '{reward.Prefab}'.");
@@ -3629,25 +3642,38 @@ AshLands:
                 continue;
             }
 
-            int remaining = reward.Amount;
-            while (remaining > 0)
-            {
-                int amount = Math.Min(100, remaining);
-                drops.Add(new CharacterDrop.Drop
-                {
-                    m_prefab = itemPrefab,
-                    m_amountMin = amount,
-                    m_amountMax = amount,
-                    m_chance = 1f,
-                    m_onePerPlayer = false,
-                    m_levelMultiplier = false,
-                    m_dontScale = true
-                });
-                remaining -= amount;
-            }
+            drops.Add(new KeyValuePair<GameObject, int>(itemPrefab, reward.Amount));
         }
 
-        dropTable.m_drops = drops;
+        if (drops.Count == 0)
+        {
+            zdo.Set(EnforcerLootDroppedKey, true);
+            return;
+        }
+
+        CharacterDrop? dropTable = character.GetComponent<CharacterDrop>();
+        Vector3 centerPosition = character.GetCenterPoint();
+        if (dropTable != null)
+        {
+            centerPosition += dropTable.transform.TransformVector(dropTable.m_spawnOffset);
+        }
+
+        if (!IsFinite(centerPosition))
+        {
+            centerPosition = character.transform.position;
+        }
+
+        if (!IsFinite(centerPosition))
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"Karma Enforcer loot skipped for '{GetPrefabName(character)}': invalid death position.");
+            return;
+        }
+
+        // Mark before spawning. If another mod throws after partially creating the items,
+        // retrying this death callback would duplicate an unknown subset of the reward.
+        zdo.Set(EnforcerLootDroppedKey, true);
+        CharacterDrop.DropItems(drops, centerPosition, 0.5f);
     }
 
     private static void StoreEnforcerLoot(ZDO zdo, IReadOnlyList<EnforcerLootDefinition>? loot)

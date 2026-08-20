@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.11
+
+- Deliver every configured Enforcer `loot` reward once from the owning peer at death instead of mutating the creature's `CharacterDrop` table, preventing DropNSpawn table replacement and custom death handling from discarding guaranteed rewards while retaining its global stack behavior.
+
 ## 1.1.10
 
 - Fix natural and Omen-triggered dungeon Enforcers on dedicated servers by using nearby server-owned CreatureSpawner or SpawnArea ZDOs when the remote dungeon scene is unavailable, while retaining full floor, clearance, and path validation in loaded scenes.
