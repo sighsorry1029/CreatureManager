@@ -6,8 +6,8 @@ internal static class CreatureLocalization
 {
     internal static string Localize(string key, string fallback)
     {
-        string normalizedKey = key.StartsWith("$", StringComparison.Ordinal) ? key.Substring(1) : key;
-        string token = "$" + normalizedKey;
+        bool hasTokenPrefix = key.StartsWith("$", StringComparison.Ordinal);
+        string token = hasTokenPrefix ? key : "$" + key;
         Localization? localization = Localization.instance;
         if (localization == null)
         {
@@ -17,11 +17,16 @@ internal static class CreatureLocalization
         try
         {
             string localized = localization.Localize(token);
-            return string.IsNullOrEmpty(localized) ||
-                   string.Equals(localized, token, StringComparison.Ordinal) ||
-                   string.Equals(localized, normalizedKey, StringComparison.Ordinal)
-                ? fallback
-                : localized;
+            if (string.IsNullOrEmpty(localized) || string.Equals(localized, token, StringComparison.Ordinal))
+            {
+                return fallback;
+            }
+
+            bool returnedKey = hasTokenPrefix
+                ? localized.Length == key.Length - 1 &&
+                  string.CompareOrdinal(localized, 0, key, 1, localized.Length) == 0
+                : string.Equals(localized, key, StringComparison.Ordinal);
+            return returnedKey ? fallback : localized;
         }
         catch
         {

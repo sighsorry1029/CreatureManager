@@ -391,19 +391,12 @@ internal static class CreatureDomainManager
     {
         CreaturePrefabBaseline.RestoreAllAndClear();
         DisposeTextureOverrides();
-        EquipmentVisualScales.Clear();
-        RandomHairPrefabsByCreature.Clear();
-        AppearanceByCreature.Clear();
+        ClearActiveDefinitionSideState();
         InheritedAppearanceByClone.Clear();
-        AppearanceByRagdollPrefab.Clear();
-        ManagedRagdollPrefabs.Clear();
         RagdollCloneSources.Clear();
         OriginalRagdollScales.Clear();
-        RagdollScalesByPrefab.Clear();
         InheritedRagdollScales.Clear();
-        RagdollTexturesByPrefab.Clear();
         InheritedRagdollTextures.Clear();
-        AppliedRagdollTextureVisuals.Clear();
         SuccessfullyAppliedDefinitionTargets.Clear();
         ActiveDefinitionsApplied = false;
         CreaturePrefabRegistry.ResetOwnedClones();

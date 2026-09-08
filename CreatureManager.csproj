@@ -14,6 +14,7 @@
         <FileAlignment>512</FileAlignment>
         <LangVersion>12.0</LangVersion>
         <Nullable>enable</Nullable>
+        <DeployToGame Condition="'$(DeployToGame)' == ''">false</DeployToGame>
         <DeployToValheim Condition="'$(DeployToValheim)' == ''">false</DeployToValheim>
         <BuildPackages Condition="'$(BuildPackages)' == '' And '$(Configuration)' == 'Release'">true</BuildPackages>
         <BuildPackages Condition="'$(BuildPackages)' == ''">false</BuildPackages>
@@ -64,6 +65,9 @@
             </PropertyGroup>
         </When>
     </Choose>
+    <PropertyGroup>
+        <GamePluginDirectory Condition="'$(GamePluginDirectory)' == ''">$(BepInExPath)\plugins</GamePluginDirectory>
+    </PropertyGroup>
     <ItemGroup>
         <Reference Include="0Harmony">
             <HintPath>$(BepInExPath)\core\0Harmony.dll</HintPath>
@@ -203,6 +207,13 @@
         <PackageReference Include="YamlDotNet" Version="16.3.0" GeneratePathProperty="true" />
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
+    <Target Name="DeployGamePlugin" AfterTargets="ILRepacker" Condition="'$(DeployToGame)' == 'true'">
+        <Error Text="Final plugin DLL was not produced: $(TargetPath)" Condition="!Exists('$(TargetPath)')"/>
+        <Error Text="DeployToGame=true requires an existing game plugin directory: $(GamePluginDirectory)"
+               Condition="!Exists('$(GamePluginDirectory)')"/>
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GamePluginDirectory)" OverwriteReadOnlyFiles="true"/>
+        <Message Text="Deployed final plugin DLL to $(GamePluginDirectory)\$(TargetFileName)" Importance="high"/>
+    </Target>
     <Target Name="GetAssemblyVersion" AfterTargets="ILRepacker"
             Condition="'$(DeployToValheim)' == 'true' Or '$(BuildPackages)' == 'true'">
         <GetAssemblyIdentity AssemblyFiles="$(TargetPath)">

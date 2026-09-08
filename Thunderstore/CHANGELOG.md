@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.12
+
+- Reuse unchanged resistance HUD text and prefixed localization tokens to reduce allocations while continuing to reflect live resistance and translation changes.
+- Skip server texture-transfer history scans until an entry can expire, preserving duplicate-request suppression and transfer behavior.
+- Remove unused Compendium description calculations during icon placement, reuse visual-state cleanup, and simplify Karma configuration staging and repeated player checks.
+- Add opt-in `DeployToGame=true` builds that copy only the final merged plugin DLL into the game's BepInEx plugins directory.
+
 ## 1.1.11
 
 - Deliver every configured Enforcer `loot` reward once from the owning peer at death instead of mutating the creature's `CharacterDrop` table, preventing DropNSpawn table replacement and custom death handling from discarding guaranteed rewards while retaining its global stack behavior.

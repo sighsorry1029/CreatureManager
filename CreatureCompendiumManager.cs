@@ -56,17 +56,13 @@ internal static class CreatureCompendiumManager
             return;
         }
 
-        List<CompendiumModifierEntry> entries = BuildEntries();
-        if (entries.Count == 0)
+        Dictionary<string, ModifierDefinition> globalModifiers = CreatureLevelManager.GetGlobalModifierDefinitions();
+        if (globalModifiers.Count == 0)
         {
             return;
         }
 
-        Dictionary<string, CompendiumModifierEntry> entriesByKey = new(StringComparer.OrdinalIgnoreCase);
-        foreach (CompendiumModifierEntry entry in entries)
-        {
-            entriesByKey[entry.ModifierKey] = entry;
-        }
+        IReadOnlyList<string> modifierKeys = CreatureModifierManager.GetKnownModifierKeys();
 
         TMP_Text textArea = dialog.m_textArea;
         RectTransform? content = textArea.transform.parent as RectTransform;
@@ -84,15 +80,32 @@ internal static class CreatureCompendiumManager
             TMP_LinkInfo link = textInfo.linkInfo[linkIndex];
             string linkId = link.GetLinkID();
             if (!linkId.StartsWith(IconLinkPrefix, StringComparison.Ordinal) ||
-                !entriesByKey.TryGetValue(linkId.Substring(IconLinkPrefix.Length), out CompendiumModifierEntry entry) ||
                 link.linkTextfirstCharacterIndex < 0 ||
                 link.linkTextfirstCharacterIndex >= textInfo.characterCount)
             {
                 continue;
             }
 
+            string linkedModifier = linkId.Substring(IconLinkPrefix.Length);
+            string? modifierKey = null;
+            for (int modifierIndex = 0; modifierIndex < modifierKeys.Count; modifierIndex++)
+            {
+                if (string.Equals(modifierKeys[modifierIndex], linkedModifier, StringComparison.OrdinalIgnoreCase))
+                {
+                    modifierKey = modifierKeys[modifierIndex];
+                    break;
+                }
+            }
+
+            if (modifierKey == null ||
+                !globalModifiers.ContainsKey(modifierKey) ||
+                !CreatureModifierManager.TryGetModifierSprite(modifierKey, out Sprite sprite))
+            {
+                continue;
+            }
+
             TMP_CharacterInfo character = textInfo.characterInfo[link.linkTextfirstCharacterIndex];
-            AttachBodyIcon(content, textArea.rectTransform, character, entry.Sprite, entry.ModifierKey);
+            AttachBodyIcon(content, textArea.rectTransform, character, sprite, modifierKey);
         }
     }
 

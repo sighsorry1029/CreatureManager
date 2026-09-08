@@ -537,12 +537,7 @@ AshLands:
         parsed = null!;
         try
         {
-            KarmaSettings loaded = string.IsNullOrWhiteSpace(yaml) ? KarmaSettings.Default() : ReadSettings(yaml, source);
-            parsed = new ParsedConfiguration(() =>
-            {
-                Settings = loaded;
-                ResetEnforcerBootstrapScan();
-            });
+            parsed = new ParsedConfiguration(yaml, source);
             return true;
         }
         catch (Exception ex)
@@ -1786,7 +1781,6 @@ AshLands:
         if (localPlayer != null &&
             !localPlayer.IsDead() &&
             localZdo != null &&
-            IsPlayerCharacterZdo(localZdo) &&
             TryCreateConnectedPlayerContext(localZdo.GetOwner(), localZdo, out ConnectedPlayerContext localContext) &&
             addedCharacterIds.Add(localContext.CharacterId))
         {
@@ -1812,7 +1806,6 @@ AshLands:
         ZDO zdo = ZDOMan.instance.GetZDO(peer.m_characterID);
         return zdo != null &&
                zdo.GetOwner() == peer.m_uid &&
-               IsPlayerCharacterZdo(zdo) &&
                TryCreateConnectedPlayerContext(peer.m_uid, zdo, out player);
     }
 
@@ -5426,16 +5419,17 @@ AshLands:
 
     internal sealed class ParsedConfiguration
     {
-        private readonly Action _commit;
+        private readonly KarmaSettings _settings;
 
-        internal ParsedConfiguration(Action commit)
+        internal ParsedConfiguration(string yaml, string source)
         {
-            _commit = commit;
+            _settings = string.IsNullOrWhiteSpace(yaml) ? KarmaSettings.Default() : ReadSettings(yaml, source);
         }
 
         internal void Commit()
         {
-            _commit();
+            Settings = _settings;
+            ResetEnforcerBootstrapScan();
         }
     }
 

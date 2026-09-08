@@ -937,6 +937,9 @@ internal static class CreatureModifierManager
         internal RectTransform? BossContent;
         internal bool ResistanceTextSearched;
         internal TextMeshProUGUI? ResistanceText;
+        internal string?[]? ResistanceLabels;
+        internal string ResistanceContent = "";
+        internal int ResistanceLineCount;
     }
 
     private readonly struct ReapingSettings
@@ -9760,19 +9763,26 @@ internal static class CreatureModifierManager
         float range = Mathf.Clamp(CreatureManagerPlugin.NormalCreatureNameplateRange.Value, 10f, 50f);
         if (CreatureManagerPlugin.ShowSneakHoverResistances?.Value != CreatureManagerPlugin.Toggle.On ||
             character.IsTamed() ||
-            !ShouldShowResistanceHud(character, range) ||
-            !TryBuildResistanceText(GetDisplayedDamageModifiers(character), out string resistanceText, out int lineCount))
+            !ShouldShowResistanceHud(character, range))
         {
             SetResistanceTextActive(hud, false);
             return;
         }
 
-        TextMeshProUGUI? text = EnsureResistanceText(hud);
-        if (text == null)
+        RectTransform? parent = GetResistanceHudParent(hud);
+        if (parent == null)
         {
             return;
         }
 
+        HudContentState state = HudContentStates.GetValue(parent, _ => new HudContentState());
+        if (!TryBuildResistanceText(state, GetDisplayedDamageModifiers(character), out string resistanceText, out int lineCount))
+        {
+            SetResistanceTextActive(hud, false);
+            return;
+        }
+
+        TextMeshProUGUI text = EnsureResistanceText(hud, parent, state);
         text.text = resistanceText;
         PositionResistanceText(text.rectTransform, hud, lineCount);
         text.gameObject.SetActive(true);
@@ -9799,57 +9809,88 @@ internal static class CreatureModifierManager
         return modifiers;
     }
 
-    private static bool TryBuildResistanceText(HitData.DamageModifiers modifiers, out string text, out int lineCount)
+    private static bool TryBuildResistanceText(
+        HudContentState state,
+        HitData.DamageModifiers modifiers,
+        out string text,
+        out int lineCount)
     {
-        StringBuilder builder = new();
-        lineCount = 0;
-        foreach ((string key, HitData.DamageModifier value) in EnumerateDamageModifiers(modifiers))
+        string?[] labels = state.ResistanceLabels ??= new string?[20];
+        // Compare resolved labels so same-language reloads and other mods' localization changes stay live.
+        bool changed = UpdateResistanceLabels(labels, 0, "$cm_damage_blunt", "blunt", modifiers.m_blunt);
+        changed |= UpdateResistanceLabels(labels, 2, "$cm_damage_slash", "slash", modifiers.m_slash);
+        changed |= UpdateResistanceLabels(labels, 4, "$cm_damage_pierce", "pierce", modifiers.m_pierce);
+        changed |= UpdateResistanceLabels(labels, 6, "$cm_damage_chop", "chop", modifiers.m_chop);
+        changed |= UpdateResistanceLabels(labels, 8, "$cm_damage_pickaxe", "pickaxe", modifiers.m_pickaxe);
+        changed |= UpdateResistanceLabels(labels, 10, "$cm_damage_fire", "fire", modifiers.m_fire);
+        changed |= UpdateResistanceLabels(labels, 12, "$cm_damage_frost", "frost", modifiers.m_frost);
+        changed |= UpdateResistanceLabels(labels, 14, "$cm_damage_lightning", "lightning", modifiers.m_lightning);
+        changed |= UpdateResistanceLabels(labels, 16, "$cm_damage_poison", "poison", modifiers.m_poison);
+        changed |= UpdateResistanceLabels(labels, 18, "$cm_damage_spirit", "spirit", modifiers.m_spirit);
+        if (changed)
         {
-            if (value == HitData.DamageModifier.Normal || value == HitData.DamageModifier.Ignore)
+            StringBuilder builder = new();
+            state.ResistanceLineCount = 0;
+            for (int index = 0; index < labels.Length; index += 2)
             {
-                continue;
+                if (labels[index] == null)
+                {
+                    continue;
+                }
+
+                if (builder.Length > 0)
+                {
+                    builder.AppendLine();
+                }
+
+                builder.Append(labels[index]);
+                builder.Append(": ");
+                builder.Append(labels[index + 1]);
+                state.ResistanceLineCount++;
             }
 
-            if (builder.Length > 0)
-            {
-                builder.AppendLine();
-            }
-
-            builder.Append(CreatureLocalization.Localize($"cm_damage_{key}", key));
-            builder.Append(": ");
-            builder.Append(GetLocalizedDamageModifier(value));
-            lineCount++;
+            state.ResistanceContent = builder.ToString();
         }
 
-        text = builder.ToString();
+        text = state.ResistanceContent;
+        lineCount = state.ResistanceLineCount;
         return lineCount > 0;
+    }
+
+    private static bool UpdateResistanceLabels(
+        string?[] labels,
+        int index,
+        string damageToken,
+        string damageFallback,
+        HitData.DamageModifier modifier)
+    {
+        bool visible = modifier is not (HitData.DamageModifier.Normal or HitData.DamageModifier.Ignore);
+        string? damageLabel = visible ? CreatureLocalization.Localize(damageToken, damageFallback) : null;
+        string? modifierLabel = visible ? GetLocalizedDamageModifier(modifier) : null;
+        if (string.Equals(labels[index], damageLabel, StringComparison.Ordinal) &&
+            string.Equals(labels[index + 1], modifierLabel, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        labels[index] = damageLabel;
+        labels[index + 1] = modifierLabel;
+        return true;
     }
 
     private static string GetLocalizedDamageModifier(HitData.DamageModifier modifier)
     {
         return modifier switch
         {
-            HitData.DamageModifier.Weak => CreatureLocalization.Localize("cm_resistance_weak", "Weak"),
-            HitData.DamageModifier.VeryWeak => CreatureLocalization.Localize("cm_resistance_very_weak", "VeryWeak"),
-            HitData.DamageModifier.Resistant => CreatureLocalization.Localize("cm_resistance_resistant", "Resistant"),
-            HitData.DamageModifier.VeryResistant => CreatureLocalization.Localize("cm_resistance_very_resistant", "VeryResistant"),
-            HitData.DamageModifier.Immune => CreatureLocalization.Localize("cm_resistance_immune", "Immune"),
+            HitData.DamageModifier.Weak => CreatureLocalization.Localize("$cm_resistance_weak", "Weak"),
+            HitData.DamageModifier.VeryWeak => CreatureLocalization.Localize("$cm_resistance_very_weak", "VeryWeak"),
+            HitData.DamageModifier.Resistant => CreatureLocalization.Localize("$cm_resistance_resistant", "Resistant"),
+            HitData.DamageModifier.VeryResistant => CreatureLocalization.Localize("$cm_resistance_very_resistant", "VeryResistant"),
+            HitData.DamageModifier.Immune => CreatureLocalization.Localize("$cm_resistance_immune", "Immune"),
+            HitData.DamageModifier.SlightlyResistant => nameof(HitData.DamageModifier.SlightlyResistant),
+            HitData.DamageModifier.SlightlyWeak => nameof(HitData.DamageModifier.SlightlyWeak),
             _ => modifier.ToString()
         };
-    }
-
-    private static IEnumerable<(string Key, HitData.DamageModifier Value)> EnumerateDamageModifiers(HitData.DamageModifiers modifiers)
-    {
-        yield return ("blunt", modifiers.m_blunt);
-        yield return ("slash", modifiers.m_slash);
-        yield return ("pierce", modifiers.m_pierce);
-        yield return ("chop", modifiers.m_chop);
-        yield return ("pickaxe", modifiers.m_pickaxe);
-        yield return ("fire", modifiers.m_fire);
-        yield return ("frost", modifiers.m_frost);
-        yield return ("lightning", modifiers.m_lightning);
-        yield return ("poison", modifiers.m_poison);
-        yield return ("spirit", modifiers.m_spirit);
     }
 
     private static bool ShouldShowResistanceHud(Character character, float range)
@@ -9994,15 +10035,8 @@ internal static class CreatureModifierManager
         return CachedHoveredCharacter;
     }
 
-    private static TextMeshProUGUI? EnsureResistanceText(EnemyHud.HudData hud)
+    private static TextMeshProUGUI EnsureResistanceText(EnemyHud.HudData hud, RectTransform parent, HudContentState state)
     {
-        RectTransform? parent = GetResistanceHudParent(hud);
-        if (parent == null)
-        {
-            return null;
-        }
-
-        HudContentState state = HudContentStates.GetValue(parent, _ => new HudContentState());
         if (!state.ResistanceTextSearched)
         {
             state.ResistanceTextSearched = true;

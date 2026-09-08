@@ -41,6 +41,7 @@ internal static class CreatureTextureSync
     private static readonly HashSet<string> QueuedTransfers = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, int> RemainingTransferChunks = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, DateTime> RecentlyServed = new(StringComparer.Ordinal);
+    private static DateTime NextServeHistoryExpiryUtc = DateTime.MaxValue;
 
     private static readonly string RequestRpc = CreatureManagerPlugin.ModGUID + ".TextureSync.Request.v1";
     private static readonly string ChunkRpc = CreatureManagerPlugin.ModGUID + ".TextureSync.Chunk.v1";
@@ -1542,12 +1543,41 @@ internal static class CreatureTextureSync
 
     private static void PruneServeHistory()
     {
-        DateTime cutoff = DateTime.UtcNow.Subtract(ServeHistoryLifetime);
+        DateTime now = DateTime.UtcNow;
         lock (Sync)
         {
-            foreach (string key in RecentlyServed.Where(pair => pair.Value < cutoff).Select(pair => pair.Key).ToArray())
+            // The request handler checks DuplicateServeDelay itself. Only scan this
+            // retention history when an entry can actually have expired.
+            if (RecentlyServed.Count == 0 || now <= NextServeHistoryExpiryUtc)
             {
-                RecentlyServed.Remove(key);
+                return;
+            }
+
+            DateTime cutoff = now.Subtract(ServeHistoryLifetime);
+            NextServeHistoryExpiryUtc = DateTime.MaxValue;
+            List<string>? expiredKeys = null;
+            foreach (KeyValuePair<string, DateTime> entry in RecentlyServed)
+            {
+                if (entry.Value < cutoff)
+                {
+                    (expiredKeys ??= new List<string>()).Add(entry.Key);
+                }
+                else
+                {
+                    DateTime expiry = entry.Value.Add(ServeHistoryLifetime);
+                    if (expiry < NextServeHistoryExpiryUtc)
+                    {
+                        NextServeHistoryExpiryUtc = expiry;
+                    }
+                }
+            }
+
+            if (expiredKeys != null)
+            {
+                foreach (string key in expiredKeys)
+                {
+                    RecentlyServed.Remove(key);
+                }
             }
         }
     }
@@ -1558,6 +1588,7 @@ internal static class CreatureTextureSync
         QueuedTransfers.Clear();
         RemainingTransferChunks.Clear();
         RecentlyServed.Clear();
+        NextServeHistoryExpiryUtc = DateTime.MaxValue;
     }
 
     private static void CompleteQueuedChunkLocked(string transferKey, bool served)
@@ -1578,7 +1609,13 @@ internal static class CreatureTextureSync
         QueuedTransfers.Remove(transferKey);
         if (served)
         {
-            RecentlyServed[transferKey] = DateTime.UtcNow;
+            DateTime servedAt = DateTime.UtcNow;
+            RecentlyServed[transferKey] = servedAt;
+            DateTime expiry = servedAt.Add(ServeHistoryLifetime);
+            if (expiry < NextServeHistoryExpiryUtc)
+            {
+                NextServeHistoryExpiryUtc = expiry;
+            }
         }
     }
 
