@@ -1,0 +1,25 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <PublicizerRuntime Condition="'$(MSBuildRuntimeType)' == 'Core'">netstandard2.1</PublicizerRuntime>
+        <PublicizerRuntime Condition="'$(MSBuildRuntimeType)' != 'Core'">net472</PublicizerRuntime>
+    </PropertyGroup>
+    <UsingTask TaskName="PublicizeTask" AssemblyFile="$(PkgBepInEx_AssemblyPublicizer_MSBuild)\lib\$(PublicizerRuntime)\BepInEx.AssemblyPublicizer.MSBuild.dll"/>
+    <!-- Only compile-time copies in obj are publicized; installed game DLLs remain original. -->
+    <Target Name="PrepareGameReferences" AfterTargets="ResolveReferences" BeforeTargets="FindReferenceAssembliesForReferences">
+        <ItemGroup>
+            <GamePublicize Include="assembly_valheim"/>
+            <GamePublicize Include="assembly_guiutils"/>
+        </ItemGroup>
+        <PublicizeTask IntermediateOutputPath="$(IntermediateOutputPath)" GeneratedIgnoresAccessChecksToFile="$(IntermediateOutputPath)CreatureManager.IgnoresAccessChecksTo.cs"
+                       ReferencePath="@(ReferencePath)" PackageReference="@(PackageReference)" Publicize="@(GamePublicize)">
+            <Output TaskParameter="RemovedReferences" ItemName="_RemovedGameReferences"/>
+            <Output TaskParameter="PublicizedReferences" ItemName="_PublicizedGameReferences"/>
+        </PublicizeTask>
+        <ItemGroup>
+            <ReferencePath Remove="@(_RemovedGameReferences)"/>
+            <ReferencePath Include="@(_PublicizedGameReferences)"/>
+            <Compile Include="$(IntermediateOutputPath)CreatureManager.IgnoresAccessChecksTo.cs"/>
+            <Compile Include="$(PkgBepInEx_AssemblyPublicizer_MSBuild)\contentFiles\cs\any\IgnoresAccessChecksToAttribute.cs"/>
+        </ItemGroup>
+    </Target>
+</Project>

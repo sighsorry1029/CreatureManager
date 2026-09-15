@@ -4736,8 +4736,8 @@ internal static class CreatureDomainManager
                 visEquipment.m_hairColor = hairColor.Value;
             }
 
-            if (appearance.Hair != null) visEquipment.m_hairItem = appearance.Hair;
-            if (appearance.Beard != null) visEquipment.m_beardItem = appearance.Beard;
+            if (appearance.Hair != null) CreatureAppearanceRuntime.HairItemHash(visEquipment) = CreatureAppearanceRuntime.GetAccessoryHash(appearance.Hair);
+            if (appearance.Beard != null) CreatureAppearanceRuntime.BeardItemHash(visEquipment) = CreatureAppearanceRuntime.GetAccessoryHash(appearance.Beard);
         }
 
         if (humanoid == null)
@@ -4816,12 +4816,12 @@ internal static class CreatureDomainManager
 
         if (appearance.Hair != null)
         {
-            visEquipment.m_hairItem = appearance.Hair;
+            CreatureAppearanceRuntime.HairItemHash(visEquipment) = CreatureAppearanceRuntime.GetAccessoryHash(appearance.Hair);
         }
 
         if (appearance.Beard != null)
         {
-            visEquipment.m_beardItem = appearance.Beard;
+            CreatureAppearanceRuntime.BeardItemHash(visEquipment) = CreatureAppearanceRuntime.GetAccessoryHash(appearance.Beard);
         }
     }
 

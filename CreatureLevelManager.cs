@@ -849,10 +849,10 @@ internal static class CreatureLevelManager
 
     private static void SynchronizeStoredRuntimeState(Character character, ZDO zdo)
     {
-        int level = zdo.GetInt(
-            DesiredLevelKey,
-            zdo.GetInt(ZDOVars.s_level, Math.Max(1, character.GetLevel())));
-        level = Math.Max(1, level);
+        // Initial level processing is already complete (or this creature preserves its rolls).
+        // Restore the game's current saved level, including external increases and decreases;
+        // DesiredLevelKey records an earlier assignment and must not override it on reload.
+        int level = Math.Max(1, zdo.GetInt(ZDOVars.s_level, 1));
         if (character.GetLevel() != level)
         {
             character.m_level = level;

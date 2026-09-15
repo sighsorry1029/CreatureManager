@@ -1206,8 +1206,8 @@ internal static class CreaturePrefabBaseline
         private int _modelIndex;
         private Vector3 _skinColor;
         private Vector3 _hairColor;
-        private string _visHair = "";
-        private string _visBeard = "";
+        private int _visHair;
+        private int _visBeard;
         private bool _hasHumanoid;
         private string _humanoidHair = "";
         private string _humanoidBeard = "";
@@ -1228,8 +1228,8 @@ internal static class CreaturePrefabBaseline
                 _modelIndex = visEquipment.m_modelIndex;
                 _skinColor = visEquipment.m_skinColor;
                 _hairColor = visEquipment.m_hairColor;
-                _visHair = visEquipment.m_hairItem;
-                _visBeard = visEquipment.m_beardItem;
+                _visHair = CreatureAppearanceRuntime.HairItemHash(visEquipment);
+                _visBeard = CreatureAppearanceRuntime.BeardItemHash(visEquipment);
             }
 
             if (humanoid != null)
@@ -1251,8 +1251,8 @@ internal static class CreaturePrefabBaseline
                     visEquipment.m_modelIndex = _modelIndex;
                     visEquipment.m_skinColor = _skinColor;
                     visEquipment.m_hairColor = _hairColor;
-                    visEquipment.m_hairItem = _visHair;
-                    visEquipment.m_beardItem = _visBeard;
+                    CreatureAppearanceRuntime.HairItemHash(visEquipment) = _visHair;
+                    CreatureAppearanceRuntime.BeardItemHash(visEquipment) = _visBeard;
                 }
             }
 

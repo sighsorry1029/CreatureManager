@@ -14,6 +14,9 @@ namespace CreatureManager;
 
 internal static class CreatureModifierManager
 {
+    private static readonly Action<Character, float, short> AddSpiritDamage =
+        (Action<Character, float, short>)Delegate.CreateDelegate(typeof(Action<Character, float, short>),
+            HarmonyLib.AccessTools.DeclaredMethod(typeof(Character), "AddSpiritDamage", new[] { typeof(float), typeof(short) }));
     private const string AppliedKey = "CreatureManager_ModifiersApplied";
     private const string Mask64Key = "CreatureManager_ModifierMask64";
     private const string ArmoredReductionKey = "CreatureManager_ArmoredReduction";
@@ -2734,13 +2737,15 @@ internal static class CreatureModifierManager
 
             ZPackage package = new();
             package.Write(ModifierStateSnapshotVersion);
-            WriteModifierStateEntries(package, ZDOExtraData.GetFloats(zdo.m_uid), static (pkg, value) => pkg.Write(value));
-            WriteModifierStateEntries(package, ZDOExtraData.GetVec3s(zdo.m_uid), static (pkg, value) => pkg.Write(value));
-            WriteModifierStateEntries(package, ZDOExtraData.GetQuaternions(zdo.m_uid), static (pkg, value) => pkg.Write(value));
-            WriteModifierStateEntries(package, ZDOExtraData.GetInts(zdo.m_uid), static (pkg, value) => pkg.Write(value));
-            WriteModifierStateEntries(package, ZDOExtraData.GetLongs(zdo.m_uid), static (pkg, value) => pkg.Write(value));
-            WriteModifierStateEntries(package, ZDOExtraData.GetStrings(zdo.m_uid), static (pkg, value) => pkg.Write(value));
-            WriteModifierStateEntries(package, ZDOExtraData.GetByteArrays(zdo.m_uid), static (pkg, value) => pkg.Write(value));
+            ZDOExtraData.GetData(zdo.m_uid, out var floats, out var vectors, out var quaternions,
+                out var ints, out var longs, out var strings, out var byteArrays, out _);
+            WriteModifierStateEntries(package, floats, static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, vectors, static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, quaternions, static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, ints, static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, longs, static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, strings, static (pkg, value) => pkg.Write(value));
+            WriteModifierStateEntries(package, byteArrays, static (pkg, value) => pkg.Write(value));
             return Convert.ToBase64String(package.GetArray());
         }
         catch (Exception ex)
@@ -2933,7 +2938,9 @@ internal static class CreatureModifierManager
     private static void ClearSerializedModifierState(ZDO zdo)
     {
         ZDOID id = zdo.m_uid;
-        foreach (int hash in ZDOExtraData.GetFloats(id)
+        ZDOExtraData.GetData(id, out var floats, out var vectors, out var quaternions,
+            out var ints, out var longs, out var strings, out var byteArrays, out _);
+        foreach (int hash in floats
                      .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
                      .Select(entry => entry.Key)
                      .ToArray())
@@ -2941,7 +2948,7 @@ internal static class CreatureModifierManager
             zdo.RemoveFloat(hash);
         }
 
-        foreach (int hash in ZDOExtraData.GetVec3s(id)
+        foreach (int hash in vectors
                      .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
                      .Select(entry => entry.Key)
                      .ToArray())
@@ -2949,7 +2956,7 @@ internal static class CreatureModifierManager
             zdo.RemoveVec3(hash);
         }
 
-        foreach (int hash in ZDOExtraData.GetQuaternions(id)
+        foreach (int hash in quaternions
                      .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
                      .Select(entry => entry.Key)
                      .ToArray())
@@ -2957,7 +2964,7 @@ internal static class CreatureModifierManager
             zdo.RemoveQuaternion(hash);
         }
 
-        foreach (int hash in ZDOExtraData.GetInts(id)
+        foreach (int hash in ints
                      .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
                      .Select(entry => entry.Key)
                      .ToArray())
@@ -2965,7 +2972,7 @@ internal static class CreatureModifierManager
             zdo.RemoveInt(hash);
         }
 
-        foreach (int hash in ZDOExtraData.GetLongs(id)
+        foreach (int hash in longs
                      .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
                      .Select(entry => entry.Key)
                      .ToArray())
@@ -2973,7 +2980,7 @@ internal static class CreatureModifierManager
             zdo.RemoveLong(hash);
         }
 
-        foreach (int hash in ZDOExtraData.GetStrings(id)
+        foreach (int hash in strings
                      .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
                      .Select(entry => entry.Key)
                      .ToArray())
@@ -2981,7 +2988,7 @@ internal static class CreatureModifierManager
             zdo.Set(hash, string.Empty);
         }
 
-        foreach (int hash in ZDOExtraData.GetByteArrays(id)
+        foreach (int hash in byteArrays
                      .Where(entry => ModifierStateKeyHashes.Contains(entry.Key))
                      .Select(entry => entry.Key)
                      .ToArray())
@@ -6442,7 +6449,7 @@ internal static class CreatureModifierManager
             return;
         }
 
-        player.AddSpiritDamage(amount);
+        AddSpiritDamage(player, amount, hit.m_variant);
     }
 
     internal static void TryApplyPlayerDebuffModifiers(

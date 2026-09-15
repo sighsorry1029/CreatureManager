@@ -1087,6 +1087,19 @@ internal static class CreatureReferenceWriter
         }
     }
 
+    private static string ResolveAccessoryName(int hash)
+    {
+        if (hash == 0) return "";
+        GameObject? item = ObjectDB.instance?.GetItemPrefab(hash) ?? ZNetScene.instance?.GetPrefab(hash);
+        if (item == null)
+        {
+            item = CreaturePrefabRegistry.GetItemPrefabs()
+                .FirstOrDefault(candidate => candidate.name.GetStableHashCode() == hash);
+        }
+        if (item != null) return item.name;
+        throw new InvalidOperationException($"Cannot export appearance: accessory prefab hash {hash} could not be resolved.");
+    }
+
     private static void AppendAppearance(StringBuilder builder, GameObject prefab, int indent)
     {
         VisEquipment visEquipment = prefab.GetComponent<VisEquipment>();
@@ -1099,8 +1112,10 @@ internal static class CreatureReferenceWriter
         int modelIndex = visEquipment?.m_modelIndex ?? 0;
         Vector3 skinColor = visEquipment?.m_skinColor ?? Vector3.one;
         Vector3 hairColor = visEquipment?.m_hairColor ?? Vector3.one;
-        string hair = FirstNonEmpty(humanoid?.m_hairItem, visEquipment?.m_hairItem);
-        string beard = FirstNonEmpty(humanoid?.m_beardItem, visEquipment?.m_beardItem);
+        string hair = !string.IsNullOrWhiteSpace(humanoid?.m_hairItem) ? humanoid!.m_hairItem
+            : ResolveAccessoryName(visEquipment != null ? CreatureAppearanceRuntime.HairItemHash(visEquipment) : 0);
+        string beard = !string.IsNullOrWhiteSpace(humanoid?.m_beardItem) ? humanoid!.m_beardItem
+            : ResolveAccessoryName(visEquipment != null ? CreatureAppearanceRuntime.BeardItemHash(visEquipment) : 0);
         bool hasHairColor = !IsWhite(hairColor);
         bool hasSkinColor = !IsWhite(skinColor);
         if (hair.Length == 0 && beard.Length == 0 && !hasHairColor && !hasSkinColor && modelIndex == 0)
@@ -1133,15 +1148,6 @@ internal static class CreatureReferenceWriter
         {
             AppendLine(builder, indent + 1, $"modelIndex: {modelIndex.ToString(CultureInfo.InvariantCulture)}");
         }
-    }
-
-    private static string FirstNonEmpty(string? primary, string? fallback)
-    {
-        return !string.IsNullOrWhiteSpace(primary)
-            ? primary!
-            : !string.IsNullOrWhiteSpace(fallback)
-                ? fallback!
-                : "";
     }
 
     private static List<string> GetPrimaryTextureSlots(GameObject prefab)

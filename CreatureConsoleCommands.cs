@@ -23,6 +23,7 @@ internal static class CreatureConsoleCommands
     private static readonly List<string> EmptyAutocompleteOptions = new();
     private static readonly char[] ArgumentSeparators = { ' ', '\t' };
     private static Terminal.ConsoleCommand? SpawnCommand;
+    private static Terminal.ConsoleCommand? KarmaCommand;
     private static bool Registered;
 
     internal static void Register()
@@ -53,7 +54,7 @@ internal static class CreatureConsoleCommands
             optionsFetcher: GetSpawnPrefabOptions,
             remoteCommand: true,
             onlyAdmin: true);
-        new Terminal.ConsoleCommand(
+        KarmaCommand = new Terminal.ConsoleCommand(
             "cm:karma",
             "Show or set the current outdoor or dungeon 3x3 zone-neighborhood Karma. Usage: cm:karma [value]",
             Karma,
@@ -540,7 +541,8 @@ internal static class CreatureConsoleCommands
                 playerRotation = Quaternion.identity;
             }
 
-            Terminal.ConsoleEventArgs args = new(command, Console.instance);
+            Terminal.ConsoleEventArgs args = new(command, Console.instance,
+                string.Equals(commandName, SpawnCommandName, StringComparison.OrdinalIgnoreCase) ? SpawnCommand! : KarmaCommand!);
             if (string.Equals(commandName, SpawnCommandName, StringComparison.OrdinalIgnoreCase))
             {
                 if (!CreatureLevelManager.IsLevelSystemEnabled())

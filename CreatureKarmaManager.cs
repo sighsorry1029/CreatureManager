@@ -1551,7 +1551,7 @@ AshLands:
 
         EnforcerPlayerPresenceBuffer.Add(new EnforcerPlayerPresence(
             position,
-            ZoneSystem.GetZone(position),
+            ZoneSystem.GetZone(position).ToVector2i(),
             Character.InInterior(position)));
     }
 
@@ -1567,7 +1567,7 @@ AshLands:
         bool enforcerInterior = anchorStored
             ? enforcerZdo.GetBool(EnforcerPresenceInteriorKey, false)
             : Character.InInterior(enforcerPosition);
-        Vector2i currentZone = ZoneSystem.GetZone(enforcerPosition);
+        Vector2i currentZone = ZoneSystem.GetZone(enforcerPosition).ToVector2i();
         Vector2i enforcerZone = anchorStored && enforcerInterior
             ? new Vector2i(
                 enforcerZdo.GetInt(EnforcerPresenceZoneXKey, currentZone.x),
@@ -1841,7 +1841,7 @@ AshLands:
         Dictionary<(int X, int Y, KarmaRealm Realm), List<ConnectedPlayerContext>> playersByCenterZone = new();
         foreach (ConnectedPlayerContext player in players)
         {
-            Vector2i centerZone = ZoneSystem.GetZone(player.Position);
+            Vector2i centerZone = ZoneSystem.GetZone(player.Position).ToVector2i();
             (int X, int Y, KarmaRealm Realm) key =
                 (centerZone.x, centerZone.y, GetKarmaRealm(player.Position));
             if (!playersByCenterZone.TryGetValue(key, out List<ConnectedPlayerContext> zonePlayers))
@@ -1857,7 +1857,7 @@ AshLands:
         foreach (KeyValuePair<(int X, int Y, KarmaRealm Realm), List<ConnectedPlayerContext>> entry in playersByCenterZone)
         {
             Vector2i centerZone = new(entry.Key.X, entry.Key.Y);
-            Vector3 centerPosition = ZoneSystem.GetZonePos(centerZone);
+            Vector3 centerPosition = ZoneSystem.GetZonePos(new Vector2s(centerZone));
             centerPosition.y = entry.Value[0].Position.y;
             float karma = GetKarma(centerPosition);
             List<ConnectedPlayerContext> eligiblePlayers = players
@@ -2488,7 +2488,7 @@ AshLands:
         zdo.Set(EnforcerPresenceInteriorKey, interior);
         if (interior)
         {
-            Vector2i zone = ZoneSystem.GetZone(position);
+            Vector2i zone = ZoneSystem.GetZone(position).ToVector2i();
             zdo.Set(EnforcerPresenceZoneXKey, zone.x);
             zdo.Set(EnforcerPresenceZoneYKey, zone.y);
         }
@@ -2852,7 +2852,7 @@ AshLands:
     {
         activeEnforcers = 0;
         hasNonEnforcerBoss = false;
-        Vector2i centerZone = ZoneSystem.GetZone(position);
+        Vector2i centerZone = ZoneSystem.GetZone(position).ToVector2i();
         KarmaRealm centerRealm = GetKarmaRealm(position);
         HashSet<ZDOID> observedCharacterIds = new();
         foreach (Character character in Character.GetAllCharacters())
@@ -2998,7 +2998,7 @@ AshLands:
             return false;
         }
 
-        Vector2i zone = ZoneSystem.GetZone(position);
+        Vector2i zone = ZoneSystem.GetZone(position).ToVector2i();
         return Math.Abs(zone.x - centerZone.x) <= ZoneRadius &&
                Math.Abs(zone.y - centerZone.y) <= ZoneRadius;
     }
@@ -3127,8 +3127,8 @@ AshLands:
         DungeonSpawnZdoBuffer.Clear();
         try
         {
-            Vector2i originZone = ZoneSystem.GetZone(origin);
-            ZDOMan.instance.FindSectorObjects(originZone, 1, 0, DungeonSpawnZdoBuffer);
+            Vector2i originZone = ZoneSystem.GetZone(origin).ToVector2i();
+            ZDOMan.instance.FindSectorObjects(new Vector2s(originZone), new SimulationDistance(1, 0, classic: true), DungeonSpawnZdoBuffer);
             foreach (ZDO zdo in DungeonSpawnZdoBuffer)
             {
                 if (zdo == null)
@@ -3184,7 +3184,7 @@ AshLands:
         out Vector3 position)
         where T : Component
     {
-        Vector2i originZone = ZoneSystem.GetZone(origin);
+        Vector2i originZone = ZoneSystem.GetZone(origin).ToVector2i();
         List<Vector3> candidates = GetCachedComponentPositions<T>(originZone);
         float searchRadius = Mathf.Max(0f, radius);
         foreach (Vector3 candidate in candidates
@@ -3233,7 +3233,7 @@ AshLands:
 
     private static bool IsSameZone(Vector3 position, Vector2i zone)
     {
-        Vector2i other = ZoneSystem.GetZone(position);
+        Vector2i other = ZoneSystem.GetZone(position).ToVector2i();
         return other.x == zone.x && other.y == zone.y;
     }
 
@@ -3666,7 +3666,7 @@ AshLands:
         // Mark before spawning. If another mod throws after partially creating the items,
         // retrying this death callback would duplicate an unknown subset of the reward.
         zdo.Set(EnforcerLootDroppedKey, true);
-        CharacterDrop.DropItems(drops, centerPosition, 0.5f);
+        CharacterDrop.DropItems(drops, centerPosition, 0.5f, dropTable != null && dropTable.m_cheated);
     }
 
     private static void StoreEnforcerLoot(ZDO zdo, IReadOnlyList<EnforcerLootDefinition>? loot)
@@ -3866,8 +3866,8 @@ AshLands:
             return false;
         }
 
-        Vector2i zone = ZoneSystem.GetZone(position);
-        if (!ZoneSystem.instance.m_locationInstances.TryGetValue(zone, out ZoneSystem.LocationInstance locationInstance))
+        Vector2i zone = ZoneSystem.GetZone(position).ToVector2i();
+        if (!ZoneSystem.instance.m_locationInstances.TryGetValue(new Vector2s(zone), out ZoneSystem.LocationInstance locationInstance))
         {
             return false;
         }
@@ -4418,7 +4418,7 @@ AshLands:
 
     private static string GetSectorKey(Vector3 position)
     {
-        Vector2i zone = ZoneSystem.GetZone(position);
+        Vector2i zone = ZoneSystem.GetZone(position).ToVector2i();
         return GetSectorKey(zone, GetKarmaRealm(position));
     }
 
@@ -4430,7 +4430,7 @@ AshLands:
 
     private static IEnumerable<string> GetSectorKeys(Vector3 position)
     {
-        Vector2i zone = ZoneSystem.GetZone(position);
+        Vector2i zone = ZoneSystem.GetZone(position).ToVector2i();
         KarmaRealm realm = GetKarmaRealm(position);
         yield return GetSectorKey(zone, realm);
 

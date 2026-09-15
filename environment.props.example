@@ -4,13 +4,15 @@
     <GamePath>C:\Program Files (x86)\Steam\steamapps\common\Valheim</GamePath>
     <BepInExPath>$(GamePath)\BepInEx</BepInExPath>
     <CorlibPath>$(GamePath)\valheim_Data\Managed</CorlibPath>
-    <PublicizedAssembliesPath>$(CorlibPath)\publicized_assemblies</PublicizedAssembliesPath>
+    <!-- Use original 1.0.7 DLLs. Compile-only publicized copies are generated under obj. -->
 
-    <!-- Defaults keep normal builds local. Set both values explicitly to opt in. -->
+    <!-- Debug validation: dotnet build CreatureManager.sln -c Debug -p:DeployToGame=true -->
+    <DeployToGame>false</DeployToGame>
+    <GamePluginDirectory>$(BepInExPath)\plugins</GamePluginDirectory>
+    <!-- Legacy optional deployment settings. -->
     <DeployToValheim>false</DeployToValheim>
     <CopyOutputDLLPath>$(BepInExPath)\plugins</CopyOutputDLLPath>
 
-    <!-- Opt-in Release packages are written under artifacts without changing tracked metadata. -->
-    <BuildPackages>false</BuildPackages>
+    <!-- Release builds use the project's existing Thunderstore ZIP packaging by default. -->
   </PropertyGroup>
 </Project>

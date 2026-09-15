@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.14
+
+- Preserve the game's current saved creature level when reloading already processed creatures, preventing stale initial CreatureManager levels from undoing FeedLikeGrandma feeding upgrades after zone unload/reload.
+- Preserve intentional level decreases and existing modifier, health/damage multiplier, and visual restoration without rerolling initial levels.
+- Add regression checks for saved-level restoration, stale initial assignments, missing/invalid saved levels, and unchanged persisted state, alongside the client and dedicated-server compatibility checks.
+
+## 1.1.13
+
+- Add compatibility with Valheim 1.0.7 across console commands, creature appearance hashes, ZDO data access, zone queries, spirit damage, and guaranteed Enforcer loot while preserving existing configuration, snapshot, authority, ownership, and duplicate-drop contracts.
+- Update the embedded ServerSync library for Valheim 1.0.7, including authoritative admin checks and safe buffering of the new player-history and admin-list messages during initial configuration synchronization.
+- Build against the installed original game assemblies with isolated compile-time access copies, preventing stale publicized references from hiding game API changes without modifying or packaging Valheim DLLs.
+- Remove the obsolete `Humanoid.OnStopMoving` compatibility transpiler now that Valheim performs the correct current-attack null check, and add client/dedicated-server compatibility checks for game references, Harmony targets, transpilers, private access paths, and serialized state contracts.
+- Require BepInExPack Valheim 5.4.2350.
+
 ## 1.1.12
 
 - Reuse unchanged resistance HUD text and prefixed localization tokens to reduce allocations while continuing to reflect live resistance and translation changes.

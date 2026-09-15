@@ -9,6 +9,14 @@ namespace CreatureManager;
 
 internal static class CreatureAppearanceRuntime
 {
+    // Prefab/ragdoll baseline edits must not invoke setters that also write to a live ZDO.
+    internal static readonly AccessTools.FieldRef<VisEquipment, int> HairItemHash =
+        AccessTools.FieldRefAccess<VisEquipment, int>("m_hairItem");
+    internal static readonly AccessTools.FieldRef<VisEquipment, int> BeardItemHash =
+        AccessTools.FieldRefAccess<VisEquipment, int>("m_beardItem");
+
+    internal static int GetAccessoryHash(string? name) => string.IsNullOrEmpty(name) ? 0 : name.GetStableHashCode();
+
     private const string SetHairEquippedMethodName = "SetHairEquipped";
     private const string SetBeardEquippedMethodName = "SetBeardEquipped";
     private const string GetHairItemMethodName = "GetHairItem";
@@ -127,7 +135,7 @@ internal static class CreatureAppearanceRuntime
         {
             // Player-style VisEquipment reads the normal hair ZDO field before rendering.
             // GetHairItem is patched below so the selected custom hair bypasses helmet hiding.
-            visEquipment.SetHairItem(selected.name);
+            visEquipment.SetHairItem(storedHash);
         }
 
         if (visEquipment != null)
@@ -339,7 +347,7 @@ internal static class CreatureAppearanceRuntime
 
         if (appearance.Hair != null)
         {
-            visEquipment.m_hairItem = appearance.Hair;
+            HairItemHash(visEquipment) = GetAccessoryHash(appearance.Hair);
             if (ownsZdo)
             {
                 zdo!.Set(
@@ -350,7 +358,7 @@ internal static class CreatureAppearanceRuntime
 
         if (appearance.Beard != null)
         {
-            visEquipment.m_beardItem = appearance.Beard;
+            BeardItemHash(visEquipment) = GetAccessoryHash(appearance.Beard);
             if (ownsZdo)
             {
                 zdo!.Set(
@@ -878,7 +886,7 @@ internal static class CreatureAppearanceRuntime
     {
         if (visEquipment != null && visEquipment.m_isPlayer)
         {
-            visEquipment.SetHairItem(humanoid.m_hairItem ?? "");
+            visEquipment.SetHairItem(GetAccessoryHash(humanoid.m_hairItem));
         }
     }
 }
