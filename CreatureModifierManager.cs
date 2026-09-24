@@ -9612,21 +9612,33 @@ internal static class CreatureModifierManager
 
         bool hasModifiers = visibleModifiers != ModifierMask.None;
         int stars = Math.Max(0, character.GetLevel() - 1);
-        if (character.IsBoss() || CreatureKarmaManager.IsBossHudOnly(character))
+        bool isBossHud = character.IsBoss() || CreatureKarmaManager.IsBossHudOnly(character);
+        if (isBossHud)
         {
-            UpdateBossHud(hud, stars, hasModifiers, armoredReduction, enragedBonus, visibleModifiers);
-            return;
+            SetLevelContentActive(hud, false);
+        }
+        else
+        {
+            SetBossContentActive(hud, false);
         }
 
-        SetBossContentActive(hud, false);
         HideVanillaLevelBlocks(hud);
         if (stars <= 0 && !hasModifiers)
         {
-            SetLevelContentActive(hud, false);
+            if (isBossHud)
+            {
+                SetBossContentActive(hud, false);
+            }
+            else
+            {
+                SetLevelContentActive(hud, false);
+            }
             return;
         }
 
-        RectTransform? content = EnsureLevelContent(hud, stars > 0);
+        RectTransform? content = isBossHud
+            ? EnsureBossLevelContent(hud, stars > 0)
+            : EnsureLevelContent(hud, stars > 0);
         if (content == null)
         {
             return;
@@ -9718,40 +9730,6 @@ internal static class CreatureModifierManager
         {
             hud.m_level3.gameObject.SetActive(false);
         }
-    }
-
-    private static void UpdateBossHud(
-        EnemyHud.HudData hud,
-        int stars,
-        bool hasModifiers,
-        float armoredReduction,
-        float enragedBonus,
-        ModifierMask visibleModifiers)
-    {
-        SetLevelContentActive(hud, false);
-        HideVanillaLevelBlocks(hud);
-        if (stars <= 0 && !hasModifiers)
-        {
-            SetBossContentActive(hud, false);
-            return;
-        }
-
-        RectTransform? content = EnsureBossLevelContent(hud, stars > 0);
-        if (content == null)
-        {
-            return;
-        }
-
-        content.gameObject.SetActive(true);
-        UpdateStarBadge(
-            content,
-            hud.m_level2,
-            hud.m_level3,
-            hud.m_name,
-            stars,
-            showIndividualStars: stars <= 2);
-        RectTransform iconContainer = EnsureIconContainer(content);
-        UpdateModifierIcons(iconContainer, visibleModifiers, armoredReduction, enragedBonus);
     }
 
     private static void HideManagedHudContent(EnemyHud.HudData hud)
