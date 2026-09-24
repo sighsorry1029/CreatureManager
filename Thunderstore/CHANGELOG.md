@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.15
+
+- Add synchronized `Character Loot System` settings with `CalculateChance` as the default and separate creature/boss percentages, both defaulting to 50% per star. Eligible drops retain their base chance and gain linear amounts with probabilistic rounding instead of exponential star scaling. Existing saved settings are preserved; select `Vanilla` to keep the existing calculation.
+- Automatically defer loot scaling to DropNSpawn when installed. Keep CalculateChance available alongside Drop That while preserving drop-entry identity and conditions; entries with `ScaleByLevel=false`, trophies, one-per-player rewards, and explicit Enforcer bonus loot are excluded from CreatureManager's calculation.
+- Share AI boolean parsing between YAML validation and application while preserving accepted aliases and the separate strict character/boss boolean rules.
+- Unify common creature/boss HUD rendering without changing their layouts, and remove unused Sprite state from Compendium text entries.
+- Add loot and AI parser regression checks, including managed Drop That patch-composition checks against original Valheim 1.0.15 client and dedicated-server assemblies. Actual world and multiplayer execution remain separately required.
+
 ## 1.1.14
 
 - Preserve the game's current saved creature level when reloading already processed creatures, preventing stale initial CreatureManager levels from undoing FeedLikeGrandma feeding upgrades after zone unload/reload.

@@ -4,113 +4,11 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 
 ## Showcase
 
-### Live Enforcer Hunts
-
-![Regional Karma display](https://i.ibb.co/wFDKytnS/karma.png)
-
-*Killing creatures raises regional Karma, which can strengthen future spawns and trigger Enforcer encounters.*
-
-![Black Forest dungeon Enforcer encounter](https://i.ibb.co/bjRJt0s9/blackforestdungeonenforcer.gif)
-
-*Karma accumulates faster in dungeons, so stay alert.*
-
-![Swamp Enforcer encounter](https://i.ibb.co/WvNj02sD/swampenforcer.gif)
-
-*Outdoor and dungeon Enforcer encounters can be configured separately in `karma.yml`, including guaranteed bonus loot.*
-
-![Mountain Enforcer encounter](https://i.ibb.co/KxDkMY9L/mountainenforcer.gif)
-
-*Enforcers spawn at higher levels, are more likely to carry modifiers, and may bring minions that hunt players down.*
-
-### Creature Cloning and Customization
-
-Existing creatures can be modified or cloned. For advanced examples, install [MonsterLabZ](https://thunderstore.io/c/valheim/p/MonsterLabZFix/MonsterLabZ/) and see `creatures.sample.yml` and `attacks.sample.yml`.
-
-*The following custom bosses were created with CreatureManager and MonsterLabZ.*
-
-![Bonebeard custom creature](https://i.ibb.co/RtnVCBC/bonebeard.gif)
-
-*Bonebeard is a melee boss who infuses every attack with poison.*
-
-![Vincent custom creature](https://i.ibb.co/5XKJvDhx/vincent.gif)
-
-*Vincent the Cunning is a ranged boss who fires a variety of projectiles.*
-
-![Root Witch custom creature](https://i.ibb.co/YB9YQhDH/rootwitch.gif)
-
-*Root Witch is a spellcaster boss who casts a variety of spells.*
-
 ### Combat Modifiers
 
 ![Creatures displaying multiple modifier icons](https://i.ibb.co/60JDRCGW/mobswithmodifiers.png)
 
 *Creatures roll modifiers independently and display their active effects beneath their nameplates. Levels above 3 appear as a star followed by the level number.*
-
-#### Offense and Defense
-
-![Spirit modifier adding Spirit damage](https://i.ibb.co/chZwZNDR/spirit.gif)
-
-*Spirit adds Spirit damage to the creature's attacks; against players, its damage over time bypasses armor and resistance.*
-
-![Undodgeable modifier bypassing a dodge](https://i.ibb.co/X18bTyr/undodgeable.gif)
-
-*Undodgeable attacks ignore dodge invulnerability, while blocking and parrying remain effective.*
-
-![Deathward modifier preventing a lethal hit](https://i.ibb.co/cKynXmkb/deathward.gif)
-
-*Deathward cancels a lethal hit and restores part of the creature's maximum health.*
-
-![Reflection modifier returning melee damage](https://i.ibb.co/84LqjWMj/reflection.gif)
-
-*Reflection returns part of the creature's actual health loss to a direct melee attacker.*
-
-![Vortex modifier negating a projectile](https://i.ibb.co/k2FtL0g8/vortex.gif)
-
-*Vortex can negate a projectile hit together with its damage and secondary effects.*
-
-![Unflinching modifier preventing stagger](https://i.ibb.co/Ld3psjHY/unflinching.gif)
-
-*Unflinching prevents stagger from normal hits and perfect parries.*
-
-#### Afflictions
-
-![Affliction modifier icons and duration counters](https://i.ibb.co/FbbtDgfN/Afflictionmodifiers.png)
-
-*Timed Afflictions use distinct icons and counters so their remaining duration stays readable in combat.*
-
-#### Special
-
-![Blink modifier teleporting toward a target](https://i.ibb.co/3mVwS3pz/blink.gif)
-
-*Blink teleports the creature near its target to close distance quickly. `Blink Alert Grace Period (s)` delays Blink and its extended attack range for 3 seconds after the creature becomes alerted by default; the timer still expires when no attack can start.*
-
-![Omen modifier triggering an Enforcer check](https://i.ibb.co/G4x2sPfH/omen.gif)
-
-*Omen can request an Enforcer encounter when the affected creature is killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player.*
-
-![Juggernaut modifier producing heavy knockback](https://i.ibb.co/xKxGBpjK/juggernaut.gif)
-
-*Juggernaut turns successful hits into heavy knockback while resisting attack push.*
-
-![Blamer modifier raising regional Karma](https://i.ibb.co/9mvPYZy1/blamer.gif)
-
-*Blamer flees and raises regional Karma once its health drops below the trigger threshold, then expires when its Karma budget is exhausted.*
-
-### In-game Tools
-
-![Creature resistance inspection](https://i.ibb.co/03cfhV8/inspectresistance.png)
-
-*While sneaking, inspect a creature to view its effective resistances, weaknesses, and immunities beneath the target's nameplate.*
-
-![Defensive modifier entries in the Compendium](https://i.ibb.co/C3VG6r3B/compendium.png)
-
-*The in-game Compendium documents defensive modifiers and their exact behavior.*
-
-![Affliction modifier entries in the Compendium](https://i.ibb.co/21KT36KS/compendium2.png)
-
-*Affliction details are available in the same localized Compendium without leaving the game.*
-
-### Combat Modifiers specific
 
 CreatureManager provides 32 modifiers in four groups. Natural rolls select at most one modifier from each group, for up to four visible modifiers. The values below are the generated `Global` defaults; `levels.yml` and `karma.yml` can override them for Global, Boss, prefab/group, Enforcer, and individual Enforcer rules.
 
@@ -167,6 +65,108 @@ CreatureManager provides 32 modifiers in four groups. Natural rolls select at mo
 | <img src="https://i.ibb.co/TBCgrbkt/blamer.png" width="40" height="40" alt="Blamer icon"> | **Blamer** (`blamer`) | Below 75% health, flees and adds 0.5 Karma per second up to 45 lifetime Karma. When exhausted, the modifier, icon, and flee behavior end. |
 
 Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains a CreatureManager page with modifier names, icons, and descriptions using the active global values. English and Korean localization are embedded.
+
+### In-game Tools
+
+![Defensive modifier entries in the Compendium](https://i.ibb.co/C3VG6r3B/compendium.png)
+
+*The in-game Compendium documents defensive modifiers and their exact behavior.*
+
+![Affliction modifier entries in the Compendium](https://i.ibb.co/21KT36KS/compendium2.png)
+
+*Affliction details are available in the same localized Compendium without leaving the game.*
+
+![Creature resistance inspection](https://i.ibb.co/03cfhV8/inspectresistance.png)
+
+*While sneaking, inspect a creature to view its effective resistances, weaknesses, and immunities beneath the target's nameplate.*
+
+### Combat Modifiers gifs
+
+#### Offense and Defense
+
+![Spirit modifier adding Spirit damage](https://i.ibb.co/chZwZNDR/spirit.gif)
+
+*Spirit adds Spirit damage to the creature's attacks; against players, its damage over time bypasses armor and resistance.*
+
+![Undodgeable modifier bypassing a dodge](https://i.ibb.co/X18bTyr/undodgeable.gif)
+
+*Undodgeable attacks ignore dodge invulnerability, while blocking and parrying remain effective.*
+
+![Deathward modifier preventing a lethal hit](https://i.ibb.co/cKynXmkb/deathward.gif)
+
+*Deathward cancels a lethal hit and restores part of the creature's maximum health.*
+
+![Reflection modifier returning melee damage](https://i.ibb.co/84LqjWMj/reflection.gif)
+
+*Reflection returns part of the creature's actual health loss to a direct melee attacker.*
+
+![Vortex modifier negating a projectile](https://i.ibb.co/k2FtL0g8/vortex.gif)
+
+*Vortex can negate a projectile hit together with its damage and secondary effects.*
+
+![Unflinching modifier preventing stagger](https://i.ibb.co/Ld3psjHY/unflinching.gif)
+
+*Unflinching prevents stagger from normal hits and perfect parries.*
+
+#### Afflictions
+
+![Affliction modifier icons and duration counters](https://i.ibb.co/FbbtDgfN/Afflictionmodifiers.png)
+
+*Timed Afflictions use distinct icons and counters so their remaining duration stays readable in combat.*
+
+#### Special
+
+![Blink modifier teleporting toward a target](https://i.ibb.co/3mVwS3pz/blink.gif)
+
+*Blink teleports the creature near its target to close distance quickly. `Blink Alert Grace Period (s)` delays Blink and its extended attack range for 3 seconds after the creature becomes alerted by default; the timer still expires when no attack can start.*
+
+![Omen modifier triggering an Enforcer check](https://i.ibb.co/G4x2sPfH/omen.gif)
+
+*Omen can request an Enforcer encounter when the affected creature is killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player.*
+
+![Juggernaut modifier producing heavy knockback](https://i.ibb.co/xKxGBpjK/juggernaut.gif)
+
+*Juggernaut turns successful hits into heavy knockback while resisting attack push.*
+
+![Blamer modifier raising regional Karma](https://i.ibb.co/9mvPYZy1/blamer.gif)
+
+*Blamer flees and raises regional Karma once its health drops below the trigger threshold, then expires when its Karma budget is exhausted.*
+
+### Live Enforcer Hunts
+
+![Regional Karma display](https://i.ibb.co/wFDKytnS/karma.png)
+
+*Killing creatures raises regional Karma, which can strengthen future spawns and trigger Enforcer encounters.*
+
+![Black Forest dungeon Enforcer encounter](https://i.ibb.co/bjRJt0s9/blackforestdungeonenforcer.gif)
+
+*Karma accumulates faster in dungeons, so stay alert.*
+
+![Swamp Enforcer encounter](https://i.ibb.co/WvNj02sD/swampenforcer.gif)
+
+*Outdoor and dungeon Enforcer encounters can be configured separately in `karma.yml`, including guaranteed bonus loot.*
+
+![Mountain Enforcer encounter](https://i.ibb.co/KxDkMY9L/mountainenforcer.gif)
+
+*Enforcers spawn at higher levels, are more likely to carry modifiers, and may bring minions that hunt players down.*
+
+### Creature Cloning and Customization
+
+Existing creatures can be modified or cloned. For advanced examples, install [MonsterLabZ](https://thunderstore.io/c/valheim/p/cjayride/MonsterLabZ_cjayfix/) and see `creatures.sample.yml` and `attacks.sample.yml`.
+
+*The following custom bosses were created with CreatureManager and MonsterLabZ.*
+
+![Bonebeard custom creature](https://i.ibb.co/RtnVCBC/bonebeard.gif)
+
+*Bonebeard is a melee boss who infuses every attack with poison.*
+
+![Vincent custom creature](https://i.ibb.co/5XKJvDhx/vincent.gif)
+
+*Vincent the Cunning is a ranged boss who fires a variety of projectiles.*
+
+![Root Witch custom creature](https://i.ibb.co/YB9YQhDH/rootwitch.gif)
+
+*Root Witch is a spellcaster boss who casts a variety of spells.*
 
 ## Highlights
 
@@ -261,7 +261,7 @@ References refresh automatically after Valheim's prefab databases are ready and 
 
 Creature definitions can modify an existing prefab or clone one with `clonedFrom`. An AI definition named after a loaded `MonsterAI` or `AnimalAI` creature applies directly to that prefab; a unique AI name remains a reusable preset and can use `copyFrom` for its baseline. A creature-level `ai:` assignment is only needed to select a reusable preset or borrow another creature prefab's AI, and takes priority over same-name direct application. Clones can also use cloned attacks, custom factions, humanoid equipment, and local texture overrides.
 
-The supported surface is intentionally narrower than a full prefab database dump. It concentrates on fields useful for monsters and customizable NPCs while leaving drops, spawn tables, player prefabs, and large effect graphs to other domains or mods.
+The supported surface is intentionally narrower than a full prefab database dump. It concentrates on fields useful for monsters and customizable NPCs while leaving drop-table editing, spawn tables, player prefabs, and large effect graphs to other domains or mods.
 
 ### Levels and Progression
 
@@ -270,6 +270,26 @@ Level rules can target broad defaults or narrow content: global rules, bosses, b
 Levels can control weighted star distribution, health, damage, visual scale, distance scaling, and modifier selection. `damagePerLevel` replaces vanilla's 50% monster damage growth per level: for example, `damage: 1` and `damagePerLevel: 0.2` make a level 6 creature deal 2x level-1 damage to character targets before distance, multiplayer, and modifier scaling. Vanilla level visual states rotate when a creature exceeds the visual states supplied by its prefab.
 
 CreatureManager is spawn-aware. Natural hostile spawns receive the complete matching rule, while breeding, eggs, grow-up transitions, tamed restores, Blood Magic summons, and explicit console spawns preserve or restrict values according to their lifecycle instead of blindly rerolling every creature initialization.
+
+### Star Loot Scaling
+
+The synchronized `[6 - Loot]` settings in `BepInEx/config/sighsorry.CreatureManager.cfg` work independently of `Enable Level System`:
+
+| Setting | Default | Behavior |
+|---|---|---|
+| `Character Loot System` | `CalculateChance` | Replaces exponential star scaling for eligible item drops. Select `Vanilla` to preserve existing scaling. |
+| `Chance For Additional Loot Per Star For Creatures` | `50` | Additional successful-drop amount percentage per star, from 0 to 100. |
+| `Chance For Additional Loot Per Star For Bosses` | `50` | The same percentage for characters the game identifies as bosses. |
+
+`CalculateChance` keeps an eligible item's base drop chance and scales its successful amount by `1 + stars * percentage / 100`. Only the fractional remainder is rolled: with a base amount of 1 and 50%, one star gives 1 or 2 items, two stars give 2, and three stars give 2 or 3. This changes loot balance: vanilla increases both drop chance and amount by stars. Zero percent keeps the base chance and amount. The game's resource modifiers and 100-item per-entry cap still apply.
+
+Only non-trophy items whose drop entry enables `levelMultiplier` are eligible. One-per-player rewards, non-item drops, player drops, and explicit Enforcer bonus loot retain their existing behavior. Ordinary Enforcer drops use the game's boss classification. Calculation happens on the creature's network owner; the existing death, ragdoll and item-spawn paths remain responsible for delivery. Settings affect newly generated loot, not loot already stored in ragdolls.
+
+The default applies to new or missing settings. An existing saved `Vanilla` selection or custom percentage is preserved; change it explicitly to opt into the new defaults.
+
+When DropNSpawn is loaded, CreatureManager automatically leaves loot scaling to DropNSpawn and logs a notice when `CalculateChance` is first used. Drop That alone does not disable CreatureManager's calculation: its configured items, conditions and base quantities remain in use, and CreatureManager replaces star scaling only on eligible entries with `ScaleByLevel=true`. Entries with `ScaleByLevel=false` are excluded. Drop That's quantity-limit postprocessing, stacking and ragdoll metadata paths remain in place. If your Drop That tables already set the complete reward for each level, set `ScaleByLevel=false` on those entries or select `Vanilla` in CreatureManager.
+
+CreatureManager does not rewrite the selected setting or the other mod's configuration. Install the same gameplay mods on the server and all clients so ownership changes do not change which drop system is active.
 
 ### Karma and Enforcers
 

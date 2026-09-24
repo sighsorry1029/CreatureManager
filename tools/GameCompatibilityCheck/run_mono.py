@@ -4,9 +4,9 @@ import os
 from pathlib import Path
 import sys
 
-if len(sys.argv) != 4:
-    raise SystemExit("Usage: python run_mono.py <game directory> <plugin.dll> <BepInEx core directory>")
-game, plugin, core = map(lambda p: Path(p).resolve(), sys.argv[1:])
+if len(sys.argv) not in (4, 5):
+    raise SystemExit("Usage: python run_mono.py <game directory> <plugin.dll> <BepInEx core directory> [DropThat.dll]")
+game, plugin, core = map(lambda p: Path(p).resolve(), sys.argv[1:4])
 managed = game / "valheim_Data" / "Managed"
 if not managed.is_dir():
     managed = game / "valheim_server_Data" / "Managed"
@@ -32,5 +32,7 @@ assembly = mono.mono_domain_assembly_open(domain, str(runner).encode())
 if not assembly:
     raise SystemExit("Could not load compatibility check assembly")
 args = [str(runner).encode(), str(plugin).encode(), str(managed).encode(), str(core).encode()]
+if len(sys.argv) == 5:
+    args.append(str(Path(sys.argv[4]).resolve()).encode())
 argv = (ctypes.c_char_p * len(args))(*args)
 raise SystemExit(mono.mono_jit_exec(domain, assembly, len(args), argv))

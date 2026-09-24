@@ -16,7 +16,7 @@ internal static class Program
 
     private static int Main(string[] args)
     {
-        if (args.Length != 3) { System.Console.Error.WriteLine("Usage: GameCompatibilityCheck <plugin.dll> <original Managed directory> <BepInEx core directory>"); return 2; }
+        if (args.Length != 3 && args.Length != 4) { System.Console.Error.WriteLine("Usage: GameCompatibilityCheck <plugin.dll> <original Managed directory> <BepInEx core directory> [DropThat.dll]"); return 2; }
         SearchPaths = new[] { Path.GetFullPath(args[1]), Path.GetFullPath(args[2]), Path.GetDirectoryName(Path.GetFullPath(args[0]))! };
         AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
         {
@@ -24,14 +24,14 @@ internal static class Program
             string? file = SearchPaths.Select(p => Path.Combine(p, name)).FirstOrDefault(File.Exists);
             return file == null ? null : Assembly.LoadFrom(file);
         };
-        try { Run(Path.GetFullPath(args[0])); }
+        try { Run(Path.GetFullPath(args[0]), args.Length == 4 ? Path.GetFullPath(args[3]) : null); }
         catch (Exception e) { Fail(e.ToString()); }
         System.Console.WriteLine($"Compatibility checks: {Failures} failure(s). No Unity scene or network session was executed.");
         return Failures == 0 ? 0 : 1;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void Run(string pluginPath)
+    private static void Run(string pluginPath, string? dropThatPath)
     {
         CheckReferences(pluginPath);
         foreach (string name in new[] { "assembly_valheim", "assembly_guiutils", "assembly_utils", "UnityEngine.CoreModule" })
@@ -41,6 +41,11 @@ internal static class Program
             if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Runtime loaded a different reference: " + actual);
         }
         System.Console.WriteLine("Runtime reference paths match the original Managed directory.");
+        // BepInEx's static core config is created by the plugin-registry fixtures. Keep it
+        // outside the installed game and user config, without starting the real Chainloader.
+        string fixtureConfig = Path.Combine(Path.GetTempPath(), "CreatureManager-check-" + Guid.NewGuid(), "config");
+        typeof(BepInEx.Paths).GetProperty("ConfigPath")!.SetValue(null, fixtureConfig);
+        typeof(BepInEx.Paths).GetProperty("BepInExConfigPath")!.SetValue(null, Path.Combine(fixtureConfig, "BepInEx.cfg"));
         // Offline fixture: accept ServerSync's scheduled startup action without creating a Unity object
         // or installing detours. The original game and plugin assemblies are never rewritten.
         Type helperType = typeof(BepInEx.ThreadingHelper);
@@ -57,6 +62,7 @@ internal static class Program
         };
         entry.GetProperty("Log", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)!.SetValue(null, log);
         CheckPatches(plugin);
+        LootContracts.Run(plugin, dropThatPath);
         ManagedContracts.Run(plugin);
     }
 

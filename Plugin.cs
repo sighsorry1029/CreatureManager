@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.1.14";
+    internal const string ModVersion = "1.1.15";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -79,6 +79,12 @@ public class CreatureManagerPlugin : BaseUnityPlugin
         RightPacked = 1
     }
 
+    public enum CharacterLootSystem
+    {
+        Vanilla = 0,
+        CalculateChance = 1
+    }
+
     public void Awake()
     {
         Log = Logger;
@@ -114,6 +120,9 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             MultiplayerDamageIncreasePerPlayer = config("4 - Multiplayer Difficulty", "DMG Increase Per Player In Multiplayer (%)", 4f, Ordered("Extra creature damage per nearby player after the first. Vanilla is 4%.", 90, new AcceptableValueRange<float>(0f, 200f)));
             MultiplayerMaximumPlayerCount = config("4 - Multiplayer Difficulty", "Maximum Player Count For Multiplayer Scaling", 5, Ordered("Maximum nearby player count used by vanilla multiplayer difficulty scaling. Vanilla is 5.", 80, new AcceptableValueRange<int>(1, 25)));
             BlinkAlertGracePeriod = config("5 - Modifiers", "Blink Alert Grace Period (s)", 3f, Ordered("Seconds after a creature becomes alerted during which Blink and its extended attack range are disabled. The timer expires even when no attack can start. Set to 0 for immediate Blink behavior.", 100, new AcceptableValueRange<float>(0f, 10f)));
+            LootSystem = config("6 - Loot", "Character Loot System", CharacterLootSystem.CalculateChance, Ordered("CalculateChance keeps the base drop chance and scales successful amounts linearly by stars for non-trophy items with levelMultiplier enabled. Vanilla preserves existing scaling. One-per-player rewards and explicit Enforcer bonus loot are unchanged. Independent of Enable Level System. Automatically inactive while DropNSpawn is loaded. Can work with Drop That; entries with ScaleByLevel=false are excluded.", 100));
+            AdditionalLootChancePerStarCreature = config("6 - Loot", "Chance For Additional Loot Per Star For Creatures", 50, Ordered("Additional amount percentage per star in CalculateChance mode for non-boss creatures. Expected amount = base amount * (1 + stars * percent / 100); the fractional remainder is rounded up with that probability. Zero removes star scaling for eligible drops. Inactive while DropNSpawn is loaded.", 90, new AcceptableValueRange<int>(0, 100)));
+            AdditionalLootChancePerStarBoss = config("6 - Loot", "Chance For Additional Loot Per Star For Bosses", 50, Ordered("Additional amount percentage per star in CalculateChance mode for characters identified as bosses by the game. Uses the same fractional rounding as creatures. Does not scale one-per-player rewards, trophies, or explicit Enforcer bonus loot. Inactive while DropNSpawn is loaded.", 80, new AcceptableValueRange<int>(0, 100)));
             _configHandlersSubscribed = true;
             EnableLevelSystem.SettingChanged += ReloadLevelConfiguration;
             BiomeLevelPreset.SettingChanged += ReloadLevelConfiguration;
@@ -233,6 +242,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             TryCleanup("reset Karma runtime state", CreatureKarmaManager.ResetRuntimeState);
             TryCleanup("reset modifier runtime state", CreatureModifierManager.ResetRuntimeState);
             TryCleanup("reset level runtime state", CreatureLevelManager.ResetRuntimeState);
+            TryCleanup("reset loot compatibility notice", CreatureLoot.ResetRuntimeState);
         }
 
         if (_feedPatchStarted)
@@ -430,6 +440,9 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     internal static ConfigEntry<float> MultiplayerDamageIncreasePerPlayer = null!;
     internal static ConfigEntry<int> MultiplayerMaximumPlayerCount = null!;
     internal static ConfigEntry<float> BlinkAlertGracePeriod = null!;
+    internal static ConfigEntry<CharacterLootSystem> LootSystem = null!;
+    internal static ConfigEntry<int> AdditionalLootChancePerStarCreature = null!;
+    internal static ConfigEntry<int> AdditionalLootChancePerStarBoss = null!;
 
     private static ConfigDescription Ordered(string description, int order, AcceptableValueBase? acceptableValues = null)
     {

@@ -146,6 +146,7 @@
         <Compile Include="CreatureAppearanceRuntime.cs"/>
         <Compile Include="CreatureKarmaManager.cs"/>
         <Compile Include="CreatureLevelManager.cs"/>
+        <Compile Include="CreatureLoot.cs"/>
         <Compile Include="CreatureLocalization.cs"/>
         <Compile Include="CreatureModifierManager.cs"/>
         <Compile Include="ModifierIconSource.cs"/>
