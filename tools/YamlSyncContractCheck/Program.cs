@@ -67,6 +67,27 @@ try
             Require(definition.MonsterAI?.AlertRange == 40f, "AI settings were not preserved.");
         });
 
+    // AI tuples deliberately accept aliases that character/boss tuples reject.
+    foreach (string token in new[] { "true", "false", "1", "0", "yes", "no", "y", "n", "on", "off" })
+    {
+        foreach (string variant in new[] { token, " " + token.ToUpperInvariant() + " " })
+        {
+            string aiYaml = $"- ai: BooleanFixture\n  baseAI:\n    aggressive: [\"{variant}\", \"{variant}\"]\n  monsterAI:\n    charge: [\"{variant}\", \"{variant}\"]\n";
+            Require(CreatureYaml.TryReadDefinitions<AiDefinition>(aiYaml, "AI boolean aliases", out _),
+                $"AI boolean alias '{variant}' was rejected.");
+        }
+
+        bool strictToken = token is "true" or "false";
+        Require(CreatureYaml.TryParseBossTuple(token + ",false", out _, out _, out _, out _) == strictToken,
+            $"Boss boolean policy changed for '{token}'.");
+    }
+    foreach (string token in new[] { "", " ", "2", "maybe", "true false" })
+    {
+        string aiYaml = $"- ai: BooleanFixture\n  baseAI:\n    aggressive: [\"{token}\", true]\n";
+        Require(!CreatureYaml.TryReadDefinitions<AiDefinition>(aiYaml, "invalid AI boolean", out _),
+            $"Invalid AI boolean '{token}' was accepted.");
+    }
+
     RoundTrip(
         new AttackDefinition
         {

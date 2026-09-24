@@ -439,10 +439,10 @@ internal static class CreatureYaml
         return float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed) && IsFinite(parsed);
     }
 
-    private static bool TryParseFlexibleBool(string value, out bool parsed)
+    internal static bool TryParseFlexibleBool(string? value, out bool parsed)
     {
         if (bool.TryParse(value, out parsed)) return true;
-        switch (value.Trim().ToLowerInvariant())
+        switch ((value ?? "").Trim().ToLowerInvariant())
         {
             case "1": case "yes": case "y": case "on": parsed = true; return true;
             case "0": case "no": case "n": case "off": parsed = false; return true;

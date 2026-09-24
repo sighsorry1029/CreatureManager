@@ -36,6 +36,7 @@ internal static class ManagedContracts
         Require(modifiers.GetField("AddSpiritDamage", Static)!.GetValue(null) is Action<Character, float, short>, "Spirit delegate on original DLL");
         CheckSnapshot(modifiers);
         CheckLevelPersistence(plugin);
+        CheckAiBooleanAliases(plugin);
 
         // This calls the production direct private-field access in assembly_guiutils, using only managed data.
         Type localizationManager = plugin.GetType("CreatureManager.CreatureServerLocalization", true)!;
@@ -85,6 +86,27 @@ internal static class ManagedContracts
         var distance = new SimulationDistance(1, 0, classic: true);
         Require(distance.IsClassic && distance.NearSimulationDistance == 1 && distance.TotalSimulationDistance == 1, "3x3 query policy");
         System.Console.WriteLine("Managed contracts passed: accessory access/delegates, snapshot v2, localization ownership, console authority, zone conversion, reflection paths.");
+    }
+
+    private static void CheckAiBooleanAliases(Assembly plugin)
+    {
+        // The pure parser can run without DomainManager's native MaterialPropertyBlock initializer.
+        MethodInfo parse = plugin.GetType("CreatureManager.CreatureYaml", true)!.GetMethod("TryParseFlexibleBool", Static)!;
+        foreach (var item in new[]
+        {
+            (Token: "true", Value: true), (Token: "false", Value: false),
+            (Token: "1", Value: true), (Token: "0", Value: false),
+            (Token: "yes", Value: true), (Token: "no", Value: false),
+            (Token: "y", Value: true), (Token: "n", Value: false),
+            (Token: "on", Value: true), (Token: "off", Value: false)
+        })
+        foreach (string token in new[] { item.Token, " " + item.Token.ToUpperInvariant() + " " })
+        {
+            object[] args = { token, false };
+            Require((bool)parse.Invoke(null, args)! && (bool)args[1] == item.Value,
+                "AI boolean alias: " + token);
+        }
+        System.Console.WriteLine("AI boolean contracts passed: 20 production parser calls; no AI component application.");
     }
 
     private static void CheckLevelPersistence(Assembly plugin)

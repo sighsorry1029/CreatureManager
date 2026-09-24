@@ -3012,30 +3012,13 @@ internal static class CreatureDomainManager
 
     private static bool TryParseBool(string token, string prefabName, string label, out bool value)
     {
-        if (bool.TryParse(token, out value))
+        if (CreatureYaml.TryParseFlexibleBool(token, out value))
         {
             return true;
         }
 
-        switch ((token ?? "").Trim().ToLowerInvariant())
-        {
-            case "1":
-            case "yes":
-            case "y":
-            case "on":
-                value = true;
-                return true;
-            case "0":
-            case "no":
-            case "n":
-            case "off":
-                value = false;
-                return true;
-            default:
-                value = false;
-                CreatureManagerPlugin.Log.LogWarning($"Creature '{prefabName}' {label} has invalid boolean '{token}'.");
-                return false;
-        }
+        CreatureManagerPlugin.Log.LogWarning($"Creature '{prefabName}' {label} has invalid boolean '{token}'.");
+        return false;
     }
 
     private static bool TrySetEnumField(object target, string fieldName, string token)
