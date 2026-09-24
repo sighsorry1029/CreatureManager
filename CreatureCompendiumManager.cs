@@ -121,7 +121,7 @@ internal static class CreatureCompendiumManager
         foreach (string modifier in CreatureModifierManager.GetKnownModifierKeys())
         {
             if (!globalModifiers.TryGetValue(modifier, out ModifierDefinition definition) ||
-                !CreatureModifierManager.TryGetModifierSprite(modifier, out Sprite sprite))
+                !CreatureModifierManager.TryGetModifierSprite(modifier, out _))
             {
                 continue;
             }
@@ -130,8 +130,7 @@ internal static class CreatureCompendiumManager
                 modifier,
                 CreatureModifierManager.GetModifierGroupHeading(modifier),
                 CreatureModifierManager.GetModifierDisplayName(modifier),
-                CreatureModifierManager.GetModifierCompendiumText(modifier, definition),
-                sprite));
+                CreatureModifierManager.GetModifierCompendiumText(modifier, definition)));
         }
 
         return entries;
@@ -258,15 +257,13 @@ internal static class CreatureCompendiumManager
         internal readonly string GroupHeading;
         internal readonly string Name;
         internal readonly string Description;
-        internal readonly Sprite Sprite;
 
-        internal CompendiumModifierEntry(string modifierKey, string groupHeading, string name, string description, Sprite sprite)
+        internal CompendiumModifierEntry(string modifierKey, string groupHeading, string name, string description)
         {
             ModifierKey = modifierKey;
             GroupHeading = groupHeading;
             Name = name;
             Description = description;
-            Sprite = sprite;
         }
     }
 }
