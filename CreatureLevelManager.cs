@@ -1,12 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using HarmonyLib;
 using UnityEngine;
 
 namespace CreatureManager;
 
 internal static class CreatureLevelManager
 {
+    private const string FrozenKingPhaseTwoPrefab = "FrozenKing_p2";
+    private static readonly int FrozenKingPhaseTwoHash = FrozenKingPhaseTwoPrefab.GetStableHashCode();
+    private static readonly AccessTools.FieldRef<Character, ZNetView> CharacterNetworkView =
+        AccessTools.FieldRefAccess<Character, ZNetView>("m_nview");
     private const string AppliedKey = "CreatureManager_LevelApplied";
     private const string ProcessingCompleteKey = "CreatureManager_LevelProcessingComplete";
     private const string DesiredLevelKey = "CreatureManager_DesiredLevel";
@@ -115,6 +120,31 @@ internal static class CreatureLevelManager
     internal static bool IsLevelSystemEnabled()
     {
         return CreatureManagerPlugin.EnableLevelSystem?.Value != CreatureManagerPlugin.Toggle.Off;
+    }
+
+    // Phase two's health is an encounter counter: seven Aspect explosions exhaust it.
+    // Use the network prefab identity at runtime, without allocating names or caching Unity objects.
+    internal static bool IsFrozenKingPhaseTwo(Character? character)
+    {
+        if (character == null)
+        {
+            return false;
+        }
+
+        ZNetView? view = CharacterNetworkView(character);
+        ZDO? zdo = view != null ? view.GetZDO() : null;
+        if (zdo != null && zdo.GetPrefab() != 0)
+        {
+            return IsFrozenKingPhaseTwo(zdo);
+        }
+
+        // Prefab editing and early initialization can precede Character.Awake/ZDO setup.
+        return string.Equals(GetPrefabName(character.gameObject), FrozenKingPhaseTwoPrefab, StringComparison.Ordinal);
+    }
+
+    internal static bool IsFrozenKingPhaseTwo(ZDO? zdo)
+    {
+        return zdo != null && zdo.GetPrefab() == FrozenKingPhaseTwoHash;
     }
 
     internal static void Load(List<LevelDefinition> definitions)
@@ -324,6 +354,11 @@ internal static class CreatureLevelManager
 
     private static bool TryApplyLevelState(Character character)
     {
+        if (IsFrozenKingPhaseTwo(character))
+        {
+            return false;
+        }
+
         if (!CreatureDomainManager.IsSynchronizedConfigurationReady())
         {
             PendingLevelCharacters[character.GetInstanceID()] = character;
@@ -880,6 +915,7 @@ internal static class CreatureLevelManager
     {
         if (character == null ||
             character.IsPlayer() ||
+            IsFrozenKingPhaseTwo(character) ||
             !TryGetOwnedZdo(character, out ZDO zdo) ||
             !zdo.GetBool(HealthAppliedKey, false))
         {
@@ -1000,6 +1036,12 @@ internal static class CreatureLevelManager
             return false;
         }
 
+        if (IsFrozenKingPhaseTwo(character) && level != 1)
+        {
+            error = "FrozenKing_p2 must retain its original level for the Aspect encounter.";
+            return false;
+        }
+
         ZNetView? nview = character.m_nview;
         if (nview == null || !nview.IsValid() || !nview.IsOwner())
         {
@@ -1014,6 +1056,11 @@ internal static class CreatureLevelManager
             return false;
         }
 
+        if (IsFrozenKingPhaseTwo(character))
+        {
+            return true;
+        }
+
         zdo.Set(DesiredLevelKey, level);
         zdo.Set(DesiredLevelSourceKey, "cm:spawn");
         zdo.Set(AppliedKey, true);
@@ -1025,7 +1072,7 @@ internal static class CreatureLevelManager
 
     internal static bool TryAdoptCommandLevel(Character character, int level)
     {
-        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer() || level < 1)
+        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer() || level < 1 || IsFrozenKingPhaseTwo(character))
         {
             return false;
         }
@@ -1089,7 +1136,7 @@ internal static class CreatureLevelManager
 
     internal static void RestoreConfiguredLevel(Character character, int level)
     {
-        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer())
+        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer() || IsFrozenKingPhaseTwo(character))
         {
             return;
         }
@@ -1158,7 +1205,7 @@ internal static class CreatureLevelManager
             return false;
         }
 
-        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer())
+        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer() || IsFrozenKingPhaseTwo(character))
         {
             return false;
         }
@@ -1530,6 +1577,18 @@ internal static class CreatureLevelManager
 
     private static SpawnPolicy GetSpawnPolicy(Character character)
     {
+        if (IsFrozenKingPhaseTwo(character))
+        {
+            return new SpawnPolicy(
+                rollLevel: false,
+                generalScope: null,
+                statScope: null,
+                allowStatDistanceScaling: false,
+                modifierMode: ModifierApplicationMode.Block,
+                modifierScope: LevelRuleScope.Full,
+                allowModifierDistanceScaling: false);
+        }
+
         return GetSpawnPolicy(CreatureManagerSpawnLifecycle.GetSpawnSource(character));
     }
 
@@ -1620,6 +1679,7 @@ internal static class CreatureLevelManager
     internal static bool AllowsModifierEffects(ZDO zdo, bool isBoss, bool isEnforcer)
     {
         return zdo != null &&
+               !IsFrozenKingPhaseTwo(zdo) &&
                IsLevelSystemEnabled() &&
                AreModifiersEnabled(isBoss, isEnforcer) &&
                GetSpawnPolicy(CreatureManagerSpawnLifecycle.GetSpawnSource(zdo)).ModifierMode !=

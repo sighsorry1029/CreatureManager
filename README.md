@@ -271,6 +271,8 @@ Levels can control weighted star distribution, health, damage, visual scale, dis
 
 CreatureManager is spawn-aware. Natural hostile spawns receive the complete matching rule, while breeding, eggs, grow-up transitions, tamed restores, Blood Magic summons, and explicit console spawns preserve or restrict values according to their lifecycle instead of blindly rerolling every creature initialization.
 
+`FrozenKing_p2` is protected because its health drives the seven-Aspect encounter. CreatureManager skips level/stat scaling, the creature `health` override (including regeneration time), and all modifiers for this exact prefab, and leaves incoming encounter damage unchanged. `cm:spawn` accepts it only at level 1 without modifiers; modifier inheritance and snapshot restore reject it. Phase 1, phase 3, and the Aspects retain their normal rules. This prevents interference in new encounters; it does not repair previously altered health or recover a stalled fight. Other mods and direct game commands can still alter the encounter.
+
 ### Star Loot Scaling
 
 The synchronized `[6 - Loot]` settings in `BepInEx/config/sighsorry.CreatureManager.cfg` work independently of `Enable Level System`:

@@ -3527,7 +3527,8 @@ internal static class CreatureDomainManager
     private static void ApplyHealthTuple(Character character, string? tuple)
     {
         string tupleValue = tuple ?? "";
-        if (string.IsNullOrWhiteSpace(tupleValue))
+        // Keep the prefab's health/regen pair; level-rule protection alone cannot undo this override.
+        if (string.IsNullOrWhiteSpace(tupleValue) || CreatureLevelManager.IsFrozenKingPhaseTwo(character))
         {
             return;
         }

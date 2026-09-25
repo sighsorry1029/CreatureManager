@@ -2607,6 +2607,12 @@ internal static class CreatureModifierManager
             return false;
         }
 
+        if (CreatureLevelManager.IsFrozenKingPhaseTwo(character) && modifiers.Count > 0)
+        {
+            error = "FrozenKing_p2 cannot receive modifiers during the Aspect encounter.";
+            return false;
+        }
+
         if (!TryNormalizeForcedModifierKeys(modifiers, out List<string> normalized, out error))
         {
             return false;
@@ -2624,6 +2630,11 @@ internal static class CreatureModifierManager
         {
             error = "The spawned creature has no ZDO.";
             return false;
+        }
+
+        if (CreatureLevelManager.IsFrozenKingPhaseTwo(character))
+        {
+            return true;
         }
 
         ModifierMask mask = ModifierMask.None;
@@ -2672,7 +2683,8 @@ internal static class CreatureModifierManager
 
     internal static bool InheritModifiers(Character source, Character target)
     {
-        if (!CreatureLevelManager.IsLevelSystemEnabled() || source == null || target == null || source == target || target.IsPlayer())
+        if (!CreatureLevelManager.IsLevelSystemEnabled() || source == null || target == null || source == target || target.IsPlayer() ||
+            CreatureLevelManager.IsFrozenKingPhaseTwo(target))
         {
             return false;
         }
@@ -2757,7 +2769,8 @@ internal static class CreatureModifierManager
 
     internal static bool RestoreModifierState(Character character, string serializedState)
     {
-        if (!TryGetZdo(character, out ZDO zdo) ||
+        if (CreatureLevelManager.IsFrozenKingPhaseTwo(character) ||
+            !TryGetZdo(character, out ZDO zdo) ||
             character.m_nview == null ||
             !character.m_nview.IsValid() ||
             !character.m_nview.IsOwner() ||
@@ -4161,7 +4174,10 @@ internal static class CreatureModifierManager
 
     internal static bool ApplyDamageModifiers(Character target, HitData hit)
     {
-        if (!CreatureLevelManager.IsLevelSystemEnabled() || target == null || hit == null)
+        // Preserve encounter damage even when its source has level or modifier bonuses.
+        // Returning true still runs the game's normal owner checks, resistances and death effects.
+        if (!CreatureLevelManager.IsLevelSystemEnabled() || target == null || hit == null ||
+            CreatureLevelManager.IsFrozenKingPhaseTwo(target))
         {
             return true;
         }
@@ -9486,6 +9502,11 @@ internal static class CreatureModifierManager
 
     private static void ApplyRuntimeModifierStats(Character character, ZDO zdo)
     {
+        if (CreatureLevelManager.IsFrozenKingPhaseTwo(character))
+        {
+            return;
+        }
+
         TrackRuntimeModifiers(character, zdo);
         InitializeServerReflectionObservation(character, zdo);
         ApplyStoredReapingHealth(character, zdo);
@@ -9495,6 +9516,7 @@ internal static class CreatureModifierManager
     internal static void RefreshStoredReapingScale(Character character)
     {
         if (character == null || character.IsPlayer() ||
+            CreatureLevelManager.IsFrozenKingPhaseTwo(character) ||
             !TryGetZdo(character, out ZDO zdo) ||
             !zdo.GetBool(AppliedKey, false))
         {

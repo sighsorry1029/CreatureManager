@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.16
+
+- Protect `FrozenKing_p2` from CreatureManager level/stat scaling, direct health/regen overrides, and all combat modifiers so its seven-Aspect encounter can complete through the game's normal phase-three transition. Phase 1, phase 3, and the Aspects retain their existing rules.
+- Preserve incoming encounter damage and block modifier inheritance/restoration on phase two, including Reaping stat restoration and Deathward lethal prevention. `cm:spawn` permits this prefab only at level 1 without modifiers. Existing altered encounters are not repaired or migrated.
+- Add managed regression checks for phase identification, spawn policies, health overrides, modifier application, seven unscaled hits, and command ownership. Actual boss fights and multiplayer execution remain separately required.
+- Require BepInExPack Valheim 5.4.2351.
+
 ## 1.1.15
 
 - Add synchronized `Character Loot System` settings with `CalculateChance` as the default and separate creature/boss percentages, both defaulting to 50% per star. Eligible drops retain their base chance and gain linear amounts with probabilistic rounding instead of exponential star scaling. Existing saved settings are preserved; select `Vanilla` to keep the existing calculation.

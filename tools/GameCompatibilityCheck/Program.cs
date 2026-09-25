@@ -64,6 +64,7 @@ internal static class Program
         CheckPatches(plugin);
         LootContracts.Run(plugin, dropThatPath);
         ManagedContracts.Run(plugin);
+        FrozenKingContracts.Run(plugin);
     }
 
     private static void CheckReferences(string pluginPath)
