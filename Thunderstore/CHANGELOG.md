@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.17
+
+- Add `Vanilla` to `Enable Level System`: keep levels assigned by the game or other mods while retaining CreatureManager stat, distance, scale, and modifier rules. Skip CM level rolls and Karma/Enforcer level bonuses; preserve the default `On`, existing `On`/`Off` values, explicit spawn-command levels, and completed creature state.
+- Keep modifiers independently controlled by `Global Modifiers`, `Boss Modifiers`, and `Enforcer Modifiers`; selecting `Vanilla` does not disable them. Track level-one creatures so later external level changes refresh health and damage scaling without compounding stats or healing existing damage.
+- Use the prefab's original level sizes in `Vanilla` mode when no matching `scalePerLevel` rule exists. Explicit zero and positive values keep their existing meaning, and Boss defaults remain unchanged. New YAML files comment out Global `scalePerLevel: 0.1`; this also leaves Global star-size growth disabled by default in `On`. Existing YAML files and stored modifier sizes are not rewritten.
+- Keep Global `damagePerLevel` at 0.25 and explain in YAML comments, config help, and the README that vanilla uses 0.5. `Vanilla` level assignment continues to use the configured stat values rather than switching all balance settings to vanilla.
+- Add managed regression checks for mode serialization, level assignment and adoption, ownership, health preservation, prefab sizing, explicit scale overrides, and generated YAML defaults. Actual game and multiplayer execution remain separately required.
+
 ## 1.1.16
 
 - Protect `FrozenKing_p2` from CreatureManager level/stat scaling, direct health/regen overrides, and all combat modifiers so its seven-Aspect encounter can complete through the game's normal phase-three transition. Phase 1, phase 3, and the Aspects retain their existing rules.

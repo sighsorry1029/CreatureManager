@@ -24,7 +24,7 @@ internal static class CreatureCompendiumManager
         }
 
         dialog.m_texts.RemoveAll(text => IsCreatureManagerPage(text?.m_topic));
-        if (CreatureManagerPlugin.EnableLevelSystem?.Value == CreatureManagerPlugin.Toggle.Off)
+        if (!CreatureLevelManager.IsLevelSystemEnabled())
         {
             return;
         }

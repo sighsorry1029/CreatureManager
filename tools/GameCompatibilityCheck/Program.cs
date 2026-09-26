@@ -65,6 +65,7 @@ internal static class Program
         LootContracts.Run(plugin, dropThatPath);
         ManagedContracts.Run(plugin);
         FrozenKingContracts.Run(plugin);
+        LevelModeContracts.Run(plugin);
     }
 
     private static void CheckReferences(string pluginPath)

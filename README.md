@@ -267,6 +267,22 @@ The supported surface is intentionally narrower than a full prefab database dump
 
 Level rules can target broad defaults or narrow content: global rules, bosses, biomes, named groups, and individual prefabs. Built-in biome presets provide a starting point, while explicit YAML rules replace only the values you choose.
 
+The synchronized `[2 - Levels]` option `Enable Level System` accepts:
+
+| Value | Automatic level assignment | Stat, distance, scale, and modifier rules |
+| --- | --- | --- |
+| `On` (default) | CreatureManager level weights, biome presets, and Karma/Enforcer level bonuses | Enabled |
+| `Vanilla` | Keep the level assigned by the game or another mod | Enabled, using that actual level |
+| `Off` | Keep the level assigned by the game or another mod | Disabled |
+
+Existing `On`/`Off` config values remain valid. With `Vanilla`, `Biome Level Preset`, `Bosses Follow Biome Level Preset`, and YAML `level` weights do not assign levels. Biome/group/prefab health, damage, per-level and distance multipliers, visual scale, and modifiers still follow the normal rule and spawn-source restrictions; the three modifier switches remain independent. Karma tracking and Enforcer encounters follow `Karma System Mode`, but their level bonuses are skipped. Loot settings remain independent. Explicit command levels (including `cm:spawn`) still work. Switching modes does not reroll or reset completed level/stat/modifier state on existing creatures; test automatic level assignment with new spawns.
+
+`Vanilla` selects the source of levels, not a complete vanilla balance preset. The default `Global.damagePerLevel` in `levels.yml` remains **0.25**, while vanilla uses **0.5**. Change it to 0.5 if you want the vanilla per-star damage progression; other matching rules and modifiers still apply.
+
+In `Vanilla` mode, if no matching rule supplies `scalePerLevel`, creatures use their prefab's original level sizes, including in dungeons and on saddle-able creatures. Level one and levels without a prefab size entry leave the current size alone. An explicit `0` keeps the original size without star growth; a positive value uses CM's existing size formula and dungeon/saddle restrictions. Color-state cycling remains enabled. Prefabs without level-size setups receive no automatic CM size adjustment when the rule is omitted.
+
+New default YAML files leave Global `scalePerLevel: 0.1` as a commented example and keep Boss `scalePerLevel: 0.1` active. In `On` mode, an omitted scale rule still means no star-size increase, so new default files also omit Global size growth in that mode; uncomment the example to enable it. Existing YAML files are never rewritten: an existing Global `scalePerLevel: 0.1` remains an explicit override until removed or commented. This does not migrate stored modifier sizes or automatically undo scale changes already made to loaded creatures.
+
 Levels can control weighted star distribution, health, damage, visual scale, distance scaling, and modifier selection. `damagePerLevel` replaces vanilla's 50% monster damage growth per level: for example, `damage: 1` and `damagePerLevel: 0.2` make a level 6 creature deal 2x level-1 damage to character targets before distance, multiplayer, and modifier scaling. Vanilla level visual states rotate when a creature exceeds the visual states supplied by its prefab.
 
 CreatureManager is spawn-aware. Natural hostile spawns receive the complete matching rule, while breeding, eggs, grow-up transitions, tamed restores, Blood Magic summons, and explicit console spawns preserve or restrict values according to their lifecycle instead of blindly rerolling every creature initialization.
