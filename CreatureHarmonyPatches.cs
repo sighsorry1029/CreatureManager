@@ -524,6 +524,21 @@ internal static class CreatureManagerBaseAiAwakePatch
     }
 }
 
+[HarmonyPatch]
+internal static class CreatureManagerCreatedBlockerZdoPatch
+{
+    private static MethodBase TargetMethod()
+    {
+        return AccessTools.Method(typeof(ZDOMan), nameof(ZDOMan.CreateNewZDO),
+            new[] { typeof(ZDOID), typeof(Vector3), typeof(int) });
+    }
+
+    private static void Postfix(ZDO __result)
+    {
+        CreatureKarmaManager.QueueCreatedBlockerZdo(__result);
+    }
+}
+
 internal static class CreatureManagerCharacterLifecycle
 {
     internal static void ApplyLevelAndModifiers(Character character)
@@ -850,6 +865,7 @@ internal static class CreatureManagerSpawnLifecycle
         finally
         {
             SpawnedCharacters.Clear();
+            CreatureSpawnBlocker.InvalidateQueries();
         }
     }
 

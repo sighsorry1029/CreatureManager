@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.1.17";
+    internal const string ModVersion = "1.2.0";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -62,6 +62,17 @@ public class CreatureManagerPlugin : BaseUnityPlugin
         Off = 0,
         On = 1,
         Vanilla = 2
+    }
+
+    public enum ModifierLimit
+    {
+        Off = 0,
+        // Keep the old Toggle value readable; config validation normalizes it to Max4.
+        On = 1,
+        Max2 = 2,
+        Max3 = 3,
+        Max4 = 4,
+        Max1 = 5
     }
 
     public enum LevelBiomePreset
@@ -108,15 +119,18 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             ShowSneakHoverResistances = config("1 - General", "Show Sneak Hover Resistances", Toggle.On, Ordered("If on, sneaking while hovering a non-tamed creature shows non-Normal and non-Ignore damage modifiers under its nameplate. Uses Normal Creature Nameplate Range.", 80), synchronizedSetting: false);
             ModifierHudIconLayout = config("1 - General", "Modifier HUD Icon Layout", ModifierIconLayout.FixedCategorySlots, Ordered("FixedCategorySlots keeps the first Offense, Defense, Affliction, and Special icon in its category slot; forced same-category extras fill unused slots so none are hidden. RightPacked removes category gaps and packs every visible icon against the right edge of creature and boss HUDs.", 70), synchronizedSetting: false);
             GenerateSampleTextures = config("1 - General", "Generate Sample Textures", Toggle.On, Ordered("If on, bundled sample PNGs are created in CreatureManager/textures when missing. Existing files are never overwritten or deleted; Off stops automatic creation but does not disable existing textures.", 60), synchronizedSetting: false);
+            BlockNearbySpawnsWhileBossActive = config("1 - General", "Block Nearby Spawns While Boss Is Active", Toggle.On, Ordered("Block new ordinary creatures from SpawnSystem, SpawnArea, and CreatureSpawner while a living non-Enforcer boss is in the surrounding near-loaded sectors (using the game's synchronized simulation distance). Checked around the candidate point for SpawnSystem and the spawner position for SpawnArea/CreatureSpawner. Interiors only match the same interior anchor zone. Existing creatures, raid spawns, boss prefabs, direct ability/altar summons, and Enforcer encounters are unchanged. Independent of Karma and level settings; applies on the next spawn attempt.", 50));
+            BlockNearbySpawnsWhileEnforcerActive = config("1 - General", "Block Nearby Spawns While Enforcer Is Active", Toggle.On, Ordered("Block new ordinary creatures from SpawnSystem, SpawnArea, and CreatureSpawner while a living Enforcer is in the surrounding near-loaded sectors. Uses the same scope and exclusions as the Boss option. Pending Enforcer reservations do not block. Independent of Karma and level settings; applies on the next spawn attempt.", 49));
             EnableLevelSystem = config("2 - Levels", "Enable Level System", LevelSystemMode.On, Ordered("Off disables CreatureManager level rules, level damage/health scaling, distance scaling, modifiers, and level visuals. On enables all of them. Vanilla keeps the levels assigned by the game or other mods, skips CreatureManager level rolls and Karma/Enforcer level bonuses, and still applies stat, distance, scale, and modifier rules. Vanilla still uses levels.yml stat values: Global damagePerLevel defaults to 0.25, not the vanilla value of 0.5. With no matching scalePerLevel rule, Vanilla uses the prefab's original level sizes; explicit 0 disables star growth. Explicit spawn-command levels remain available. Changing this setting does not reroll existing creatures.", 100));
             BiomeLevelPreset = config("2 - Levels", "Biome Level Preset", LevelBiomePreset.Easy, Ordered("Built-in level weights for vanilla biome names when Enable Level System is On. Explicit biome, group, and prefab level rules in levels.yml override the preset; Global remains the fallback for non-boss creatures and Enforcers.", 90));
             BossesFollowBiomeLevelPreset = config("2 - Levels", "Bosses Follow Biome Level Preset", Toggle.On, Ordered("If on and Enable Level System is On, regular bosses can use the built-in Biome Level Preset as a level fallback when no Boss, group, or prefab level rule applies. Other omitted boss fields never fall back to Global.", 85));
             ApplyLevelScaleToSaddleableCreatures = config("2 - Levels", "Apply Level Scale To Saddle-able Creatures", Toggle.On, Ordered("If off, levels.yml scalePerLevel is not applied to creatures that can use a saddle.", 70));
-            EnableGlobalModifiers = config("2 - Levels", "Global Modifiers", Toggle.On, Ordered("Master switch for modifier rolls and effects on non-boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 69));
-            EnableBossModifiers = config("2 - Levels", "Boss Modifiers", Toggle.On, Ordered("Master switch for modifier rolls and effects on regular boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 68));
-            EnableEnforcerModifiers = config("2 - Levels", "Enforcer Modifiers", Toggle.On, Ordered("Master switch for modifier rolls, effects, and modifier HUD icons on Karma Enforcers. This does not disable Enforcer summoning, level bonuses, or loot settings.", 67));
+            EnableGlobalModifiers = config("2 - Levels", "Global Modifiers", ModifierLimit.Max4, ModifierLimitDescription("Controls non-boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 69));
+            EnableBossModifiers = config("2 - Levels", "Boss Modifiers", ModifierLimit.Max4, ModifierLimitDescription("Controls regular boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 68));
+            EnableEnforcerModifiers = config("2 - Levels", "Enforcer Modifiers", ModifierLimit.Max4, ModifierLimitDescription("Controls Karma Enforcers independently of Global and Boss Modifiers. This does not disable Enforcer summoning, level bonuses, or loot settings.", 67));
             KarmaMode = config("3 - Karma", "Karma System Mode", KarmaSystemMode.KarmaLevelAndEnforcer, Ordered("Off disables Karma runtime processing without deleting stored values. KarmaLevelAndEnforcer enables both features, KarmaLevelOnly disables Enforcer summons, and EnforcerOnly tracks Karma for summons without adding Karma levels to normal spawns.", 100));
             MaximumEnforcersPerSector = config("3 - Karma", "Maximum Enforcers Per Sector", 1, Ordered("Maximum active Enforcers allowed in the same fixed 3x3 Karma neighborhood.", 90, new AcceptableValueRange<int>(1, 20)));
+            DungeonEnforcerSpawnDelay = config("3 - Karma", "Dungeon Enforcer Spawn Delay (s)", 5, Ordered("Seconds between the dungeon warning and spawning an Enforcer at its reserved position. Applies to periodic and Omen summons, including their minions; outdoor summons are unchanged. 0 spawns immediately. Reservations count toward the Enforcer limit. Existing reservations keep their deadline; they are canceled if the encounter becomes invalid, Enforcers are disabled, or karma.yml is successfully reloaded. Karma cost and cooldown start only after a successful spawn.", 88, new AcceptableValueRange<int>(0, 30)));
             EnforcerAbandonedDespawnSeconds = config("3 - Karma", "Enforcer Abandonment Despawn Time (s)", 120, Ordered("Seconds without a living player in the fixed 64 m encounter range before the Enforcer is removed without death drops. Summoned minions remain in the world. Dungeon checks require the same interior anchor zone; distance is measured on the XZ plane. Returning players or changing this value reset active timers. Enter an integer from 0 to 1500; 0 disables the feature.", 85, new AcceptableIntegerRangeWithoutSlider(0, 1500)));
             BlockEnforcerWhileBossActive = config("3 - Karma", "Block Enforcer While Boss Is Active", Toggle.On, Ordered("If on, Enforcer summons are blocked while a non-Enforcer boss is active in the same fixed 3x3 Karma neighborhood.", 80));
             BlockKarmaGainWhileBossActive = config("3 - Karma", "Block Karma Gain While Boss Is Active", Toggle.On, Ordered("If on, creature kills do not add Karma while a non-Enforcer boss is alive in the same fixed 3x3 Karma neighborhood. Killing the last active boss can still award Karma.", 75));
@@ -127,6 +141,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             MultiplayerDamageIncreasePerPlayer = config("4 - Multiplayer Difficulty", "DMG Increase Per Player In Multiplayer (%)", 4f, Ordered("Extra creature damage per nearby player after the first. Vanilla is 4%.", 90, new AcceptableValueRange<float>(0f, 200f)));
             MultiplayerMaximumPlayerCount = config("4 - Multiplayer Difficulty", "Maximum Player Count For Multiplayer Scaling", 5, Ordered("Maximum nearby player count used by vanilla multiplayer difficulty scaling. Vanilla is 5.", 80, new AcceptableValueRange<int>(1, 25)));
             BlinkAlertGracePeriod = config("5 - Modifiers", "Blink Alert Grace Period (s)", 3f, Ordered("Seconds after a creature becomes alerted during which Blink and its extended attack range are disabled. The timer expires even when no attack can start. Set to 0 for immediate Blink behavior.", 100, new AcceptableValueRange<float>(0f, 10f)));
+            ReflectionDamageCap = config("5 - Modifiers", "Reflection Damage Cap", 25, Ordered("Maximum health lost by the attacker per successful Reflection activation from one creature. Applies to normal creatures, bosses, and Enforcers, including existing creatures. 0 means unlimited. Multiple reflecting creatures have separate caps. Changes apply when the server authorizes the reflection; the YAML reflection ratio and proc chance are unchanged.", 90, new AcceptableIntegerRangeWithoutSlider(0, int.MaxValue)));
             LootSystem = config("6 - Loot", "Character Loot System", CharacterLootSystem.CalculateChance, Ordered("CalculateChance keeps the base drop chance and scales successful amounts linearly by stars for non-trophy items with levelMultiplier enabled. Vanilla preserves existing scaling. One-per-player rewards and explicit Enforcer bonus loot are unchanged. Independent of Enable Level System. Automatically inactive while DropNSpawn is loaded. Can work with Drop That; entries with ScaleByLevel=false are excluded.", 100));
             AdditionalLootChancePerStarCreature = config("6 - Loot", "Chance For Additional Loot Per Star For Creatures", 50, Ordered("Additional amount percentage per star in CalculateChance mode for non-boss creatures. Expected amount = base amount * (1 + stars * percent / 100); the fractional remainder is rounded up with that probability. Zero removes star scaling for eligible drops. Inactive while DropNSpawn is loaded.", 90, new AcceptableValueRange<int>(0, 100)));
             AdditionalLootChancePerStarBoss = config("6 - Loot", "Chance For Additional Loot Per Star For Bosses", 50, Ordered("Additional amount percentage per star in CalculateChance mode for characters identified as bosses by the game. Uses the same fractional rounding as creatures. Does not scale one-per-player rewards, trophies, or explicit Enforcer bonus loot. Inactive while DropNSpawn is loaded.", 80, new AcceptableValueRange<int>(0, 100)));
@@ -432,24 +447,60 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     internal static ConfigEntry<Toggle> ApplyLevelScaleToSaddleableCreatures = null!;
     internal static ConfigEntry<LevelBiomePreset> BiomeLevelPreset = null!;
     internal static ConfigEntry<Toggle> BossesFollowBiomeLevelPreset = null!;
-    internal static ConfigEntry<Toggle> EnableGlobalModifiers = null!;
-    internal static ConfigEntry<Toggle> EnableBossModifiers = null!;
-    internal static ConfigEntry<Toggle> EnableEnforcerModifiers = null!;
+    internal static ConfigEntry<ModifierLimit> EnableGlobalModifiers = null!;
+    internal static ConfigEntry<ModifierLimit> EnableBossModifiers = null!;
+    internal static ConfigEntry<ModifierLimit> EnableEnforcerModifiers = null!;
     internal static ConfigEntry<KarmaSystemMode> KarmaMode = null!;
     internal static ConfigEntry<int> MaximumEnforcersPerSector = null!;
+    internal static ConfigEntry<int> DungeonEnforcerSpawnDelay = null!;
     internal static ConfigEntry<int> EnforcerAbandonedDespawnSeconds = null!;
     internal static ConfigEntry<Toggle> BlockEnforcerWhileBossActive = null!;
     internal static ConfigEntry<Toggle> BlockKarmaGainWhileBossActive = null!;
     internal static ConfigEntry<Toggle> BlockKarmaGainWhileEnforcerActive = null!;
+    internal static ConfigEntry<Toggle> BlockNearbySpawnsWhileBossActive = null!;
+    internal static ConfigEntry<Toggle> BlockNearbySpawnsWhileEnforcerActive = null!;
     internal static ConfigEntry<Toggle> BlockOmenEnforcerDuringCooldown = null!;
     internal static ConfigEntry<Toggle> ShowKarmaValueOnMinimap = null!;
     internal static ConfigEntry<float> MultiplayerHealthIncreasePerPlayer = null!;
     internal static ConfigEntry<float> MultiplayerDamageIncreasePerPlayer = null!;
     internal static ConfigEntry<int> MultiplayerMaximumPlayerCount = null!;
     internal static ConfigEntry<float> BlinkAlertGracePeriod = null!;
+    internal static ConfigEntry<int> ReflectionDamageCap = null!;
     internal static ConfigEntry<CharacterLootSystem> LootSystem = null!;
     internal static ConfigEntry<int> AdditionalLootChancePerStarCreature = null!;
     internal static ConfigEntry<int> AdditionalLootChancePerStarBoss = null!;
+
+    private static ConfigDescription ModifierLimitDescription(string description, int order)
+    {
+        return Ordered(description + " Max4/Max3/Max2/Max1 limit new automatic rolls to at most that many modifiers; none is also possible. Successful group rolls above the cap are reduced randomly. Existing, inherited, restored, and explicitly forced modifiers are not trimmed or rerolled. Off disables rolls, effects, and modifier HUD icons without deleting stored modifiers. Legacy On means Max4.",
+            order, new AcceptableModifierLimits());
+    }
+
+    private sealed class AcceptableModifierLimits : AcceptableValueBase
+    {
+        // ConfigurationManager reads this property before falling back to Enum.GetValues.
+        [UsedImplicitly] public ModifierLimit[] AcceptableValues { get; } = new[]
+            { ModifierLimit.Max4, ModifierLimit.Max3, ModifierLimit.Max2, ModifierLimit.Max1, ModifierLimit.Off };
+
+        internal AcceptableModifierLimits() : base(typeof(ModifierLimit)) { }
+
+        public override object Clamp(object value)
+        {
+            return IsValid(value) ? value : ModifierLimit.Max4;
+        }
+
+        public override bool IsValid(object value)
+        {
+            return value is ModifierLimit limit &&
+                   (limit == ModifierLimit.Off || limit == ModifierLimit.Max1 || limit == ModifierLimit.Max2 ||
+                    limit == ModifierLimit.Max3 || limit == ModifierLimit.Max4);
+        }
+
+        public override string ToDescriptionString()
+        {
+            return "# Acceptable values: Max4, Max3, Max2, Max1, Off\n# Legacy On is read as Max4";
+        }
+    }
 
     private static ConfigDescription Ordered(string description, int order, AcceptableValueBase? acceptableValues = null)
     {

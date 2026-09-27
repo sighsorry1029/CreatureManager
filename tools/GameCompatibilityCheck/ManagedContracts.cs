@@ -37,6 +37,7 @@ internal static class ManagedContracts
         CheckSnapshot(modifiers);
         CheckLevelPersistence(plugin);
         CheckAiBooleanAliases(plugin);
+        CheckReflectionDamageCap(plugin, modifiers);
 
         // This calls the production direct private-field access in assembly_guiutils, using only managed data.
         Type localizationManager = plugin.GetType("CreatureManager.CreatureServerLocalization", true)!;
@@ -86,6 +87,79 @@ internal static class ManagedContracts
         var distance = new SimulationDistance(1, 0, classic: true);
         Require(distance.IsClassic && distance.NearSimulationDistance == 1 && distance.TotalSimulationDistance == 1, "3x3 query policy");
         System.Console.WriteLine("Managed contracts passed: accessory access/delegates, snapshot v2, localization ownership, console authority, zone conversion, reflection paths.");
+    }
+
+    private static void CheckReflectionDamageCap(Assembly plugin, Type modifiers)
+    {
+        Type entry = plugin.GetType("CreatureManager.CreatureManagerPlugin", true)!;
+        FieldInfo setting = entry.GetField("ReflectionDamageCap", Static)!;
+        object? saved = setting.GetValue(null);
+        MethodInfo limit = modifiers.GetMethod("LimitReflectionDamage", Static)!;
+        float Limit(float amount) => (float)limit.Invoke(null, new object[] { amount })!;
+        string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CreatureManager-reflection-" + Guid.NewGuid() + ".cfg");
+        try
+        {
+            setting.SetValue(null, null);
+            Require(Limit(100f) == 25f && Limit(12.5f) == 12.5f && Limit(25f) == 25f,
+                "Reflection default caps only excess damage");
+            var range = (BepInEx.Configuration.AcceptableValueBase)Activator.CreateInstance(
+                entry.GetNestedType("AcceptableIntegerRangeWithoutSlider", BindingFlags.NonPublic)!,
+                Instance, null, new object[] { 0, int.MaxValue }, null)!;
+            var config = new BepInEx.Configuration.ConfigFile(path, false) { SaveOnConfigSet = false };
+            var cap = config.Bind("5 - Modifiers", "Reflection Damage Cap", 25,
+                new BepInEx.Configuration.ConfigDescription("fixture", range));
+            setting.SetValue(null, cap);
+            cap.Value = 0;
+            Require(Limit(100f) == 100f, "Reflection zero cap means unlimited");
+            cap.Value = 10;
+            Require(Limit(100f) == 10f, "Reflection reads changed cap without recreating creatures");
+            config.Save();
+            cap.Value = 25;
+            config.Reload();
+            Require(Limit(100f) == 10f, "Reflection cap save/reload");
+            cap.Value = int.MaxValue;
+            Require(Limit(10000f) == 10000f, "Reflection cap has no arbitrary low maximum");
+            cap.Value = 25;
+
+            // Execute the production health-loss budget consumer independently of Unity/RPC transport.
+            Type stateType = modifiers.GetNestedType("ServerReflectionRequestState", BindingFlags.NonPublic)!;
+            object state = Activator.CreateInstance(stateType, nonPublic: true)!;
+            FieldInfo damage = stateType.GetField("UnclaimedDamage", Instance)!;
+            FieldInfo expires = stateType.GetField("UnclaimedDamageUntil", Instance)!;
+            MethodInfo consume = modifiers.GetMethod("TryConsumeServerReflectionDamage", Static)!;
+            bool Consume(float actualDamage) => (bool)consume.Invoke(null, new[] { state, (object)actualDamage, 10f })!;
+            damage.SetValue(state, 1000f);
+            expires.SetValue(state, 11f);
+            Require(Consume(100f / 0.1f), "Full original loss authorizes reflection");
+            Require(Limit(100f) == 25f && (float)damage.GetValue(state)! == 0f && !Consume(250f),
+                "Capped reflection consumes all original evidence; no residual replay budget");
+            damage.SetValue(state, 250f);
+            expires.SetValue(state, 11f);
+            Require(!Consume(100f / 0.1f) && (float)damage.GetValue(state)! == 250f,
+                "Insufficient original loss is not authorized just because final damage would fit the cap");
+            expires.SetValue(state, 9f);
+            Require(!Consume(250f), "Expired loss remains rejected");
+
+            // Static call-site checks complement the budget fixtures; no coroutine/network is executed here.
+            Type iterator = modifiers.GetNestedTypes(BindingFlags.NonPublic)
+                .Single(t => t.Name.StartsWith("<AuthorizeReflectionAfterHealthSync>", StringComparison.Ordinal));
+            var instructions = PatchProcessor.GetOriginalInstructions(iterator.GetMethod("MoveNext", Instance)!).ToList();
+            int consumeIndex = instructions.FindIndex(i => Equals(i.operand, consume));
+            int procIndex = instructions.FindIndex(i => i.operand is MethodInfo m && m.DeclaringType == typeof(UnityEngine.Random) && m.Name == "Range");
+            int capIndex = instructions.FindIndex(i => Equals(i.operand, limit));
+            int rpcIndex = instructions.FindIndex(i => i.operand is MethodInfo m && m.DeclaringType == typeof(ZNetView) && m.Name == "InvokeRPC");
+            Require(consumeIndex >= 0 && consumeIndex < procIndex && procIndex < capIndex && capIndex < rpcIndex,
+                "Reflection cap follows full authorization/proc and precedes approved RPC");
+            foreach (string name in new[] { "CompleteDirectDamage", "SendExactReflectionDamage", "RPC_ReflectionDamageRequest", "ApplyAuthorizedReflectionDamage" })
+                Require(!PatchProcessor.GetOriginalInstructions(modifiers.GetMethod(name, Static)!).Any(i => Equals(i.operand, limit)),
+                    "No early cap or client re-cap in " + name);
+        }
+        finally
+        {
+            setting.SetValue(null, saved);
+            if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+        }
+        System.Console.WriteLine("Reflection cap contracts passed: default/below-cap/unlimited/live config/save/reload, full health-loss budget consumption, replay/insufficient/expired evidence rejection, and static server cap ordering. No Unity coroutine or multiplayer execution.");
     }
 
     private static void CheckAiBooleanAliases(Assembly plugin)

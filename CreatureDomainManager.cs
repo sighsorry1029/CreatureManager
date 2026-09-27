@@ -340,6 +340,7 @@ internal static class CreatureDomainManager
         }
 
         GameDataReady = true;
+        CreatureKarmaManager.InvalidateBossBlockerDiscovery();
         CreatureConsoleCommands.InvalidateSpawnAutocompleteOptions();
         CreatureAssetOwnerCatalog.InvalidateMappings();
         GameDataRefreshPending = true;
@@ -1394,6 +1395,8 @@ internal static class CreatureDomainManager
                 {
                     CreaturePrefabRegistry.CompleteCloneApplyPass();
                 }
+
+                CreatureKarmaManager.InvalidateBossBlockerDiscovery();
 
                 if (!LoadedHumanoidsRefreshedForCurrentGameData)
                 {

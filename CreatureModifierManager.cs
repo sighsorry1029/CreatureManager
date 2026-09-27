@@ -1767,11 +1767,33 @@ internal static class CreatureModifierManager
     private static string DescribeReflection(float power, float procChance)
     {
         string fallback = $"On direct melee hits, has a {FormatPercent(procChance)} chance to remove health from the hostile attacker equal to {FormatPercent(power)} of the creature's actual health loss. The reflected health loss bypasses defense and resistance.";
-        return LocalizeModifierDescription(
+        string description = LocalizeModifierDescription(
             "reflection",
             fallback,
             ("chance", FormatPercent(procChance)),
             ("power", FormatPercent(power)));
+        int cap = GetReflectionDamageCap();
+        if (cap == 0)
+        {
+            return description;
+        }
+
+        string capDescription = CreatureLocalization.Format(
+            "cm_modifier_reflection_cap",
+            "Each activation from one creature removes at most {cap} health.",
+            ("cap", cap.ToString(CultureInfo.InvariantCulture)));
+        return $"{description} {capDescription}";
+    }
+
+    private static int GetReflectionDamageCap()
+    {
+        return Math.Max(0, CreatureManagerPlugin.ReflectionDamageCap?.Value ?? 25);
+    }
+
+    private static float LimitReflectionDamage(float amount)
+    {
+        int cap = GetReflectionDamageCap();
+        return cap == 0 ? amount : Mathf.Min(amount, cap);
     }
 
     private static string DescribeAdrenalineDrain(float power, float gainReduction, float procChance, float duration)
@@ -2568,6 +2590,7 @@ internal static class CreatureModifierManager
         }
 
         ModifierMask mask = hasChances ? RollConfiguredMask(character, chances) : ModifierMask.None;
+        mask = LimitRolledModifiers(mask, CreatureLevelManager.GetMaximumRolledModifiers(character));
 
         ModifierPowerDefinition powers = new();
         bool hasPowers = false;
@@ -3670,6 +3693,39 @@ internal static class CreatureModifierManager
         }
 
         return mask;
+    }
+
+    private static ModifierMask LimitRolledModifiers(ModifierMask mask, int maximum)
+    {
+        if (maximum <= 0)
+        {
+            return ModifierMask.None;
+        }
+
+        // The four group rolls stay unchanged. Only surplus successes are removed, without
+        // favoring earlier groups or consuming extra random values at the default cap.
+        ulong remaining = (ulong)mask;
+        int count = 0;
+        for (ulong bits = remaining; bits != 0; bits &= bits - 1)
+        {
+            count++;
+        }
+
+        while (count > maximum)
+        {
+            int index = UnityEngine.Random.Range(0, count);
+            ulong candidates = remaining;
+            for (int skipped = 0; skipped < index; skipped++)
+            {
+                candidates &= candidates - 1;
+            }
+
+            ulong selected = candidates & (~candidates + 1);
+            remaining &= ~selected;
+            count--;
+        }
+
+        return (ModifierMask)remaining;
     }
 
     private static bool IsModifierApplicable(Character character, ModifierSpec spec)
@@ -5063,7 +5119,9 @@ internal static class CreatureModifierManager
 
                     ZNetView targetView = target.m_nview;
                     PlayReflectionEffects(source, target, source.GetCenterPoint());
-                    targetView.InvokeRPC(ReflectionDamageRpc, sourceId, amount);
+                    // Consume the full observed health loss above before limiting the outgoing damage.
+                    // Capping the request first would leave part of that loss available for another request.
+                    targetView.InvokeRPC(ReflectionDamageRpc, sourceId, LimitReflectionDamage(amount));
                     yield break;
                 }
 

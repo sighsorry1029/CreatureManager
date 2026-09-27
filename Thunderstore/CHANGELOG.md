@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+- Add independent, server-synchronized switches to block nearby ordinary spawns while a boss or Enforcer is active, both On by default. Cover SpawnSystem, SpawnArea, and CreatureSpawner within the game's near-loaded sectors while preserving raids, boss prefabs, direct summons, and Enforcer encounters. These switches work independently of Karma and level settings.
+- Improve server-side boss discovery so existing and remotely simulated bosses can enforce the configured Karma-gain and Enforcer-summon blocks, including KarmaLevelOnly and Vanilla level mode. Preserve the regional/interior boundaries, existing Karma level bonuses, and Blamer's separate behavior.
+- Replace the Global, Boss, and Enforcer modifier switches with independent Max4/Max3/Max2/Max1/Off choices. Max4 remains the default and old On values read as Max4. Limits affect new automatic rolls only; existing, inherited, restored, and explicitly forced modifiers are not trimmed. Off continues to disable effects and icons without deleting saved modifiers.
+- Add Dungeon Enforcer Spawn Delay (s), defaulting to **5 seconds** with a 0-30 range. Warn players before dungeon Enforcers and their minions arrive together at a reserved position. Cancel invalid reservations without charging Karma or starting cooldown; outdoor encounters and a zero delay remain immediate. Existing saved settings are preserved.
+- Add Reflection Damage Cap, defaulting to **25 health per activation from one creature**; 0 means unlimited. Apply the cap after validating and consuming the original damage evidence, and show it in the localized modifier description.
+- Include three DeepNorth encounters in newly generated karma.yml: Barka outdoors, ElakingMole with Elaking in TheHole01, and JotunWarrior with BlobMork in MorkBorg. Each uses a +2 level bonus, required/consumed Karma of 40/30, and guaranteed bonus loot. Existing YAML files are not overwritten.
+- Simplify texture-transfer bookkeeping and faction snapshot publication while preserving transfer retry/cleanup behavior, configuration validation, and public faction lookup contracts.
+- Extend managed regression checks for boss discovery, modifier limits, reflection caps, delayed summons, nearby spawn blocking, texture transfers, and faction reloads. Verify original Valheim 1.0.16 client/server references and DropNSpawn/Drop That patch composition; actual game and multiplayer execution remain separately required.
+
 ## 1.1.17
 
 - Add `Vanilla` to `Enable Level System`: keep levels assigned by the game or other mods while retaining CreatureManager stat, distance, scale, and modifier rules. Skip CM level rolls and Karma/Enforcer level bonuses; preserve the default `On`, existing `On`/`Off` values, explicit spawn-command levels, and completed creature state.

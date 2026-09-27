@@ -1726,11 +1726,33 @@ internal static class CreatureLevelManager
 
     private static bool AreModifiersEnabled(bool isBoss, bool isEnforcer)
     {
-        bool categoryEnabled = isBoss
-            ? CreatureManagerPlugin.EnableBossModifiers?.Value != CreatureManagerPlugin.Toggle.Off
-            : CreatureManagerPlugin.EnableGlobalModifiers?.Value != CreatureManagerPlugin.Toggle.Off;
-        bool enforcerEnabled = CreatureManagerPlugin.EnableEnforcerModifiers?.Value != CreatureManagerPlugin.Toggle.Off;
-        return isEnforcer ? enforcerEnabled : categoryEnabled;
+        return GetMaximumRolledModifiers(isBoss, isEnforcer) > 0;
+    }
+
+    internal static int GetMaximumRolledModifiers(Character character)
+    {
+        if (character == null || character.IsPlayer())
+        {
+            return 0;
+        }
+
+        return GetMaximumRolledModifiers(character.IsBoss(), CreatureKarmaManager.IsEnforcer(character));
+    }
+
+    private static int GetMaximumRolledModifiers(bool isBoss, bool isEnforcer)
+    {
+        CreatureManagerPlugin.ModifierLimit limit = (isEnforcer
+            ? CreatureManagerPlugin.EnableEnforcerModifiers
+            : isBoss ? CreatureManagerPlugin.EnableBossModifiers : CreatureManagerPlugin.EnableGlobalModifiers)
+            ?.Value ?? CreatureManagerPlugin.ModifierLimit.Max4;
+        return limit switch
+        {
+            CreatureManagerPlugin.ModifierLimit.Off => 0,
+            CreatureManagerPlugin.ModifierLimit.Max1 => 1,
+            CreatureManagerPlugin.ModifierLimit.Max2 => 2,
+            CreatureManagerPlugin.ModifierLimit.Max3 => 3,
+            _ => 4
+        };
     }
 
     private static ModifierApplicationMode GetModifierMode(Character character)

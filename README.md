@@ -12,6 +12,8 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 
 CreatureManager provides 32 modifiers in four groups. Natural rolls select at most one modifier from each group, for up to four visible modifiers. The values below are the generated `Global` defaults; `levels.yml` and `karma.yml` can override them for Global, Boss, prefab/group, Enforcer, and individual Enforcer rules.
 
+In `2 - Levels`, `Global Modifiers`, `Boss Modifiers`, and `Enforcer Modifiers` each accept `Max4` (default), `Max3`, `Max2`, `Max1`, or `Off`. Enforcers use their own setting regardless of boss classification. The cap applies only to new automatic modifier rolls: each group rolls normally, then excess successes are removed randomly without favoring a category. It is a maximum, not a guaranteed count; lower caps can reduce the final chance of receiving any particular modifier. Existing creatures, inherited/restored modifier state, and explicit `cm:spawn` modifier lists are not trimmed or rerolled. Raising the cap does not add modifiers to completed creatures. `Off` retains its existing role of disabling rolls, effects, and modifier HUD icons without deleting saved modifiers. Old `On` config values are read as `Max4`.
+
 #### Offense
 
 | Icon | Modifier | Effect with generated `Global` defaults |
@@ -32,7 +34,7 @@ CreatureManager provides 32 modifiers in four groups. Natural rolls select at mo
 | <img src="https://i.ibb.co/wNHPbYF1/armored.png" width="40" height="40" alt="Armored icon"> | **Armored** (`armored`) | Takes 30% less damage. |
 | <img src="https://i.ibb.co/ns25Rvk0/deathward.png" width="40" height="40" alt="Deathward icon"> | **Deathward** (`deathward`) | Cancels lethal damage and restores 20% of max health. Has a 10s cooldown and up to 3 activations. |
 | <img src="https://i.ibb.co/x8s20mxk/regenerating.png" width="40" height="40" alt="Regenerating icon"> | **Regenerating** (`regenerating`) | Heals a configurable share of max health per second, capped at 20 health per second by default. Rate defaults are 1% for Global creatures, 0.2% for bosses, and 0.5% for Enforcers. |
-| <img src="https://i.ibb.co/S4q133Xd/reflection.png" width="40" height="40" alt="Reflection icon"> | **Reflection** (`reflection`) | Has a 50% chance on a direct melee hit to reflect 10% of the health actually lost, bypassing defense and resistance. |
+| <img src="https://i.ibb.co/S4q133Xd/reflection.png" width="40" height="40" alt="Reflection icon"> | **Reflection** (`reflection`) | Has a 50% chance on a direct melee hit to reflect 10% of the health actually lost, bypassing defense and resistance. Capped at 25 health per activation by default. |
 | <img src="https://i.ibb.co/1JYL26MD/vortex.png" width="40" height="40" alt="Vortex icon"> | **Vortex** (`vortex`) | Has a 50% chance to negate projectile damage, push, stagger, and status effects. |
 | <img src="https://i.ibb.co/KjW1GynX/adaptive.png" width="40" height="40" alt="Adaptive icon"> | **Adaptive** (`adaptive`) | Remembers the dominant hit type for 5s and reduces matching damage by 50%. |
 | <img src="https://i.ibb.co/mrcBq1d6/unflinching.png" width="40" height="40" alt="Unflinching icon"> | **Unflinching** (`unflinching`) | Immune to normal-hit and perfect-parry stagger. |
@@ -99,6 +101,8 @@ Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains
 ![Reflection modifier returning melee damage](https://i.ibb.co/84LqjWMj/reflection.gif)
 
 *Reflection returns part of the creature's actual health loss to a direct melee attacker.*
+
+`5 - Modifiers` → `Reflection Damage Cap` is a server-synchronized integer setting, defaulting to `25` health per successful activation from one creature; `0` removes the cap. It applies to existing and newly spawned normal creatures, bosses, and Enforcers. Multiple reflectors have separate caps, so hitting three of them can return up to 75 health in total at the default setting. The server reads the current cap after validating and consuming the full original health-loss evidence; already authorized damage keeps its approved amount. The `reflection` YAML tuple remains `chance%, reflectedRatio, procChance`.
 
 ![Vortex modifier negating a projectile](https://i.ibb.co/k2FtL0g8/vortex.gif)
 
@@ -315,9 +319,19 @@ Karma is a regional pressure system based on a sliding 3x3 neighborhood of vanil
 
 Enforcers turn high Karma into encounters. A biome or dungeon table can choose an Enforcer, minions, modifiers, level bonus, bonus loot, and location restrictions. Nearby overlapping player regions are evaluated as one connected check region to avoid duplicate rolls for the same group.
 
+New default `karma.yml` files include three DeepNorth encounters: Barka alone outdoors, ElakingMole with one Elaking in `TheHole01`, and JotunWarrior with one BlobMork in `MorkBorg`. Each uses `[40, 30, 2]` for required Karma, consumed Karma, and additional level bonus, inherits the Enforcer modifier rules, and grants its Enforcer's trophy plus two Silver Necklaces as bonus loot. The level bonus is not a final star cap. Dungeon entries match the location prefab names, not the dungeon generator names. Existing `karma.yml` files are preserved; add a DeepNorth section manually to enable these encounters in an existing configuration.
+
 Enforcer behavior can be used together with Karma levels or independently through BepInEx configuration. Current Karma appears near the minimap, and Enforcer events use localized center-screen messages.
 
 Karma is currently stored in server memory and resets when the server process restarts.
+
+The boss-blocking options use server-side ZDO discovery as well as loaded creatures, so stored bosses and bosses simulated by remote clients can block kill Karma and Enforcer summons even when their GameObjects are not loaded on the server. Discovery is independent of the level mode and still runs in `KarmaLevelOnly`. The existing outdoor/dungeon and regional boundaries apply; killing the last nearby boss can still award Karma. These options do not clear existing Karma level bonuses or change Blamer's separate Karma gain.
+
+`Dungeon Enforcer Spawn Delay (s)` in `3 - Karma` defaults to **5** (0–30). Dungeon periodic and Omen summons select their encounter and position once, announce the delay to players in that interior anchor zone, and spawn at the reserved point after the delay. Minions arrive with the Enforcer; outdoor summons and a delay of 0 remain immediate. Pending reservations count toward the regional Enforcer limit. A reservation is canceled if no living connected player remains in its interior anchor zone, boss/cap/cooldown/Karma checks no longer allow it, or the reserved point is no longer valid. Omen retains its existing cooldown/Karma bypass settings. Position checks use loaded geometry or the existing ZDO spawner anchor on an unloaded server; they never relocate a reservation. Karma cost and cooldown begin only after successful creation. Existing deadlines do not change when the delay setting changes. Disabling Enforcers, successfully reloading `karma.yml`, or ending the server session clears reservations; they are not saved or restored.
+
+`1 - General` contains two independent, server-synchronized switches, both **On** by default: `Block Nearby Spawns While Boss Is Active` and `Block Nearby Spawns While Enforcer Is Active`. They stop new ordinary creatures from `SpawnSystem`, `SpawnArea`, and `CreatureSpawner` while the selected kind of living blocker is nearby. Boss means a non-Enforcer boss; pending Enforcer reservations and ordinary minions do not count. These switches also work with Karma or the level system Off, and live edits apply on the next spawn attempt.
+
+Nearby means the game's synchronized **near-loaded sectors**, centered on the candidate point for `SpawnSystem` or the spawner position for `SpawnArea`/`CreatureSpawner`. The current simulation distance and classic/circular sector shape are respected; interiors require the same interior anchor zone, separate from outdoors. Each spawn owner checks its loaded characters and received nearby ZDOs, not all bosses anywhere on the server. Network propagation delay still applies. Existing creatures, raid spawns, boss prefabs, non-character items/fish, direct ability/altar summons, and CM's Enforcer/minion encounter creation are unaffected. Ordinary animals are included. A fixed dungeon spawner's first spawn can be postponed, but blocking never marks it as already spawned. Normal attempt intervals continue; no deferred spawn queue or accumulated wave is created. Other mods that implement a special encounter through ordinary spawners may need these switches Off.
 
 ## Common Workflows
 

@@ -42,6 +42,7 @@ internal static class CreatureKarmaManager
     private const string CreatureDeathRpc = "CreatureManager_KarmaCreatureDeath";
     private const string BlockerObservationRpc = "CreatureManager_KarmaBlockerObservation";
     private const string CenterQuoteRpc = "CreatureManager_KarmaCenterQuote";
+    private const string EnforcerWarningMessage = "$cm_message_enforcer_warning";
     private const string KarmaStatusRequestRpc = "CreatureManager_KarmaStatusRequest";
     private const string KarmaStatusResponseRpc = "CreatureManager_KarmaStatusResponse";
     private const float KarmaStatusRequestInterval = 1f;
@@ -124,6 +125,7 @@ internal static class CreatureKarmaManager
     private static readonly Dictionary<int, ResolvedEnforcerSettings> RuntimeEnforcerSettings = new();
     private static readonly Dictionary<int, List<EnforcerLootDefinition>> RuntimeEnforcerLoot = new();
     private static readonly HashSet<ZDOID> TrackedEnforcerZdoIds = new();
+    private static readonly List<EnforcerSummonPlan> PendingEnforcerSummons = new();
     private static readonly Dictionary<ZDOID, float> EnforcerNoPlayerSince = new();
     private static readonly List<EnforcerPlayerPresence> EnforcerPlayerPresenceBuffer = new();
     private static readonly HashSet<ZDOID> EnforcerPlayerPresenceIds = new();
@@ -133,6 +135,17 @@ internal static class CreatureKarmaManager
     private static readonly List<string> EnforcerBootstrapPrefabNames = new();
     private static readonly HashSet<ZDOID> TrackedBossZdoIds = new();
     private static readonly HashSet<ZDOID> ReportedBlockerZdoIds = new();
+    private static readonly Dictionary<ZDOID, float> PendingBlockerZdos = new();
+    private static readonly List<ZDOID> CompletedBlockerZdos = new();
+    private static readonly List<string> BossBootstrapPrefabs = new();
+    private static readonly List<ZDO> BossDiscoveryBuffer = new();
+    private static ZNetScene? BossDiscoveryScene;
+    private static bool BossDiscoveryActive;
+    private static bool BossBootstrapPending = true;
+    private static bool BossBootstrapInitialized;
+    private static int BossDiscoveryPrefabCount = -1;
+    private static int BossBootstrapPrefabIndex;
+    private static int BossBootstrapZdoIndex;
     private static readonly Dictionary<ZDOID, bool> ObservedPlayerDeathStates = new();
     private static readonly HashSet<ZDOID> ServerPendingCreatureDeaths = new();
     private static readonly Dictionary<long, int> ServerPendingCreatureDeathCounts = new();
@@ -217,6 +230,25 @@ internal static class CreatureKarmaManager
         NoSpawnPosition,
         SectorStateCapacity,
         SpawnFailed
+    }
+
+    // Selected once. Keep positions and resolved rules through the delay, without retaining
+    // a Unity prefab object or rerolling the encounter when players move.
+    private sealed class EnforcerSummonPlan
+    {
+        internal EnforcerCandidateDefinition Candidate = null!;
+        internal ResolvedEnforcerSettings Settings = null!;
+        internal Vector3 SpawnPosition;
+        internal Vector3 PlayerPosition;
+        internal Vector3 StatePosition;
+        internal ZDOID ExcludedCharacterId;
+        internal HashSet<string>? RegionZoneKeys;
+        internal string SectorKey = "";
+        internal float SpawnAt;
+        internal bool Dungeon;
+        internal bool IgnoreCooldown;
+        internal bool IgnoreRequiredKarma;
+        internal bool Forced;
     }
 
     private static bool IsKarmaSystemEnabled()
@@ -352,6 +384,7 @@ internal static class CreatureKarmaManager
         RuntimeEnforcerSettings.Clear();
         RuntimeEnforcerLoot.Clear();
         TrackedEnforcerZdoIds.Clear();
+        PendingEnforcerSummons.Clear();
         EnforcerNoPlayerSince.Clear();
         EnforcerPlayerPresenceBuffer.Clear();
         EnforcerPlayerPresenceIds.Clear();
@@ -361,6 +394,12 @@ internal static class CreatureKarmaManager
         EnforcerBootstrapPrefabNames.Clear();
         TrackedBossZdoIds.Clear();
         ReportedBlockerZdoIds.Clear();
+        PendingBlockerZdos.Clear();
+        CompletedBlockerZdos.Clear();
+        BossDiscoveryScene = null;
+        BossDiscoveryActive = false;
+        BossDiscoveryPrefabCount = -1;
+        InvalidateBossBlockerDiscovery();
         ServerPendingCreatureDeaths.Clear();
         ServerPendingCreatureDeathCounts.Clear();
         ServerProcessedCreatureDeaths.Clear();
@@ -528,6 +567,22 @@ AshLands:
       loot: [TrophyFallenValkyrie:1, SilverNecklace:2]
     - summon: [Morgen_NonSleeping, Charred_Twitcher:2]
       loot: [TrophyMorgen:1, SilverNecklace:2]
+
+DeepNorth:
+  enabled: true
+  enforcers:
+    - summon: [Barka]
+      settings: [40, 30, 2]
+      loot: [TrophyBarka:1, SilverNecklace:2]
+  dungeonEnforcers:
+    - summon: [ElakingMole, Elaking]
+      location: TheHole01
+      settings: [40, 30, 2]
+      loot: [TrophyMole:1, SilverNecklace:2]
+    - summon: [JotunWarrior, BlobMork]
+      location: MorkBorg
+      settings: [40, 30, 2]
+      loot: [TrophyJotunWarrior:1, SilverNecklace:2]
 
 """;
     }
@@ -943,15 +998,15 @@ AshLands:
             context.OmenChance > 0f &&
             UnityEngine.Random.Range(0f, 1f) < context.OmenChance)
         {
-            bool summoned = TryForceEnforcerSummonNear(
+            bool accepted = TryForceEnforcerSummonNear(
                 context.PlayerKillerId,
                 context.DeadId,
                 GetKarmaRealm(context.Position),
                 out EnforcerSummonFailure failure);
-            string failureSuffix = summoned ? "" : $" reason={failure}";
+            string failureSuffix = accepted ? "" : $" reason={failure}";
             CreatureManagerPlugin.Log.LogInfo(
                 $"Karma Omen triggered by {context.Prefab}: attribution={context.AttributionKind} " +
-                $"chance={context.OmenChance:P0} summoned={summoned}{failureSuffix}");
+                $"chance={context.OmenChance:P0} accepted={accepted}{failureSuffix}");
         }
     }
 
@@ -1291,6 +1346,7 @@ AshLands:
         bool isServer = ZNet.instance != null && ZNet.instance.IsServer();
         if (isServer)
         {
+            UpdateServerBossDiscovery(advanceBootstrap: true);
             float serverNow = Time.time;
             RefreshObservedPlayerDeathTransitions();
             PruneSectorStates(serverNow);
@@ -1298,6 +1354,7 @@ AshLands:
 
         if (!IsEnforcerEnabled())
         {
+            PendingEnforcerSummons.Clear();
             EnforcerNoPlayerSince.Clear();
             LastEnforcerAbandonmentDespawnSeconds = -1;
             if (!EnforcerBootstrapScanPending || EnforcerBootstrapScanInitialized)
@@ -1314,6 +1371,7 @@ AshLands:
         }
 
         float now = Time.time;
+        UpdatePendingEnforcerSummons(now);
         if (EnforcerBootstrapScanPending)
         {
             if (AdvanceEnforcerBootstrapScan())
@@ -2052,6 +2110,170 @@ AshLands:
         return Mathf.Max(0, bonus);
     }
 
+    private static bool IsServerBossDiscoveryEnabled()
+    {
+        return ZNet.instance != null && ZNet.instance.IsServer() && IsKarmaSystemEnabled() &&
+               (ShouldBlockEnforcerWhileBossActive() || ShouldBlockKarmaGainWhileBossActive());
+    }
+
+    internal static void QueueCreatedBlockerZdo(ZDO zdo)
+    {
+        if (IsServerBossDiscoveryEnabled() && zdo != null && !zdo.m_uid.IsNone())
+        {
+            // Remote CreateNewZDO runs BEFORE Deserialize. Resolve the prefab on a later
+            // tick (or before a blocking decision), without requiring a client report.
+            PendingBlockerZdos[zdo.m_uid] = Time.realtimeSinceStartup + 5f;
+        }
+    }
+
+    internal static void InvalidateBossBlockerDiscovery()
+    {
+        BossBootstrapPending = true;
+        BossBootstrapInitialized = false;
+        BossBootstrapPrefabIndex = 0;
+        BossBootstrapZdoIndex = 0;
+        BossBootstrapPrefabs.Clear();
+        BossDiscoveryBuffer.Clear();
+    }
+
+    private static void UpdateServerBossDiscovery(bool advanceBootstrap)
+    {
+        if (!IsServerBossDiscoveryEnabled())
+        {
+            BossDiscoveryActive = false;
+            PendingBlockerZdos.Clear();
+            return;
+        }
+
+        if (ZNetScene.instance == null || ZDOMan.instance == null)
+        {
+            return;
+        }
+
+        ZNetScene scene = ZNetScene.instance;
+        if (!BossDiscoveryActive || !ReferenceEquals(scene, BossDiscoveryScene) ||
+            BossDiscoveryPrefabCount != scene.m_prefabs.Count)
+        {
+            InvalidateBossBlockerDiscovery();
+            BossDiscoveryScene = scene;
+            BossDiscoveryPrefabCount = scene.m_prefabs.Count;
+        }
+        BossDiscoveryActive = true;
+
+        float now = Time.realtimeSinceStartup;
+        CompletedBlockerZdos.Clear();
+        foreach (KeyValuePair<ZDOID, float> pending in PendingBlockerZdos)
+        {
+            ZDO zdo = ZDOMan.instance.GetZDO(pending.Key);
+            if (TryTrackReceivedBlockerZdo(zdo) || now >= pending.Value)
+            {
+                CompletedBlockerZdos.Add(pending.Key);
+            }
+        }
+        foreach (ZDOID id in CompletedBlockerZdos)
+        {
+            PendingBlockerZdos.Remove(id);
+        }
+        CompletedBlockerZdos.Clear();
+
+        if (advanceBootstrap && BossBootstrapPending)
+        {
+            AdvanceBossBootstrap();
+        }
+    }
+
+    private static bool TryTrackReceivedBlockerZdo(ZDO? zdo)
+    {
+        if (zdo == null || !zdo.IsValid() || !IsTrackedCharacterZdoAlive(zdo))
+        {
+            return true;
+        }
+
+        if (zdo.GetPrefab() == 0 || ZNetScene.instance == null)
+        {
+            return false;
+        }
+        GameObject? prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+        if (prefab == null)
+        {
+            return false;
+        }
+        Character? character = prefab.GetComponent<Character>();
+        if (character != null && !character.IsPlayer())
+        {
+            TrackPotentialBlockerZdo(zdo, character.IsBoss());
+        }
+        return true;
+    }
+
+    private static void AdvanceBossBootstrap()
+    {
+        if (!BossBootstrapInitialized)
+        {
+            foreach (GameObject prefab in ZNetScene.instance.m_prefabs)
+            {
+                if (prefab != null && prefab.TryGetComponent(out Character character) && character.IsBoss())
+                {
+                    // Include CM clones as well as vanilla/other-mod bosses.
+                    BossBootstrapPrefabs.Add(prefab.name);
+                }
+            }
+            BossBootstrapInitialized = true;
+        }
+        if (BossBootstrapPrefabIndex >= BossBootstrapPrefabs.Count)
+        {
+            BossBootstrapPending = false;
+            return;
+        }
+
+        // One iterative slice per maintenance tick. Never exhaust a world scan in a loop.
+        BossDiscoveryBuffer.Clear();
+        bool complete = ZDOMan.instance.GetAllZDOsWithPrefabIterative(
+            BossBootstrapPrefabs[BossBootstrapPrefabIndex], BossDiscoveryBuffer, ref BossBootstrapZdoIndex);
+        foreach (ZDO zdo in BossDiscoveryBuffer)
+        {
+            TryTrackReceivedBlockerZdo(zdo);
+        }
+        BossDiscoveryBuffer.Clear();
+        if (complete)
+        {
+            BossBootstrapPrefabIndex++;
+            BossBootstrapZdoIndex = 0;
+            BossBootstrapPending = BossBootstrapPrefabIndex < BossBootstrapPrefabs.Count;
+        }
+    }
+
+    private static void DiscoverRegionalBossBlockers(Vector2i centerZone, HashSet<string>? regionZoneKeys)
+    {
+        // During bootstrap, checking only its already-visited slice could permit a kill
+        // or summon next to a saved boss. Cover the complete decision region instead.
+        if (regionZoneKeys == null)
+        {
+            DiscoverBossBlockersInZone(new Vector2s(centerZone.x, centerZone.y), ZoneRadius);
+            return;
+        }
+        foreach (string key in regionZoneKeys)
+        {
+            int comma = key.IndexOf(',');
+            if (comma > 2 && int.TryParse(key.Substring(2, comma - 2), NumberStyles.Integer, CultureInfo.InvariantCulture, out int x) &&
+                int.TryParse(key.Substring(comma + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out int y))
+            {
+                DiscoverBossBlockersInZone(new Vector2s(x, y), 0);
+            }
+        }
+    }
+
+    private static void DiscoverBossBlockersInZone(Vector2s zone, int radius)
+    {
+        BossDiscoveryBuffer.Clear();
+        ZDOMan.instance.FindSectorObjects(zone, new SimulationDistance(radius, 0, classic: true), BossDiscoveryBuffer);
+        foreach (ZDO zdo in BossDiscoveryBuffer)
+        {
+            TryTrackReceivedBlockerZdo(zdo);
+        }
+        BossDiscoveryBuffer.Clear();
+    }
+
     internal static void ObservePotentialBlocker(Character character)
     {
         if (!IsKarmaSystemEnabled() ||
@@ -2476,6 +2698,8 @@ AshLands:
         }
     }
 
+    internal static bool IsEnforcerZdo(ZDO zdo) => zdo.GetBool(EnforcerKey, false);
+
     private static void StoreEnforcerPresenceAnchor(ZDO zdo)
     {
         if (zdo.GetBool(EnforcerPresenceAnchorStoredKey, false))
@@ -2621,7 +2845,63 @@ AshLands:
             }
         }
 
-        if (!TrySpawnCreature(summon.Boss, bossPrefab, spawnPosition, playerPosition, markEnforcer: true, EnforcerNameSuffix, resolvedSettings, candidate.Loot, out Character boss))
+        int delay = dungeonSummon ? Mathf.Clamp(CreatureManagerPlugin.DungeonEnforcerSpawnDelay?.Value ?? 5, 0, 30) : 0;
+        EnforcerSummonPlan plan = new()
+        {
+            Candidate = candidate,
+            Settings = resolvedSettings,
+            SpawnPosition = spawnPosition,
+            PlayerPosition = playerPosition,
+            StatePosition = statePosition,
+            ExcludedCharacterId = excludedCharacterId,
+            RegionZoneKeys = regionZoneKeys == null ? null : new HashSet<string>(regionZoneKeys, StringComparer.Ordinal),
+            SectorKey = sectorKey,
+            SpawnAt = now + delay,
+            Dungeon = dungeonSummon,
+            IgnoreCooldown = ignoreCooldown,
+            IgnoreRequiredKarma = ignoreRequiredKarma,
+            Forced = ignoreCooldown || ignoreChance || ignoreRequiredKarma
+        };
+        if (delay > 0)
+        {
+            PendingEnforcerSummons.Add(plan);
+            BroadcastRegionalCenterMessage(EnforcerWarningMessage, playerPosition,
+                new HashSet<string>(StringComparer.Ordinal) { GetSectorKey(playerPosition) }, delay);
+            CreatureManagerPlugin.Log.LogInfo($"Karma Enforcer reserved: {summon.Boss} zone={sectorKey} delay={delay}s position={spawnPosition}");
+            return true;
+        }
+
+        return TrySpawnEnforcerEncounter(plan, now, playerPosition, out failure);
+    }
+
+    private static bool TrySpawnEnforcerEncounter(
+        EnforcerSummonPlan plan,
+        float now,
+        Vector3 playerPosition,
+        out EnforcerSummonFailure failure)
+    {
+        failure = EnforcerSummonFailure.None;
+        EnforcerSummonSet summon = plan.Candidate.Summon;
+        ResolvedEnforcerSettings resolvedSettings = plan.Settings;
+        Vector3 spawnPosition = plan.SpawnPosition;
+        if (!TryGetCreaturePrefab(summon.Boss, out GameObject bossPrefab))
+        {
+            failure = EnforcerSummonFailure.SpawnFailed;
+            return false;
+        }
+
+        lock (Sync)
+        {
+            // Sector state can be pruned while waiting; capacity must still be available
+            // before creating a creature whose cost/cooldown will need to be recorded.
+            if (!TryEnsureSectorStatesUnsafe(GetSectorKeys(plan.StatePosition).ToArray()))
+            {
+                failure = EnforcerSummonFailure.SectorStateCapacity;
+                return false;
+            }
+        }
+
+        if (!TrySpawnCreature(summon.Boss, bossPrefab, spawnPosition, playerPosition, markEnforcer: true, EnforcerNameSuffix, resolvedSettings, plan.Candidate.Loot, out Character boss))
         {
             failure = EnforcerSummonFailure.SpawnFailed;
             return false;
@@ -2638,7 +2918,7 @@ AshLands:
             for (int i = 0; i < minion.Count; i++)
             {
                 Vector3 minionPosition;
-                if (dungeonSummon)
+                if (plan.Dungeon)
                 {
                     if (!TryFindDungeonMinionPosition(
                             minionPrefab,
@@ -2676,16 +2956,146 @@ AshLands:
             }
         }
 
+        float karma;
         float remainingKarma;
         lock (Sync)
         {
-            remainingKarma = ApplyEnforcerCostUnsafe(statePosition, now, resolvedSettings);
+            karma = GetBestStateUnsafe(plan.StatePosition, out _).Karma;
+            remainingKarma = ApplyEnforcerCostUnsafe(plan.StatePosition, now, resolvedSettings);
         }
 
-        CreatureManagerPlugin.Log.LogInfo($"Karma Enforcer summoned: {GetPrefabName(boss)} zone={sectorKey} karma={karma:0.#}->{remainingKarma:0.#} forced={ignoreCooldown || ignoreChance || ignoreRequiredKarma}");
-        BroadcastRegionalCenterQuote(EnforcerSpawnQuotes, statePosition, regionZoneKeys);
+        CreatureManagerPlugin.Log.LogInfo($"Karma Enforcer summoned: {GetPrefabName(boss)} zone={plan.SectorKey} karma={karma:0.#}->{remainingKarma:0.#} forced={plan.Forced}");
+        BroadcastRegionalCenterQuote(EnforcerSpawnQuotes, plan.StatePosition, plan.RegionZoneKeys);
 
         return true;
+    }
+
+    private static void UpdatePendingEnforcerSummons(float now)
+    {
+        if (PendingEnforcerSummons.Count == 0)
+        {
+            return;
+        }
+
+        List<ConnectedPlayerContext> players = GetConnectedAlivePlayerContexts();
+        for (int index = 0; index < PendingEnforcerSummons.Count;)
+        {
+            EnforcerSummonPlan plan = PendingEnforcerSummons[index];
+            ConnectedPlayerContext? target = FindPendingEnforcerTarget(plan, players);
+            EnforcerSummonFailure failure = GetPendingEnforcerFailure(plan, target, now);
+            if (failure == EnforcerSummonFailure.None && now < plan.SpawnAt)
+            {
+                index++;
+                continue;
+            }
+
+            // Remove before any spawn or callback: failed/canceled reservations never retry,
+            // and another maintenance tick cannot charge or create the same encounter twice.
+            PendingEnforcerSummons.RemoveAt(index);
+            if (failure == EnforcerSummonFailure.None)
+            {
+                if (!TryGetCreaturePrefab(plan.Candidate.Summon.Boss, out GameObject prefab) ||
+                    !IsReservedDungeonPositionValid(prefab, plan.SpawnPosition, target!.Position))
+                {
+                    failure = EnforcerSummonFailure.NoSpawnPosition;
+                }
+                else if (TrySpawnEnforcerEncounter(plan, now, target!.Position, out failure))
+                {
+                    continue;
+                }
+            }
+
+            CreatureManagerPlugin.Log.LogDebug($"Karma Enforcer reservation canceled: {plan.Candidate.Summon.Boss} zone={plan.SectorKey} reason={failure}");
+        }
+    }
+
+    private static ConnectedPlayerContext? FindPendingEnforcerTarget(
+        EnforcerSummonPlan plan,
+        IReadOnlyList<ConnectedPlayerContext> players)
+    {
+        Vector2i anchorZone = ZoneSystem.GetZone(plan.PlayerPosition).ToVector2i();
+        ConnectedPlayerContext? nearest = null;
+        float nearestDistance = float.PositiveInfinity;
+        foreach (ConnectedPlayerContext player in players)
+        {
+            // Match the existing interior anchor-zone contract; adjacent dungeons or an
+            // outdoor player in the broader Karma region cannot keep this reservation alive.
+            Vector2i zone = ZoneSystem.GetZone(player.Position).ToVector2i();
+            if (!IsLikelyDungeonPosition(player.Position) || zone.x != anchorZone.x || zone.y != anchorZone.y)
+            {
+                continue;
+            }
+
+            float distance = (player.Position - plan.SpawnPosition).sqrMagnitude;
+            if (distance < nearestDistance)
+            {
+                nearest = player;
+                nearestDistance = distance;
+            }
+        }
+
+        return nearest;
+    }
+
+    private static EnforcerSummonFailure GetPendingEnforcerFailure(
+        EnforcerSummonPlan plan, ConnectedPlayerContext? target, float now)
+    {
+        if (!IsEnforcerEnabled())
+        {
+            return EnforcerSummonFailure.FeatureDisabled;
+        }
+
+        if (target == null)
+        {
+            return EnforcerSummonFailure.KillerUnavailable;
+        }
+
+        // Reservations have already passed the combined active+pending admission check.
+        // Execute them sequentially against live creatures, so a lowered cap cancels extras.
+        EnforcerSummonFailure failure = GetEnforcerBlockerFailure(
+            plan.StatePosition, plan.RegionZoneKeys, plan.ExcludedCharacterId, includePending: false);
+        if (failure != EnforcerSummonFailure.None)
+        {
+            return failure;
+        }
+
+        lock (Sync)
+        {
+            if (!plan.IgnoreCooldown && GetRemainingEnforcerCooldownUnsafe(
+                    plan.StatePosition, now, plan.Settings, plan.RegionZoneKeys) > 0f)
+            {
+                return EnforcerSummonFailure.Cooldown;
+            }
+
+            if (!plan.IgnoreRequiredKarma && GetBestStateUnsafe(plan.StatePosition, out _).Karma < plan.Settings.RequiredKarma)
+            {
+                return EnforcerSummonFailure.NoEligibleCandidate;
+            }
+        }
+
+        return EnforcerSummonFailure.None;
+    }
+
+    private static bool IsReservedDungeonPositionValid(GameObject prefab, Vector3 position, Vector3 target)
+    {
+        if (!IsFinite(position) || !IsLikelyDungeonPosition(position))
+        {
+            return false;
+        }
+
+        if (ZoneSystem.instance == null || !ZoneSystem.instance.IsZoneLoaded(position))
+        {
+            // A dedicated server may not have dungeon geometry loaded. Preserve the existing
+            // ZDO-anchor path, but require the anchor at this exact point; never pick a new one.
+            return TryFindDungeonZdoAnchorPosition(position, 0.1f, out Vector3 anchor) &&
+                   (anchor - position).sqrMagnitude <= 0.01f;
+        }
+
+        // Unlike the initial path search, this only validates: do not snap to the floor/navmesh
+        // or move the reserved position toward the player's new location.
+        return ZoneSystem.instance.GetSolidHeight(position, out float floorHeight, 1) &&
+               Mathf.Abs(floorHeight - position.y) <= 1.25f &&
+               HasDungeonSpawnClearance(prefab, position, GetSpawnRotation(position, target));
     }
 
     private static Vector2 GetRandomHorizontalOffset(float minRadius, float maxRadius)
@@ -2850,6 +3260,7 @@ AshLands:
         HashSet<string>? regionZoneKeys = null,
         ZDOID excludedCharacterId = default)
     {
+        UpdateServerBossDiscovery(advanceBootstrap: false);
         activeEnforcers = 0;
         hasNonEnforcerBoss = false;
         Vector2i centerZone = ZoneSystem.GetZone(position).ToVector2i();
@@ -2898,6 +3309,7 @@ AshLands:
             }
         }
 
+        int loadedEnforcers = activeEnforcers;
         CountTrackedBlockerZdos(
             centerZone,
             centerRealm,
@@ -2906,6 +3318,15 @@ AshLands:
             observedCharacterIds,
             ref activeEnforcers,
             ref hasNonEnforcerBoss);
+
+        if (!hasNonEnforcerBoss && BossBootstrapPending && BossDiscoveryActive &&
+            ZDOMan.instance != null && ZNetScene.instance != null)
+        {
+            DiscoverRegionalBossBlockers(centerZone, regionZoneKeys);
+            activeEnforcers = loadedEnforcers;
+            CountTrackedBlockerZdos(centerZone, centerRealm, regionZoneKeys, excludedCharacterId,
+                observedCharacterIds, ref activeEnforcers, ref hasNonEnforcerBoss);
+        }
     }
 
     private static void CountTrackedBlockerZdos(
@@ -2967,6 +3388,24 @@ AshLands:
             }
 
             Vector3 trackedPosition = trackedZdo.GetPosition();
+            // Loaded Characters above retain their instance policy. For an unloaded
+            // ZDO, use the current prefab classification after template/clone reloads.
+            if (trackedZdo.GetBool(EnforcerKey, false))
+            {
+                TrackedBossZdoIds.Remove(trackedId);
+                if (TrackedEnforcerZdoIds.Add(trackedId) && IsFinite(trackedPosition) &&
+                    IsInEnforcerCheckRegion(trackedPosition, centerZone, centerRealm, regionZoneKeys))
+                {
+                    activeEnforcers++;
+                }
+                continue;
+            }
+            Character? prefabCharacter = ZNetScene.instance?.GetPrefab(trackedZdo.GetPrefab())?.GetComponent<Character>();
+            if (prefabCharacter != null && !prefabCharacter.IsBoss())
+            {
+                TrackedBossZdoIds.Remove(trackedId);
+                continue;
+            }
             if (IsFinite(trackedPosition) &&
                 IsInEnforcerCheckRegion(trackedPosition, centerZone, centerRealm, regionZoneKeys))
             {
@@ -2976,7 +3415,7 @@ AshLands:
         }
     }
 
-    private static bool IsTrackedCharacterZdoAlive(ZDO zdo)
+    internal static bool IsTrackedCharacterZdoAlive(ZDO zdo)
     {
         if (zdo == null || zdo.GetBool(ZDOVars.s_dead, false))
         {
@@ -3017,7 +3456,8 @@ AshLands:
     private static EnforcerSummonFailure GetEnforcerBlockerFailure(
         Vector3 position,
         HashSet<string>? regionZoneKeys,
-        ZDOID excludedCharacterId)
+        ZDOID excludedCharacterId,
+        bool includePending = true)
     {
         GetEnforcerBlockerState(
             position,
@@ -3025,7 +3465,8 @@ AshLands:
             out bool hasNonEnforcerBoss,
             regionZoneKeys: regionZoneKeys,
             excludedCharacterId: excludedCharacterId);
-        if (activeEnforcers >= GetMaximumEnforcersPerSector())
+        int pendingEnforcers = includePending ? CountPendingEnforcers(position, regionZoneKeys) : 0;
+        if (activeEnforcers + pendingEnforcers >= GetMaximumEnforcersPerSector())
         {
             return EnforcerSummonFailure.ActiveEnforcerCap;
         }
@@ -3033,6 +3474,22 @@ AshLands:
         return ShouldBlockEnforcerWhileBossActive() && hasNonEnforcerBoss
             ? EnforcerSummonFailure.ActiveBoss
             : EnforcerSummonFailure.None;
+    }
+
+    private static int CountPendingEnforcers(Vector3 position, HashSet<string>? regionZoneKeys)
+    {
+        Vector2i zone = ZoneSystem.GetZone(position).ToVector2i();
+        KarmaRealm realm = GetKarmaRealm(position);
+        int count = 0;
+        foreach (EnforcerSummonPlan pending in PendingEnforcerSummons)
+        {
+            if (IsInEnforcerCheckRegion(pending.SpawnPosition, zone, realm, regionZoneKeys))
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private static bool TryFindSummonPosition(
@@ -4482,6 +4939,20 @@ AshLands:
         }
 
         string message = quotes[UnityEngine.Random.Range(0, quotes.Count)];
+        BroadcastRegionalCenterMessage(message, position, regionZoneKeys);
+    }
+
+    private static void BroadcastRegionalCenterMessage(
+        string message,
+        Vector3 position,
+        HashSet<string>? regionZoneKeys = null,
+        int warningSeconds = 0)
+    {
+        if (message.Length == 0 || !IsFinite(position))
+        {
+            return;
+        }
+
         HashSet<string> targetZoneKeys = regionZoneKeys ??
                                          new HashSet<string>(GetSectorKeys(position), StringComparer.Ordinal);
         if (ZNet.instance != null &&
@@ -4504,7 +4975,7 @@ AshLands:
 
                 if (localPlayer != null && player.CharacterId == localCharacterId)
                 {
-                    ShowLocalCenterQuote(message);
+                    ShowLocalCenterQuote(message, warningSeconds);
                     continue;
                 }
 
@@ -4517,6 +4988,10 @@ AshLands:
                 {
                     ZPackage package = new();
                     package.Write(message);
+                    if (message == EnforcerWarningMessage)
+                    {
+                        package.Write(warningSeconds);
+                    }
                     ZRoutedRpc.instance.InvokeRoutedRPC(
                         player.PeerUid,
                         CenterQuoteRpc,
@@ -4537,12 +5012,24 @@ AshLands:
             !fallbackPlayer.IsDead() &&
             targetZoneKeys.Contains(GetSectorKey(fallbackPlayer.transform.position)))
         {
-            ShowLocalCenterQuote(message);
+            ShowLocalCenterQuote(message, warningSeconds);
         }
     }
 
-    private static void ShowLocalCenterQuote(string message)
+    private static void ShowLocalCenterQuote(string message, int warningSeconds = 0)
     {
+        if (message == EnforcerWarningMessage)
+        {
+            if (warningSeconds < 1 || warningSeconds > 30)
+            {
+                return;
+            }
+
+            message = CreatureLocalization.Format("cm_message_enforcer_warning",
+                "An Enforcer will appear in {seconds} seconds. Prepare yourself!",
+                ("seconds", warningSeconds.ToString(CultureInfo.InvariantCulture)));
+        }
+
         if (message.Length > 0 && Player.m_localPlayer != null)
         {
             ((Character)Player.m_localPlayer).Message(
@@ -4564,7 +5051,8 @@ AshLands:
         try
         {
             string message = package.ReadString();
-            ShowLocalCenterQuote(message);
+            int warningSeconds = message == EnforcerWarningMessage ? package.ReadInt() : 0;
+            ShowLocalCenterQuote(message, warningSeconds);
         }
         catch
         {
@@ -5429,6 +5917,7 @@ AshLands:
         internal void Commit()
         {
             Settings = _settings;
+            PendingEnforcerSummons.Clear();
             ResetEnforcerBootstrapScan();
         }
     }

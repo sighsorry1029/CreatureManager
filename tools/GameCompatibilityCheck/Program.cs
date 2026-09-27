@@ -67,6 +67,10 @@ internal static class Program
         ManagedContracts.Run(plugin);
         FrozenKingContracts.Run(plugin);
         LevelModeContracts.Run(plugin);
+        BossBlockerContracts.Run(plugin);
+        ModifierLimitContracts.Run(plugin);
+        EnforcerDelayContracts.Run(plugin);
+        SpawnBlockerContracts.Run(plugin);
     }
 
     private static void CheckReferences(string pluginPath)
