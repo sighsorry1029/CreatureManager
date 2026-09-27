@@ -38,7 +38,6 @@ internal static class CreatureTextureSync
     private static readonly uint[] Crc32Table = BuildCrc32Table();
     private static readonly object Sync = new();
     private static readonly Queue<OutgoingChunk> OutgoingChunks = new();
-    private static readonly HashSet<string> QueuedTransfers = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, int> RemainingTransferChunks = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, DateTime> RecentlyServed = new(StringComparer.Ordinal);
     private static DateTime NextServeHistoryExpiryUtc = DateTime.MaxValue;
@@ -578,7 +577,7 @@ internal static class CreatureTextureSync
                     }
 
                     string transferKey = BuildTransferKey(sender, rootHash, hash);
-                    if (QueuedTransfers.Contains(transferKey) ||
+                    if (RemainingTransferChunks.ContainsKey(transferKey) ||
                         RecentlyServed.TryGetValue(transferKey, out DateTime lastServed) && now - lastServed < DuplicateServeDelay)
                     {
                         continue;
@@ -609,7 +608,6 @@ internal static class CreatureTextureSync
                         });
                     }
 
-                    QueuedTransfers.Add(transferKey);
                     RemainingTransferChunks[transferKey] = chunkCount;
                 }
             }
@@ -1585,7 +1583,6 @@ internal static class CreatureTextureSync
     private static void ClearOutgoingTransfersLocked()
     {
         OutgoingChunks.Clear();
-        QueuedTransfers.Clear();
         RemainingTransferChunks.Clear();
         RecentlyServed.Clear();
         NextServeHistoryExpiryUtc = DateTime.MaxValue;
@@ -1595,7 +1592,6 @@ internal static class CreatureTextureSync
     {
         if (!RemainingTransferChunks.TryGetValue(transferKey, out int remaining))
         {
-            QueuedTransfers.Remove(transferKey);
             return;
         }
 
@@ -1606,7 +1602,6 @@ internal static class CreatureTextureSync
         }
 
         RemainingTransferChunks.Remove(transferKey);
-        QueuedTransfers.Remove(transferKey);
         if (served)
         {
             DateTime servedAt = DateTime.UtcNow;
@@ -1636,9 +1631,8 @@ internal static class CreatureTextureSync
         }
 
         string prefix = peerId + "|";
-        foreach (string key in QueuedTransfers.Where(key => key.StartsWith(prefix, StringComparison.Ordinal)).ToArray())
+        foreach (string key in RemainingTransferChunks.Keys.Where(key => key.StartsWith(prefix, StringComparison.Ordinal)).ToArray())
         {
-            QueuedTransfers.Remove(key);
             RemainingTransferChunks.Remove(key);
             RecentlyServed.Remove(key);
         }

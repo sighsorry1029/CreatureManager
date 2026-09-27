@@ -62,6 +62,7 @@ internal static class Program
         };
         entry.GetProperty("Log", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)!.SetValue(null, log);
         CheckPatches(plugin);
+        StateOwnershipContracts.Run(plugin);
         LootContracts.Run(plugin, dropThatPath);
         ManagedContracts.Run(plugin);
         FrozenKingContracts.Run(plugin);
