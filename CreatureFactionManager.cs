@@ -13,10 +13,8 @@ internal static class CreatureFactionManager
     private const int CustomFactionStartId = 100;
     private static readonly int FactionHash = StringExtensionMethods.GetStableHashCode("faction");
     private static readonly object Sync = new();
-    private static Dictionary<string, Character.Faction> NameToFaction = new(StringComparer.OrdinalIgnoreCase);
-    private static Dictionary<string, Character.Faction> RuntimeNameToFaction = new(StringComparer.OrdinalIgnoreCase);
-    private static Dictionary<Character.Faction, string> FactionToName = new();
-    private static Dictionary<Character.Faction, FactionData> FactionDataByFaction = new();
+    private static FactionSnapshot ActiveSnapshot = new(
+        new(StringComparer.OrdinalIgnoreCase), new(StringComparer.OrdinalIgnoreCase), new(), new());
 
     internal static bool Load(List<FactionDefinition> definitions)
     {
@@ -39,10 +37,7 @@ internal static class CreatureFactionManager
 
         lock (Sync)
         {
-            NameToFaction = snapshot.NameToFaction;
-            RuntimeNameToFaction = snapshot.RuntimeNameToFaction;
-            FactionToName = snapshot.FactionToName;
-            FactionDataByFaction = snapshot.FactionDataByFaction;
+            ActiveSnapshot = snapshot;
         }
 
         RefreshLiveBaseAis();
@@ -214,12 +209,12 @@ internal static class CreatureFactionManager
 
         lock (Sync)
         {
-            if (NameToFaction.TryGetValue(normalized, out faction))
+            if (ActiveSnapshot.NameToFaction.TryGetValue(normalized, out faction))
             {
                 return true;
             }
 
-            if (RuntimeNameToFaction.TryGetValue(normalized, out faction))
+            if (ActiveSnapshot.RuntimeNameToFaction.TryGetValue(normalized, out faction))
             {
                 return true;
             }
@@ -230,8 +225,8 @@ internal static class CreatureFactionManager
             lock (Sync)
             {
                 Character.Faction numericFaction = (Character.Faction)id;
-                if (FactionToName.ContainsKey(numericFaction) ||
-                    RuntimeNameToFaction.ContainsValue(numericFaction))
+                if (ActiveSnapshot.FactionToName.ContainsKey(numericFaction) ||
+                    ActiveSnapshot.RuntimeNameToFaction.ContainsValue(numericFaction))
                 {
                     faction = numericFaction;
                     return true;
@@ -257,14 +252,14 @@ internal static class CreatureFactionManager
 
         lock (Sync)
         {
-            if (NameToFaction.TryGetValue(normalized, out faction))
+            if (ActiveSnapshot.NameToFaction.TryGetValue(normalized, out faction))
             {
-                canonicalName = FactionToName[faction];
+                canonicalName = ActiveSnapshot.FactionToName[faction];
                 return true;
             }
 
             if (int.TryParse(normalized, out int id) &&
-                FactionToName.TryGetValue((Character.Faction)id, out canonicalName))
+                ActiveSnapshot.FactionToName.TryGetValue((Character.Faction)id, out canonicalName))
             {
                 faction = (Character.Faction)id;
                 return true;
@@ -278,7 +273,7 @@ internal static class CreatureFactionManager
     {
         lock (Sync)
         {
-            return FactionToName
+            return ActiveSnapshot.FactionToName
                 .OrderBy(entry => (int)entry.Key)
                 .Select(entry => entry.Value)
                 .ToArray();
@@ -289,7 +284,7 @@ internal static class CreatureFactionManager
     {
         lock (Sync)
         {
-            return FactionToName.TryGetValue(faction, out string name) ? name : faction.ToString();
+            return ActiveSnapshot.FactionToName.TryGetValue(faction, out string name) ? name : faction.ToString();
         }
     }
 
@@ -328,7 +323,7 @@ internal static class CreatureFactionManager
         lock (Sync)
         {
             Character.Faction faction = baseAi.m_character.m_faction;
-            if (FactionDataByFaction.TryGetValue(faction, out FactionData data))
+            if (ActiveSnapshot.FactionDataByFaction.TryGetValue(faction, out FactionData data))
             {
                 baseAi.m_aggravatable = data.AggravatedFriendly != null;
             }
@@ -354,8 +349,8 @@ internal static class CreatureFactionManager
         bool targetFactionManaged;
         lock (Sync)
         {
-            FactionDataByFaction.TryGetValue(sourceFaction, out data);
-            targetFactionManaged = FactionDataByFaction.ContainsKey(originalTargetFaction);
+            ActiveSnapshot.FactionDataByFaction.TryGetValue(sourceFaction, out data);
+            targetFactionManaged = ActiveSnapshot.FactionDataByFaction.ContainsKey(originalTargetFaction);
         }
 
         if (data == null || !targetFactionManaged)

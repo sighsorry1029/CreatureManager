@@ -24,6 +24,75 @@ internal static class StateOwnershipContracts
         Texture = plugin.GetType("CreatureManager.CreatureTextureSync", true)!;
         CheckTextureQueue();
         System.Console.WriteLine("State ownership contracts passed: authenticated texture requests, duplicate/served retry suppression, partial/failed/stale completion, peer isolation, snapshot rollback and queue cleanup. No socket or Unity execution.");
+        CheckFactionPublication(plugin);
+    }
+
+    private static void CheckFactionPublication(Assembly plugin)
+    {
+        Type manager = plugin.GetType("CreatureManager.CreatureFactionManager", true)!;
+        Type api = plugin.GetType("CreatureManager.CreatureManagerFactionApi", true)!;
+        Type definition = plugin.GetType("CreatureManager.FactionDefinition", true)!;
+        // Preserve state in both the pre-refactor four-map implementation and its snapshot successor.
+        var saved = manager.GetFields(Static).Where(field => !field.IsInitOnly && !field.IsLiteral)
+            .ToDictionary(field => field, field => field.GetValue(null));
+        PropertyInfo logProperty = plugin.GetType("CreatureManager.CreatureManagerPlugin", true)!.GetProperty("Log", Static)!;
+        object previousLog = logProperty.GetValue(null)!;
+        using var expectedRejectionLog = new BepInEx.Logging.ManualLogSource("Faction validation fixture");
+        int warnings = 0, errors = 0;
+        expectedRejectionLog.LogEvent += (_, e) =>
+        {
+            if (e.Level == BepInEx.Logging.LogLevel.Warning) warnings++;
+            if (e.Level == BepInEx.Logging.LogLevel.Error) errors++;
+        };
+        string[] Names() => (string[])api.GetMethod("GetNames", Static)!.Invoke(null, null)!;
+        bool Resolve(string method, Type owner, string? name, int expected)
+        {
+            object?[] args = { name, default(Character.Faction) };
+            bool resolved = (bool)owner.GetMethod(method, Static)!.Invoke(null, args)!;
+            Require(!resolved || (int)(Character.Faction)args[1]! == expected, "resolved faction has expected ID");
+            return resolved;
+        }
+        bool Load(params (string Name, int Id)[] entries)
+        {
+            var list = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(definition))!;
+            foreach (var item in entries)
+            {
+                object value = Activator.CreateInstance(definition)!;
+                definition.GetProperty("Faction")!.SetValue(value, item.Name);
+                definition.GetProperty("Id")!.SetValue(value, item.Id);
+                list.Add(value);
+            }
+            return (bool)manager.GetMethod("Load", Static)!.Invoke(null, new object[] { list })!;
+        }
+        try
+        {
+            // Original BaseAI.GetAllInstances returns its managed list; no live AI means Load can run unmodified.
+            Require(BaseAI.GetAllInstances().Count == 0, "faction fixture has no Unity instances");
+            Require(Names().Length == 0 && !Resolve("TryGetFaction", manager, "Players", 0), "initial faction state remains empty");
+            logProperty.SetValue(null, expectedRejectionLog);
+            Require(Load(("Second", 202), ("First", 201)), "valid faction configuration published");
+            Require(Names().SequenceEqual(new[] { "First", "Second" }), "public names sorted by stable ID");
+            Require(Resolve("TryResolve", api, " first ", 201) && Resolve("TryResolve", api, "202", 202), "public name normalization and numeric lookup");
+            Require(Resolve("TryGetFaction", manager, "Players", 0) && Resolve("TryGetFaction", manager, "0", 0) &&
+                !Resolve("TryResolve", api, "Players", 0) && !Resolve("TryResolve", api, "0", 0), "runtime factions stay distinct from public registered factions");
+            object?[] canonical = { " FIRST ", default(Character.Faction), null };
+            Require((bool)manager.GetMethod("TryGetRegisteredFaction", Static)!.Invoke(null, canonical)! &&
+                (string)canonical[2]! == "First", "canonical persisted name retained");
+            Require(!Load(("Duplicate", 201), ("duplicate", 202)) && !Load(("First", 201), ("Second", 201)), "duplicate name and ID rejected");
+            Require(Names().SequenceEqual(new[] { "First", "Second" }) && Resolve("TryResolve", api, "First", 201), "rejected reload retains published rules");
+            Require(warnings == 2 && errors >= 2, "only expected rejection diagnostics emitted");
+            Require(Load(("Replacement", 203)) && Names().SequenceEqual(new[] { "Replacement" }) &&
+                !Resolve("TryResolve", api, "First", 201), "valid reload replaces old registered names");
+            Require(Load() && Names().Contains("Players") && Names().Contains("Boss") &&
+                !Resolve("TryResolve", api, "Replacement", 203), "empty configuration publishes defaults only when loaded");
+            Require(warnings == 2, "valid reload did not warn while refreshing empty AI list");
+        }
+        finally
+        {
+            foreach (var item in saved) item.Key.SetValue(null, item.Value);
+            logProperty.SetValue(null, previousLog);
+        }
+        System.Console.WriteLine("Faction publication contracts passed: empty startup, normalized/canonical/numeric names, stable IDs, registered/runtime API boundary, rejected reload preservation and default/replacement reload. No live AI or ZDO execution.");
     }
 
     private static void CheckTextureQueue()
