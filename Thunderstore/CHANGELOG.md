@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+- Add the server-synchronized `Adjust EpicMMO LevelBar Position` switch under `1 - General`, On by default. Clients with WackyEpicMMOSystem position regular creature level labels at `(70, -15)`, including labels recreated by EpicMMO's fallback path.
+- Apply the display override independently of CreatureManager's level and modifier settings without editing EpicMMO's configuration. The displayed position takes priority over EpicMMO's configured coordinates; Off restores the position recorded before adjustment. Boss, player and mount HUDs are unchanged, and dedicated servers do not adjust UI.
+- Cache label lookups, release departed HUD entries, and restore positions on live disable, HUD destruction, world teardown and plugin shutdown. Add isolated regression checks and original EpicMMOSystem 1.9.70 binary contract inspection.
+
 ## 1.2.1
 
 - Reuse temporary Karma blocker buffers and scoped spawn-query state, and share prefab classifications within each nearby search to reduce repeated allocations and lookups. Preserve live boss/Enforcer checks, spawn exclusions, and pending summon rules.
