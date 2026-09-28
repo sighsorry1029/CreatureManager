@@ -20,7 +20,9 @@ internal static class CreatureSpawnBlocker
     }
 
     private static QueryScope? CurrentQuery;
+    private static readonly Stack<QueryScope> QueryPool = new();
     private static readonly List<ZDO> NearbyZdos = new();
+    private static readonly Dictionary<int, bool> NearbyBossPrefabs = new();
 
     private static bool BlockBoss => CreatureManagerPlugin.BlockNearbySpawnsWhileBossActive?.Value == CreatureManagerPlugin.Toggle.On;
     private static bool BlockEnforcer => CreatureManagerPlugin.BlockNearbySpawnsWhileEnforcerActive?.Value == CreatureManagerPlugin.Toggle.On;
@@ -28,14 +30,21 @@ internal static class CreatureSpawnBlocker
     internal static QueryScope? BeginQuery(bool eventSpawns)
     {
         if (!BlockBoss && !BlockEnforcer && CurrentQuery == null) return null;
-        return CurrentQuery = new QueryScope { Previous = CurrentQuery, EventSpawns = eventSpawns };
+        QueryScope scope = QueryPool.Count > 0 ? QueryPool.Pop() : new QueryScope();
+        scope.Previous = CurrentQuery;
+        scope.EventSpawns = eventSpawns;
+        return CurrentQuery = scope;
     }
 
     internal static void EndQuery(QueryScope? scope)
     {
         if (scope == null) return;
         CurrentQuery = scope.Previous;
+        scope.Previous = null;
+        scope.EventSpawns = false;
+        scope.RejectedGroupCandidate = false;
         scope.Results.Clear();
+        QueryPool.Push(scope);
     }
 
     internal static void InvalidateQueries()
@@ -114,14 +123,23 @@ internal static class CreatureSpawnBlocker
                     continue;
                 }
                 if (!bosses) continue;
-                Character? prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab())?.GetComponent<Character>();
-                if (prefab != null && prefab.IsBoss() && !prefab.IsPlayer()) return true;
+                int prefabHash = zdo.GetPrefab();
+                if (!NearbyBossPrefabs.TryGetValue(prefabHash, out bool boss))
+                {
+                    Character? prefab = ZNetScene.instance.GetPrefab(prefabHash)?.GetComponent<Character>();
+                    boss = prefab != null && prefab.IsBoss() && !prefab.IsPlayer();
+                    NearbyBossPrefabs[prefabHash] = boss;
+                }
+                if (boss) return true;
             }
             return false;
         }
         finally
         {
             NearbyZdos.Clear();
+            // Classification is shared only within this search; prefab reloads and later
+            // registrations are observed by the next search, including negative results.
+            NearbyBossPrefabs.Clear();
         }
     }
 

@@ -37,7 +37,7 @@ internal static class SpawnBlockerContracts
     private static readonly Dictionary<string, ConfigEntryBase> Settings = new();
     private static SimulationDistance Distance;
     private static bool QueryThrows;
-    private static int Queries, Errors;
+    private static int Queries, Errors, PrefabQueries, ThrowPrefabHash;
     private static uint NextId = 85000;
     private static GameObject Ordinary = null!, BossPrefab = null!, Item = null!;
 
@@ -66,6 +66,7 @@ internal static class SpawnBlockerContracts
             CheckOptionsAndLives();
             CheckArea();
             CheckScopes(plugin);
+            CheckPrefabQueryWork();
             CheckHooks(plugin);
             CheckGroupTranspilers(plugin);
         }
@@ -162,6 +163,46 @@ internal static class SpawnBlockerContracts
         Require(((IList)Blocker.GetField("NearbyZdos", Static)!.GetValue(null)!).Count == 0, "query exception clears scratch references");
         QueryThrows = false;
         Call("EndQuery", new object?[] { null });
+
+        Reset();
+        object ordinary = Call("BeginQuery", false)!;
+        object nestedEvent = Call("BeginQuery", true)!;
+        Call("EndQuery", nestedEvent); Call("EndQuery", ordinary);
+        Add(true, false, Vector3.zero);
+        object next = Call("BeginQuery", false)!;
+        Require(!(bool)Call("AllowSystemSpawn", Ordinary, Vector3.zero)!, "reused event scope cannot exempt an ordinary spawn");
+        Call("LogEmptyGroup", "invalid");
+        Require(Errors == 1, "new query retains native empty-group diagnostics");
+        Call("EndQuery", next);
+    }
+
+    private static void CheckPrefabQueryWork()
+    {
+        Reset();
+        GameObject spawnCandidate = Prefab("FixtureSpawnCandidate", false);
+        bool Probe() => (bool)Call("AllowSpawn", spawnCandidate, Vector3.zero)!;
+        for (int i = 0; i < 1000; i++) Add(false, false, Vector3.zero);
+        Require(Probe() && PrefabQueries == 1, "repeated non-boss prefab is classified once per search");
+        SetBoss(Characters[Ordinary], true);
+        Require(!Probe() && PrefabQueries == 2, "next search sees an in-place prefab policy change");
+        SetBoss(Characters[Ordinary], false);
+        Require(Probe() && PrefabQueries == 3, "next search also observes restored non-boss metadata");
+
+        Prefabs.Remove("Skeleton".GetStableHashCode());
+        Require(Probe(), "missing prefab is not assumed to be a boss");
+        Prefabs["Skeleton".GetStableHashCode()] = BossPrefab;
+        Require(!Probe(), "late prefab registration is not hidden by an earlier negative lookup");
+        Prefabs["Skeleton".GetStableHashCode()] = Ordinary;
+
+        ZDO last = Add(true, false, Vector3.zero);
+        ThrowPrefabHash = "Bonemass".GetStableHashCode();
+        try { Probe(); throw new Exception("expected prefab query failure"); }
+        catch (TargetInvocationException e) when (e.GetBaseException().Message == "prefab query boundary") { }
+        ThrowPrefabHash = 0; Zdos.Remove(last);
+        SetBoss(Characters[Ordinary], true);
+        Require(!Probe(), "exception clears earlier negative prefab classifications");
+        SetBoss(Characters[Ordinary], false);
+        System.Console.WriteLine("Spawn query work: 1,000 unloaded ordinary ZDOs of one prefab require one prefab classification per search; no result survives the search.");
     }
 
     private static void CheckHooks(Assembly plugin)
@@ -182,7 +223,10 @@ internal static class SpawnBlockerContracts
         Call("LogEmptyGroup", "empty"); Require(Errors == 0, "fully blocked group is not an error");
         spawner.m_creaturePrefab = BossPrefab;
         Require((bool)Call("AllowGroupCandidate", spawner)!, "boss member retains group opportunity");
-        Call("EndQuery", scope); Call("LogEmptyGroup", "invalid"); Require(Errors == 1, "native invalid group diagnostic retained");
+        Call("EndQuery", scope);
+        object nextScope = Call("BeginQuery", false)!;
+        Call("LogEmptyGroup", "invalid"); Require(Errors == 1, "reused scope does not retain a prior group rejection");
+        Call("EndQuery", nextScope);
 
         foreach (var target in new[] { (typeof(SpawnSystem), "IsSpawnPointGood"), (typeof(SpawnArea), "FindSpawnPoint"), (typeof(CreatureSpawner), "Spawn") })
             Require(AccessTools.Method(target.Item1, target.Item2).IsPrivate, "original private target accessed only through Harmony");
@@ -233,7 +277,7 @@ internal static class SpawnBlockerContracts
     private static void Reset()
     {
         Zdos.Clear(); Loaded.Clear(); Instances.Clear(); CharacterZdos.Clear(); Dead.Clear();
-        Queries = Errors = 0; QueryThrows = false; Distance = SimulationDistance.OriginalDistance;
+        Queries = Errors = PrefabQueries = ThrowPrefabHash = 0; QueryThrows = false; Distance = SimulationDistance.OriginalDistance;
         if (Settings.Count > 0) SetOptions(true, true);
     }
     private static GameObject Prefab(string name, bool boss)
@@ -311,7 +355,12 @@ internal static class SpawnBlockerContracts
     private static bool IsDead(Character c) => Dead.Contains(c) || CharacterZdos[c].GetFloat(ZDOVars.s_health) <= 0;
     private static bool IsPlayer(Character c) => false;
     private static bool IsEnforcer(Character c) => CharacterZdos[c].GetBool("CreatureManager_KarmaEnforcer");
-    private static GameObject? GetPrefab(ZNetScene scene, int hash) => Prefabs.TryGetValue(hash, out var obj) ? obj : null;
+    private static GameObject? GetPrefab(ZNetScene scene, int hash)
+    {
+        PrefabQueries++;
+        if (hash == ThrowPrefabHash) throw new InvalidOperationException("prefab query boundary");
+        return Prefabs.TryGetValue(hash, out var obj) ? obj : null;
+    }
     private static ZNetView? FindInstance(ZNetScene scene, ZDO zdo) => Instances.TryGetValue(zdo, out var obj) ? obj : null;
     private static Character? GetCharacter(GameObject obj) => Characters.TryGetValue(obj, out var c) ? c : null;
     private static Character? GetComponentCharacter(Component obj) => Characters.TryGetValue(obj, out var c) ? c : null;
