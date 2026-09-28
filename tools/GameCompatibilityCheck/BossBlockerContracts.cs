@@ -22,6 +22,7 @@ internal static class BossBlockerContracts
     // LayerMask initializer. These are fixture storage, not another implementation.
 #pragma warning disable CS0169, CS0414, CS0649 // Read/written by the copied production IL below.
     private static readonly HashSet<ZDOID> TrackedBossZdoIds = new(), TrackedEnforcerZdoIds = new();
+    private static readonly Stack<(HashSet<ZDOID> Observed, List<ZDOID> Tracked)> BlockerQueryBuffers = new();
     private static readonly Dictionary<ZDOID, float> EnforcerNoPlayerSince = new(), PendingBlockerZdos = new();
     private static readonly List<ZDOID> CompletedBlockerZdos = new();
     private static readonly List<string> BossBootstrapPrefabs = new();
@@ -46,6 +47,7 @@ internal static class BossBlockerContracts
     private static float Now;
     private static bool Server = true, FinishSlice = true;
     private static int Slices, RegionalQueries;
+    private static Action? OnZdoLookup;
     private static readonly Dictionary<string, ConfigEntryBase> Config = new();
 
     internal static void Run(Assembly plugin)
@@ -80,6 +82,7 @@ internal static class BossBlockerContracts
             CheckReceivedZdos();
             CheckBootstrapAndToggles();
             CheckRegionAndDeaths();
+            CheckNestedAndFailedQueries();
         }
         finally
         {
@@ -221,11 +224,38 @@ internal static class BossBlockerContracts
         Require(!state.boss && state.enforcers == 1, "late Enforcer classification moves ID without losing or duplicating count");
     }
 
+    private static void CheckNestedAndFailedQueries()
+    {
+        Reset();
+        ZDO enforcer = NewZdo("Skeleton", Vector3.zero);
+        SetBool(enforcer, "CreatureManager_KarmaEnforcer".GetStableHashCode(), true);
+        TrackedEnforcerZdoIds.Add(enforcer.m_uid);
+        NewZdo("Bonemass", Vector3.zero);
+        Require(State(Vector3.zero).enforcers == 1, "warm query discovers both blocker categories");
+        OnZdoLookup = () =>
+        {
+            var inner = State(new Vector3(6400f, 0f, 0f));
+            Require(inner.enforcers == 0 && !inner.boss, "nested query has its own region");
+        };
+        var outer = State(Vector3.zero);
+        Require(outer.enforcers == 1 && outer.boss, "nested query cannot overwrite the outer ID snapshot");
+
+        OnZdoLookup = () => throw new InvalidOperationException("query fixture failure");
+        try { State(Vector3.zero); throw new Exception("expected query failure"); }
+        catch (TargetInvocationException e) when (e.GetBaseException().Message == "query fixture failure") { }
+        SetBool(enforcer, ZDOVars.s_dead, true);
+        var afterFailure = State(Vector3.zero);
+        Require(afterFailure.enforcers == 0 && afterFailure.boss, "failed query leaves no stale IDs or counts");
+        Zdos.Clear();
+        Require(!Blocks(Vector3.zero), "reused buffers do not retain removed world objects");
+    }
+
     private static void Reset()
     {
         TrackedBossZdoIds.Clear(); TrackedEnforcerZdoIds.Clear(); EnforcerNoPlayerSince.Clear();
         PendingBlockerZdos.Clear(); CompletedBlockerZdos.Clear(); Zdos.Clear(); Loaded.Clear(); LoadedZdos.Clear();
         BossDiscoveryScene = null; BossDiscoveryActive = false; BossDiscoveryPrefabCount = -1;
+        BlockerQueryBuffers.Clear(); OnZdoLookup = null;
         Call("InvalidateBossBlockerDiscovery");
         Now = 0; Server = FinishSlice = true; Slices = RegionalQueries = 0;
         Set("KarmaMode", "KarmaLevelAndEnforcer"); Set("EnableLevelSystem", "Vanilla");
@@ -324,7 +354,13 @@ internal static class BossBlockerContracts
     private static bool IsServer(ZNet value) => Server;
     private static ZDOMan GetManager() => Manager;
     private static ZNetScene GetScene() => Scene;
-    private static ZDO? GetZdo(ZDOMan manager, ZDOID id) => Zdos.TryGetValue(id, out ZDO value) ? value : null;
+    private static ZDO? GetZdo(ZDOMan manager, ZDOID id)
+    {
+        Action? callback = OnZdoLookup;
+        OnZdoLookup = null;
+        callback?.Invoke();
+        return Zdos.TryGetValue(id, out ZDO value) ? value : null;
+    }
     private static GameObject? GetPrefab(ZNetScene scene, int hash) => Prefabs.TryGetValue(hash, out GameObject value) ? value : null;
     private static Character GetCharacter(GameObject prefab) => Characters[prefab];
     private static bool TryGetCharacter(GameObject prefab, out Character character) => Characters.TryGetValue(prefab, out character);

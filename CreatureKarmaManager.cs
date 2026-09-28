@@ -134,6 +134,8 @@ internal static class CreatureKarmaManager
     private static readonly List<ZDO> EnforcerBootstrapScanBuffer = new();
     private static readonly List<string> EnforcerBootstrapPrefabNames = new();
     private static readonly HashSet<ZDOID> TrackedBossZdoIds = new();
+    // Scratch storage only: each synchronous query owns its buffers, including reentrant calls.
+    private static readonly Stack<(HashSet<ZDOID> Observed, List<ZDOID> Tracked)> BlockerQueryBuffers = new();
     private static readonly HashSet<ZDOID> ReportedBlockerZdoIds = new();
     private static readonly Dictionary<ZDOID, float> PendingBlockerZdos = new();
     private static readonly List<ZDOID> CompletedBlockerZdos = new();
@@ -393,6 +395,7 @@ internal static class CreatureKarmaManager
         EnforcerBootstrapScanBuffer.Clear();
         EnforcerBootstrapPrefabNames.Clear();
         TrackedBossZdoIds.Clear();
+        BlockerQueryBuffers.Clear();
         ReportedBlockerZdoIds.Clear();
         PendingBlockerZdos.Clear();
         CompletedBlockerZdos.Clear();
@@ -3265,67 +3268,80 @@ DeepNorth:
         hasNonEnforcerBoss = false;
         Vector2i centerZone = ZoneSystem.GetZone(position).ToVector2i();
         KarmaRealm centerRealm = GetKarmaRealm(position);
-        HashSet<ZDOID> observedCharacterIds = new();
-        foreach (Character character in Character.GetAllCharacters())
+        var buffers = BlockerQueryBuffers.Count > 0
+            ? BlockerQueryBuffers.Pop()
+            : (Observed: new HashSet<ZDOID>(), Tracked: new List<ZDOID>());
+        try
         {
-            if (character == null ||
-                ReferenceEquals(character, excludedCharacter) ||
-                (excludedCharacterId != ZDOID.None && character.GetZDOID() == excludedCharacterId) ||
-                character.IsDead())
+            HashSet<ZDOID> observedCharacterIds = buffers.Observed;
+            foreach (Character character in Character.GetAllCharacters())
             {
-                continue;
+                if (character == null ||
+                    ReferenceEquals(character, excludedCharacter) ||
+                    (excludedCharacterId != ZDOID.None && character.GetZDOID() == excludedCharacterId) ||
+                    character.IsDead())
+                {
+                    continue;
+                }
+
+                ZDOID characterId = character.GetZDOID();
+                if (!characterId.IsNone())
+                {
+                    observedCharacterIds.Add(characterId);
+                }
+
+                bool enforcer = IsEnforcer(character);
+                bool nonEnforcerBoss = !enforcer && character.IsBoss();
+                if (enforcer && !characterId.IsNone())
+                {
+                    TrackedEnforcerZdoIds.Add(characterId);
+                    TrackedBossZdoIds.Remove(characterId);
+                }
+                else if (nonEnforcerBoss && !characterId.IsNone())
+                {
+                    TrackedBossZdoIds.Add(characterId);
+                }
+
+                if (!IsInEnforcerCheckRegion(character.transform.position, centerZone, centerRealm, regionZoneKeys))
+                {
+                    continue;
+                }
+
+                if (enforcer)
+                {
+                    activeEnforcers++;
+                }
+                else if (nonEnforcerBoss)
+                {
+                    hasNonEnforcerBoss = true;
+                }
             }
 
-            ZDOID characterId = character.GetZDOID();
-            if (!characterId.IsNone())
-            {
-                observedCharacterIds.Add(characterId);
-            }
+            int loadedEnforcers = activeEnforcers;
+            CountTrackedBlockerZdos(
+                centerZone,
+                centerRealm,
+                regionZoneKeys,
+                excludedCharacterId,
+                observedCharacterIds,
+                ref activeEnforcers,
+                ref hasNonEnforcerBoss,
+                buffers.Tracked);
 
-            bool enforcer = IsEnforcer(character);
-            bool nonEnforcerBoss = !enforcer && character.IsBoss();
-            if (enforcer && !characterId.IsNone())
+            if (!hasNonEnforcerBoss && BossBootstrapPending && BossDiscoveryActive &&
+                ZDOMan.instance != null && ZNetScene.instance != null)
             {
-                TrackedEnforcerZdoIds.Add(characterId);
-                TrackedBossZdoIds.Remove(characterId);
-            }
-            else if (nonEnforcerBoss && !characterId.IsNone())
-            {
-                TrackedBossZdoIds.Add(characterId);
-            }
-
-            if (!IsInEnforcerCheckRegion(character.transform.position, centerZone, centerRealm, regionZoneKeys))
-            {
-                continue;
-            }
-
-            if (enforcer)
-            {
-                activeEnforcers++;
-            }
-            else if (nonEnforcerBoss)
-            {
-                hasNonEnforcerBoss = true;
+                DiscoverRegionalBossBlockers(centerZone, regionZoneKeys);
+                activeEnforcers = loadedEnforcers;
+                CountTrackedBlockerZdos(centerZone, centerRealm, regionZoneKeys, excludedCharacterId,
+                    observedCharacterIds, ref activeEnforcers, ref hasNonEnforcerBoss, buffers.Tracked);
             }
         }
-
-        int loadedEnforcers = activeEnforcers;
-        CountTrackedBlockerZdos(
-            centerZone,
-            centerRealm,
-            regionZoneKeys,
-            excludedCharacterId,
-            observedCharacterIds,
-            ref activeEnforcers,
-            ref hasNonEnforcerBoss);
-
-        if (!hasNonEnforcerBoss && BossBootstrapPending && BossDiscoveryActive &&
-            ZDOMan.instance != null && ZNetScene.instance != null)
+        finally
         {
-            DiscoverRegionalBossBlockers(centerZone, regionZoneKeys);
-            activeEnforcers = loadedEnforcers;
-            CountTrackedBlockerZdos(centerZone, centerRealm, regionZoneKeys, excludedCharacterId,
-                observedCharacterIds, ref activeEnforcers, ref hasNonEnforcerBoss);
+            buffers.Observed.Clear();
+            buffers.Tracked.Clear();
+            BlockerQueryBuffers.Push(buffers);
         }
     }
 
@@ -3336,14 +3352,17 @@ DeepNorth:
         ZDOID excludedCharacterId,
         HashSet<ZDOID> observedCharacterIds,
         ref int activeEnforcers,
-        ref bool hasNonEnforcerBoss)
+        ref bool hasNonEnforcerBoss,
+        List<ZDOID> trackedIds)
     {
         if (ZDOMan.instance == null)
         {
             return;
         }
 
-        foreach (ZDOID trackedId in TrackedEnforcerZdoIds.ToList())
+        trackedIds.Clear();
+        trackedIds.AddRange(TrackedEnforcerZdoIds);
+        foreach (ZDOID trackedId in trackedIds)
         {
             if (trackedId == excludedCharacterId || observedCharacterIds.Contains(trackedId))
             {
@@ -3373,7 +3392,9 @@ DeepNorth:
             return;
         }
 
-        foreach (ZDOID trackedId in TrackedBossZdoIds.ToList())
+        trackedIds.Clear();
+        trackedIds.AddRange(TrackedBossZdoIds);
+        foreach (ZDOID trackedId in trackedIds)
         {
             if (trackedId == excludedCharacterId || observedCharacterIds.Contains(trackedId))
             {
