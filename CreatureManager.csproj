@@ -177,6 +177,7 @@
         <Content Include="Thunderstore\CHANGELOG.md"/>
         <Content Include="Thunderstore\icon.png"/>
         <Content Include="Thunderstore\manifest.json"/>
+        <Content Include="Thunderstore\BepInEx\**\*"/>
         <EmbeddedResource Include="translations\English.yml">
             <LogicalName>translations.English.yml</LogicalName>
             <Type>Non-Resx</Type>
@@ -194,11 +195,6 @@
         </EmbeddedResource>
         <EmbeddedResource Include="defaults\attacks.sample.yml">
             <LogicalName>CreatureManager.defaults.attacks.sample.yml</LogicalName>
-            <Type>Non-Resx</Type>
-            <WithCulture>false</WithCulture>
-        </EmbeddedResource>
-        <EmbeddedResource Include="defaults\textures\*.png">
-            <LogicalName>CreatureManager.defaults.textures.%(Filename)%(Extension)</LogicalName>
             <Type>Non-Resx</Type>
             <WithCulture>false</WithCulture>
         </EmbeddedResource>
@@ -281,9 +277,14 @@
         <MakeDir Directories="$(ThunderstoreStagingDir);$(ProjectDir)Thunderstore"/>
         <ItemGroup>
             <ThunderstorePackageFiles Include="$(TargetPath);$(ProjectDir)README.md;$(ProjectDir)Thunderstore\CHANGELOG.md;$(ProjectDir)Thunderstore\manifest.json;$(ProjectDir)Thunderstore\icon.png"/>
+            <ThunderstoreBepInExFiles Include="$(ProjectDir)Thunderstore\BepInEx\**\*"/>
         </ItemGroup>
+        <Error Text="Bundled BepInEx assets are missing from Thunderstore\BepInEx."
+               Condition="'@(ThunderstoreBepInExFiles)' == ''"/>
         <Copy SourceFiles="@(ThunderstorePackageFiles)" DestinationFolder="$(ThunderstoreStagingDir)"/>
         <Copy SourceFiles="$(ProjectDir)translations\English.yml" DestinationFiles="$(ThunderstoreStagingDir)\$(AssemblyName).English.yml"/>
+        <Copy SourceFiles="@(ThunderstoreBepInExFiles)"
+              DestinationFiles="@(ThunderstoreBepInExFiles->'$(ThunderstoreStagingDir)\BepInEx\%(RecursiveDir)%(Filename)%(Extension)')"/>
         <ZipDirectory SourceDirectory="$(ThunderstoreStagingDir)" DestinationFile="$(ProjectDir)Thunderstore\$(PackageName).zip" Overwrite="true"/>
         <RemoveDir Directories="$(PackageStagingRoot)"/>
     </Target>

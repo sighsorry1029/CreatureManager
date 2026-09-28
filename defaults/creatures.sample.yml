@@ -2,7 +2,7 @@
 # This .sample.yml file is not loaded automatically.
 # Install MonsterLabZ, then rename this file to creatures_sample.yml to activate all samples.
 # Bonebeard, Vincent, and Root Witch require MonsterLabZ; Vitrfell itself uses a vanilla creature source.
-# Vitrfell's boar2.png is bundled and generated when missing while the client option Generate Sample Textures is On.
+# Vitrfell uses cm_boar2.png, installed by the package in BepInEx/config/CreatureManager/textures.
 
 - prefab: vitrfell
   clonedFrom: Boar
@@ -38,7 +38,7 @@
     randomItems: []
     randomSets: []
   scale: 2
-  textures: ['Poly Art Boar:0:boar2']
+  textures: ['Poly Art Boar:0:cm_boar2']
   availableAttackAnimations: [base_attack]
 
 - prefab: bonebeard

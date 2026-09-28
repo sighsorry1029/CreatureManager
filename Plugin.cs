@@ -118,7 +118,6 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             NormalCreatureNameplateRange = config("1 - General", "Normal Creature Nameplate Range", 30f, Ordered("Distance in meters for normal creature nameplates and health bars. Vanilla is 10. Boss HUD range is not changed by this option.", 90, new AcceptableValueRange<float>(10f, 50f)), synchronizedSetting: false);
             ShowSneakHoverResistances = config("1 - General", "Show Sneak Hover Resistances", Toggle.On, Ordered("If on, sneaking while hovering a non-tamed creature shows non-Normal and non-Ignore damage modifiers under its nameplate. Uses Normal Creature Nameplate Range.", 80), synchronizedSetting: false);
             ModifierHudIconLayout = config("1 - General", "Modifier HUD Icon Layout", ModifierIconLayout.FixedCategorySlots, Ordered("FixedCategorySlots keeps the first Offense, Defense, Affliction, and Special icon in its category slot; forced same-category extras fill unused slots so none are hidden. RightPacked removes category gaps and packs every visible icon against the right edge of creature and boss HUDs.", 70), synchronizedSetting: false);
-            GenerateSampleTextures = config("1 - General", "Generate Sample Textures", Toggle.On, Ordered("If on, bundled sample PNGs are created in CreatureManager/textures when missing. Existing files are never overwritten or deleted; Off stops automatic creation but does not disable existing textures.", 60), synchronizedSetting: false);
             BlockNearbySpawnsWhileBossActive = config("1 - General", "Block Nearby Spawns While Boss Is Active", Toggle.On, Ordered("Block new ordinary creatures from SpawnSystem, SpawnArea, and CreatureSpawner while a living non-Enforcer boss is in the surrounding near-loaded sectors (using the game's synchronized simulation distance). Checked around the candidate point for SpawnSystem and the spawner position for SpawnArea/CreatureSpawner. Interiors only match the same interior anchor zone. Existing creatures, raid spawns, boss prefabs, direct ability/altar summons, and Enforcer encounters are unchanged. Independent of Karma and level settings; applies on the next spawn attempt.", 50));
             BlockNearbySpawnsWhileEnforcerActive = config("1 - General", "Block Nearby Spawns While Enforcer Is Active", Toggle.On, Ordered("Block new ordinary creatures from SpawnSystem, SpawnArea, and CreatureSpawner while a living Enforcer is in the surrounding near-loaded sectors. Uses the same scope and exclusions as the Boss option. Pending Enforcer reservations do not block. Independent of Karma and level settings; applies on the next spawn attempt.", 49));
             EnableLevelSystem = config("2 - Levels", "Enable Level System", LevelSystemMode.On, Ordered("Off disables CreatureManager level rules, level damage/health scaling, distance scaling, modifiers, and level visuals. On enables all of them. Vanilla keeps the levels assigned by the game or other mods, skips CreatureManager level rolls and Karma/Enforcer level bonuses, and still applies stat, distance, scale, and modifier rules. Vanilla still uses levels.yml stat values: Global damagePerLevel defaults to 0.25, not the vanilla value of 0.5. With no matching scalePerLevel rule, Vanilla uses the prefab's original level sizes; explicit 0 disables star growth. Explicit spawn-command levels remain available. Changing this setting does not reroll existing creatures.", 100));
@@ -149,7 +148,6 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             EnableLevelSystem.SettingChanged += ReloadLevelConfiguration;
             BiomeLevelPreset.SettingChanged += ReloadLevelConfiguration;
             NormalCreatureNameplateRange.SettingChanged += ApplyRuntimeConfigValues;
-            GenerateSampleTextures.SettingChanged += ApplySampleTextureSetting;
             MultiplayerHealthIncreasePerPlayer.SettingChanged += ApplyRuntimeConfigValues;
             MultiplayerDamageIncreasePerPlayer.SettingChanged += ApplyRuntimeConfigValues;
             MultiplayerMaximumPlayerCount.SettingChanged += ApplyRuntimeConfigValues;
@@ -184,11 +182,6 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     private static void ApplyRuntimeConfigValues(object sender, EventArgs args)
     {
         CreatureGameSettings.ApplyAll();
-    }
-
-    private static void ApplySampleTextureSetting(object sender, EventArgs args)
-    {
-        CreatureDomainManager.EnsureDefaultTextures();
     }
 
     private static void ReloadLevelConfiguration(object sender, EventArgs args)
@@ -285,7 +278,6 @@ public class CreatureManagerPlugin : BaseUnityPlugin
         if (EnableLevelSystem != null) EnableLevelSystem.SettingChanged -= ReloadLevelConfiguration;
         if (BiomeLevelPreset != null) BiomeLevelPreset.SettingChanged -= ReloadLevelConfiguration;
         if (NormalCreatureNameplateRange != null) NormalCreatureNameplateRange.SettingChanged -= ApplyRuntimeConfigValues;
-        if (GenerateSampleTextures != null) GenerateSampleTextures.SettingChanged -= ApplySampleTextureSetting;
         if (MultiplayerHealthIncreasePerPlayer != null) MultiplayerHealthIncreasePerPlayer.SettingChanged -= ApplyRuntimeConfigValues;
         if (MultiplayerDamageIncreasePerPlayer != null) MultiplayerDamageIncreasePerPlayer.SettingChanged -= ApplyRuntimeConfigValues;
         if (MultiplayerMaximumPlayerCount != null) MultiplayerMaximumPlayerCount.SettingChanged -= ApplyRuntimeConfigValues;
@@ -442,7 +434,6 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     internal static ConfigEntry<float> NormalCreatureNameplateRange = null!;
     internal static ConfigEntry<Toggle> ShowSneakHoverResistances = null!;
     internal static ConfigEntry<ModifierIconLayout> ModifierHudIconLayout = null!;
-    internal static ConfigEntry<Toggle> GenerateSampleTextures = null!;
     internal static ConfigEntry<LevelSystemMode> EnableLevelSystem = null!;
     internal static ConfigEntry<Toggle> ApplyLevelScaleToSaddleableCreatures = null!;
     internal static ConfigEntry<LevelBiomePreset> BiomeLevelPreset = null!;

@@ -21,21 +21,6 @@ internal static class CreatureDomainManager
     private const string ReferenceLogicVersion = "2026-07-21-ragdoll-visual-v2";
     private const string MainTextureProperty = "_MainTex";
     private const string RagdollCloneSuffix = "_CreatureManagerRagdoll";
-    private const string DefaultTextureResourcePrefix = "CreatureManager.defaults.textures.";
-    private static readonly string[] DefaultTextureFileNames =
-    {
-        "boar2.png",
-        "DarkBrood.png",
-        "DarkSpider.png",
-        "DarkSpiderSmall.png",
-        "goblin2.png",
-        "PolarFenring.png",
-        "PolarLox.png",
-        "PolarWolf.png",
-        "StormFenring.png",
-        "SvartalfarMage.png",
-        "troll2.png"
-    };
     private static readonly object Sync = new();
     private static readonly ISerializer Serializer = new SerializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
@@ -5082,7 +5067,7 @@ internal static class CreatureDomainManager
     {
         Directory.CreateDirectory(ConfigDirectoryPath);
         Directory.CreateDirectory(CacheDirectoryPath);
-        EnsureDefaultTextures();
+        Directory.CreateDirectory(TextureDirectoryPath);
 
         if (!File.Exists(FactionConfigurationPath))
         {
@@ -5125,22 +5110,6 @@ internal static class CreatureDomainManager
         WriteEmbeddedDefaultIfMissing(
             AttackSampleConfigurationPath,
             "CreatureManager.defaults.attacks.sample.yml");
-    }
-
-    internal static void EnsureDefaultTextures()
-    {
-        Directory.CreateDirectory(TextureDirectoryPath);
-        if (CreatureManagerPlugin.GenerateSampleTextures?.Value == CreatureManagerPlugin.Toggle.Off)
-        {
-            return;
-        }
-
-        foreach (string fileName in DefaultTextureFileNames)
-        {
-            WriteEmbeddedDefaultIfMissing(
-                Path.Combine(TextureDirectoryPath, fileName),
-                DefaultTextureResourcePrefix + fileName);
-        }
     }
 
     private static void WriteEmbeddedDefaultIfMissing(string path, string resourceName)
