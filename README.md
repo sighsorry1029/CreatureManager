@@ -10,63 +10,59 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 
 *Creatures roll modifiers independently and display their active effects beneath their nameplates. Levels above 3 appear as a star followed by the level number.*
 
-CreatureManager provides 32 modifiers in four groups. Natural rolls select at most one modifier from each group, for up to four visible modifiers. The values below are the generated `Global` defaults; `levels.yml` and `karma.yml` can override them for Global, Boss, prefab/group, Enforcer, and individual Enforcer rules.
-
-In `2 - Levels`, `Global Modifiers`, `Boss Modifiers`, and `Enforcer Modifiers` each accept `Max4` (default), `Max3`, `Max2`, `Max1`, or `Off`. Enforcers use their own setting regardless of boss classification. The cap applies only to new automatic modifier rolls: each group rolls normally, then excess successes are removed randomly without favoring a category. It is a maximum, not a guaranteed count; lower caps can reduce the final chance of receiving any particular modifier. Existing creatures, inherited/restored modifier state, and explicit `cm:spawn` modifier lists are not trimmed or rerolled. Raising the cap does not add modifiers to completed creatures. `Off` retains its existing role of disabling rolls, effects, and modifier HUD icons without deleting saved modifiers. Old `On` config values are read as `Max4`.
-
 #### Offense
 
 | Icon | Modifier | Effect with generated `Global` defaults |
 | :---: | --- | --- |
-| <img src="https://i.ibb.co/BVx9sb3K/enraged.png" width="40" height="40" alt="Enraged icon"> | **Enraged** (`enraged`) | Deals 15% more damage. |
-| <img src="https://i.ibb.co/0ygZZD0Y/fire.png" width="40" height="40" alt="Fire icon"> | **Fire** (`fire`) | Adds Fire damage equal to 20% of the original hit. |
-| <img src="https://i.ibb.co/JR3ckSFN/frost.png" width="40" height="40" alt="Frost icon"> | **Frost** (`frost`) | Adds Frost damage equal to 10% of the original hit. |
-| <img src="https://i.ibb.co/9kvRbPqK/lightning.png" width="40" height="40" alt="Lightning icon"> | **Lightning** (`lightning`) | Adds Lightning damage equal to 10% of the original hit. |
-| <img src="https://i.ibb.co/nsJX4zm1/spirit.png" width="40" height="40" alt="Spirit icon"> | **Spirit** (`spirit`) | Adds Spirit damage equal to 5% of the original hit. Against players, its Spirit damage over time bypasses armor and resistance. |
-| <img src="https://i.ibb.co/WNJrnsHg/armor-Piercing.png" width="40" height="40" alt="Armor Piercing icon"> | **Armor Piercing** (`armorPiercing`) | Ignores 30% of player body armor. |
-| <img src="https://i.ibb.co/Jw8T4gkG/staggering.png" width="40" height="40" alt="Staggering icon"> | **Staggering** (`staggering`) | Adds 60% normal-hit and block-stagger buildup. |
-| <img src="https://i.ibb.co/rR8dTsFw/undodgeable.png" width="40" height="40" alt="Undodgeable icon"> | **Undodgeable** (`undodgeable`) | Ignores player dodge invulnerability but deals 25% less damage. Blocking and parrying still work. |
+| <img src="https://i.ibb.co/BVx9sb3K/enraged.png" width="40" height="40" alt="Enraged icon"> | **Enraged** | Deals 15% more damage. |
+| <img src="https://i.ibb.co/0ygZZD0Y/fire.png" width="40" height="40" alt="Fire icon"> | **Fire** | Adds Fire damage equal to 20% of the original hit. |
+| <img src="https://i.ibb.co/JR3ckSFN/frost.png" width="40" height="40" alt="Frost icon"> | **Frost** | Adds Frost damage equal to 10% of the original hit. |
+| <img src="https://i.ibb.co/9kvRbPqK/lightning.png" width="40" height="40" alt="Lightning icon"> | **Lightning** | Adds Lightning damage equal to 10% of the original hit. |
+| <img src="https://i.ibb.co/nsJX4zm1/spirit.png" width="40" height="40" alt="Spirit icon"> | **Spirit** | Adds Spirit damage equal to 5% of the original hit. Against players, its Spirit damage over time bypasses armor and resistance. |
+| <img src="https://i.ibb.co/WNJrnsHg/armor-Piercing.png" width="40" height="40" alt="Armor Piercing icon"> | **Armor Piercing** | Ignores 30% of player body armor. |
+| <img src="https://i.ibb.co/Jw8T4gkG/staggering.png" width="40" height="40" alt="Staggering icon"> | **Staggering** | Adds 60% normal-hit and block-stagger buildup. |
+| <img src="https://i.ibb.co/rR8dTsFw/undodgeable.png" width="40" height="40" alt="Undodgeable icon"> | **Undodgeable** | Ignores player dodge invulnerability but deals 25% less damage. Blocking and parrying still work. |
 
 #### Defense
 
 | Icon | Modifier | Effect with generated `Global` defaults |
 | :---: | --- | --- |
-| <img src="https://i.ibb.co/wNHPbYF1/armored.png" width="40" height="40" alt="Armored icon"> | **Armored** (`armored`) | Takes 30% less damage. |
-| <img src="https://i.ibb.co/ns25Rvk0/deathward.png" width="40" height="40" alt="Deathward icon"> | **Deathward** (`deathward`) | Cancels lethal damage and restores 20% of max health. Has a 10s cooldown and up to 3 activations. |
-| <img src="https://i.ibb.co/x8s20mxk/regenerating.png" width="40" height="40" alt="Regenerating icon"> | **Regenerating** (`regenerating`) | Heals a configurable share of max health per second, capped at 20 health per second by default. Rate defaults are 1% for Global creatures, 0.2% for bosses, and 0.5% for Enforcers. |
-| <img src="https://i.ibb.co/S4q133Xd/reflection.png" width="40" height="40" alt="Reflection icon"> | **Reflection** (`reflection`) | Has a 50% chance on a direct melee hit to reflect 10% of the health actually lost, bypassing defense and resistance. Capped at 25 health per activation by default. |
-| <img src="https://i.ibb.co/1JYL26MD/vortex.png" width="40" height="40" alt="Vortex icon"> | **Vortex** (`vortex`) | Has a 50% chance to negate projectile damage, push, stagger, and status effects. |
-| <img src="https://i.ibb.co/KjW1GynX/adaptive.png" width="40" height="40" alt="Adaptive icon"> | **Adaptive** (`adaptive`) | Remembers the dominant hit type for 5s and reduces matching damage by 50%. |
-| <img src="https://i.ibb.co/mrcBq1d6/unflinching.png" width="40" height="40" alt="Unflinching icon"> | **Unflinching** (`unflinching`) | Immune to normal-hit and perfect-parry stagger. |
-| <img src="https://i.ibb.co/JjW33Mc3/chameleon.png" width="40" height="40" alt="Chameleon icon"> | **Chameleon** (`chameleon`) | While alerted, gains one rotating damage-type immunity and switches it every 10s. |
+| <img src="https://i.ibb.co/wNHPbYF1/armored.png" width="40" height="40" alt="Armored icon"> | **Armored** | Takes 30% less damage. |
+| <img src="https://i.ibb.co/ns25Rvk0/deathward.png" width="40" height="40" alt="Deathward icon"> | **Deathward** | Cancels lethal damage and restores 20% of max health. Has a 10s cooldown and up to 3 activations. |
+| <img src="https://i.ibb.co/x8s20mxk/regenerating.png" width="40" height="40" alt="Regenerating icon"> | **Regenerating** | Heals a configurable share of max health per second, capped at 20 health per second by default. Rate defaults are 1% for Global creatures, 0.2% for bosses, and 0.5% for Enforcers. |
+| <img src="https://i.ibb.co/S4q133Xd/reflection.png" width="40" height="40" alt="Reflection icon"> | **Reflection** | Has a 50% chance on a direct melee hit to reflect 10% of the health actually lost, bypassing defense and resistance. Capped at 25 health per activation by default. |
+| <img src="https://i.ibb.co/1JYL26MD/vortex.png" width="40" height="40" alt="Vortex icon"> | **Vortex** | Has a 50% chance to negate projectile damage, push, stagger, and status effects. |
+| <img src="https://i.ibb.co/KjW1GynX/adaptive.png" width="40" height="40" alt="Adaptive icon"> | **Adaptive** | Remembers the dominant hit type for 5s and reduces matching damage by 50%. |
+| <img src="https://i.ibb.co/mrcBq1d6/unflinching.png" width="40" height="40" alt="Unflinching icon"> | **Unflinching** | Immune to normal-hit and perfect-parry stagger. |
+| <img src="https://i.ibb.co/JjW33Mc3/chameleon.png" width="40" height="40" alt="Chameleon icon"> | **Chameleon** | While alerted, gains one rotating damage-type immunity and switches it every 10s. |
 
 #### Affliction
 
 | Icon | Modifier | Effect with generated `Global` defaults |
 | :---: | --- | --- |
-| <img src="https://i.ibb.co/dJBntfKg/exposed.png" width="40" height="40" alt="Exposed icon"> | **Exposed** (`exposed`) | Has a 50% chance to make the player take 20% more damage for 5s. |
-| <img src="https://i.ibb.co/F42w0PQ5/weakened.png" width="40" height="40" alt="Weakened icon"> | **Weakened** (`weakened`) | Has a 50% chance to make the player deal 20% less damage for 5s. |
-| <img src="https://i.ibb.co/RqB7wdW/withered.png" width="40" height="40" alt="Withered icon"> | **Withered** (`withered`) | Has a 50% chance to reduce healing received by 50% for 5s. |
-| <img src="https://i.ibb.co/LzG2TYkb/crippling.png" width="40" height="40" alt="Crippling icon"> | **Crippling** (`crippling`) | Has a 50% chance to reduce movement speed and jump force by 50% for 5s. |
-| <img src="https://i.ibb.co/sdY1NFzg/disruptive.png" width="40" height="40" alt="Disruptive icon"> | **Disruptive** (`disruptive`) | Has a 50% chance to reduce stamina and Eitr recovery by 50% for 5s. |
-| <img src="https://i.ibb.co/sJJkksLr/adrenaline-Drain.png" width="40" height="40" alt="Adrenaline Drain icon"> | **Adrenaline Drain** (`adrenalineDrain`) | Has a 50% chance to remove 50% of current adrenaline and reduce adrenaline gain by 50% for 5s. |
-| <img src="https://i.ibb.co/HTnv5QHG/corrosive.png" width="40" height="40" alt="Corrosive icon"> | **Corrosive** (`corrosive`) | Has a 50% chance to increase durability loss to equipped gear by 50% for 5s. |
-| <img src="https://i.ibb.co/FbcNsZ56/toxic-Death.png" width="40" height="40" alt="Toxic Death icon"> | **Toxic Death** (`toxicDeath`) | On death, poisons players within 4m for 30% of their max health. |
+| <img src="https://i.ibb.co/dJBntfKg/exposed.png" width="40" height="40" alt="Exposed icon"> | **Exposed** | Has a 50% chance to make the player take 20% more damage for 5s. |
+| <img src="https://i.ibb.co/F42w0PQ5/weakened.png" width="40" height="40" alt="Weakened icon"> | **Weakened** | Has a 50% chance to make the player deal 20% less damage for 5s. |
+| <img src="https://i.ibb.co/RqB7wdW/withered.png" width="40" height="40" alt="Withered icon"> | **Withered** | Has a 50% chance to reduce healing received by 50% for 5s. |
+| <img src="https://i.ibb.co/LzG2TYkb/crippling.png" width="40" height="40" alt="Crippling icon"> | **Crippling** | Has a 50% chance to reduce movement speed and jump force by 50% for 5s. |
+| <img src="https://i.ibb.co/sdY1NFzg/disruptive.png" width="40" height="40" alt="Disruptive icon"> | **Disruptive** | Has a 50% chance to reduce stamina and Eitr recovery by 50% for 5s. |
+| <img src="https://i.ibb.co/sJJkksLr/adrenaline-Drain.png" width="40" height="40" alt="Adrenaline Drain icon"> | **Adrenaline Drain** | Has a 50% chance to remove 50% of current adrenaline and reduce adrenaline gain by 50% for 5s. |
+| <img src="https://i.ibb.co/HTnv5QHG/corrosive.png" width="40" height="40" alt="Corrosive icon"> | **Corrosive** | Has a 50% chance to increase durability loss to equipped gear by 50% for 5s. |
+| <img src="https://i.ibb.co/FbcNsZ56/toxic-Death.png" width="40" height="40" alt="Toxic Death icon"> | **Toxic Death** | On death, poisons players within 4m for 30% of their max health. |
 
 #### Special
 
 | Icon | Modifier | Effect with generated `Global` defaults |
 | :---: | --- | --- |
-| <img src="https://i.ibb.co/3mfDdZgF/swift.png" width="40" height="40" alt="Swift icon"> | **Swift** (`swift`) | Increases movement speed, acceleration, and turning speed by 40%. |
-| <img src="https://i.ibb.co/xKKMTzcq/attack-Speed.png" width="40" height="40" alt="Attack Speed icon"> | **Attack Speed** (`attackSpeed`) | Increases animation speed by 30%; attack intervals become 76.92% of normal. |
-| <img src="https://i.ibb.co/SXqZd5Pq/vampiric.png" width="40" height="40" alt="Vampiric icon"> | **Vampiric** (`vampiric`) | Heals for 30% of health removed by direct hits; delayed damage over time is excluded. |
-| <img src="https://i.ibb.co/Jw9yV49Z/reaping.png" width="40" height="40" alt="Reaping icon"> | **Reaping** (`reaping`) | Nearby kills heal 5% of base max health (up to 20 activations) and grant +10% max health, +1% damage, and +5% size per kill, capped at +200%, +20%, and +50%. No new size is gained in dungeons. |
-| <img src="https://i.ibb.co/Gfqc089L/blink.png" width="40" height="40" alt="Blink icon"> | **Blink** (`blink`) | Teleports near its player target within 16m every 6s. By default, Blink and its extended attack range unlock 3s after the creature becomes alerted, even if no attack could start during that time. |
-| <img src="https://i.ibb.co/ZpnXrfGq/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** (`omen`) | Has a 50% chance when killed directly by a player or by unambiguously player-attributed poison, fire, or spirit damage over time to force an Enforcer check; cooldown blocking follows the server setting. |
-| <img src="https://i.ibb.co/spF4n7Wg/juggernaut.png" width="40" height="40" alt="Juggernaut icon"> | **Juggernaut** (`juggernaut`) | Player hits have at least 150 push force. An actual push starts a 5s cooldown, and the creature is immune to attack push. |
-| <img src="https://i.ibb.co/TBCgrbkt/blamer.png" width="40" height="40" alt="Blamer icon"> | **Blamer** (`blamer`) | Below 75% health, flees and adds 0.5 Karma per second up to 45 lifetime Karma. When exhausted, the modifier, icon, and flee behavior end. |
+| <img src="https://i.ibb.co/3mfDdZgF/swift.png" width="40" height="40" alt="Swift icon"> | **Swift** | Increases movement speed, acceleration, and turning speed by 40%. |
+| <img src="https://i.ibb.co/xKKMTzcq/attack-Speed.png" width="40" height="40" alt="Attack Speed icon"> | **Attack Speed** | Increases animation speed by 30%; attack intervals become 76.92% of normal. |
+| <img src="https://i.ibb.co/SXqZd5Pq/vampiric.png" width="40" height="40" alt="Vampiric icon"> | **Vampiric** | Heals for 30% of health removed by direct hits; delayed damage over time is excluded. |
+| <img src="https://i.ibb.co/Jw9yV49Z/reaping.png" width="40" height="40" alt="Reaping icon"> | **Reaping** | Nearby kills heal 5% of base max health (up to 20 activations) and grant +10% max health, +1% damage, and +5% size per kill, capped at +200%, +20%, and +50%. No new size is gained in dungeons. |
+| <img src="https://i.ibb.co/Gfqc089L/blink.png" width="40" height="40" alt="Blink icon"> | **Blink** | Teleports near its player target within 16m every 6s. By default, Blink and its extended attack range unlock 3s after the creature becomes alerted, even if no attack could start during that time. |
+| <img src="https://i.ibb.co/ZpnXrfGq/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** | Has a 50% chance when killed directly by a player or by unambiguously player-attributed poison, fire, or spirit damage over time to force an Enforcer check; cooldown blocking follows the server setting. |
+| <img src="https://i.ibb.co/spF4n7Wg/juggernaut.png" width="40" height="40" alt="Juggernaut icon"> | **Juggernaut** | Player hits have at least 150 push force. An actual push starts a 5s cooldown, and the creature is immune to attack push. |
+| <img src="https://i.ibb.co/TBCgrbkt/blamer.png" width="40" height="40" alt="Blamer icon"> | **Blamer** | Below 75% health, flees and adds 0.5 Karma per second up to 45 lifetime Karma. When exhausted, the modifier, icon, and flee behavior end. |
 
-Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains a CreatureManager page with modifier names, icons, and descriptions using the active global values. English and Korean localization are embedded.
+Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains a CreatureManager page with modifier names, icons, and descriptions using the active global values.
 
 ### In-game Tools
 
@@ -101,8 +97,6 @@ Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains
 ![Reflection modifier returning melee damage](https://i.ibb.co/84LqjWMj/reflection.gif)
 
 *Reflection returns part of the creature's actual health loss to a direct melee attacker.*
-
-`5 - Modifiers` → `Reflection Damage Cap` is a server-synchronized integer setting, defaulting to `25` health per successful activation from one creature; `0` removes the cap. It applies to existing and newly spawned normal creatures, bosses, and Enforcers. Multiple reflectors have separate caps, so hitting three of them can return up to 75 health in total at the default setting. The server reads the current cap after validating and consuming the full original health-loss evidence; already authorized damage keeps its approved amount. The `reflection` YAML tuple remains `chance%, reflectedRatio, procChance`.
 
 ![Vortex modifier negating a projectile](https://i.ibb.co/k2FtL0g8/vortex.gif)
 
@@ -221,31 +215,6 @@ The creature, attack, projectile, AI, and level domains load both `.yml` and `.y
 
 Install the package's `BepInEx` folder too, including on dedicated servers that supply referenced PNGs to clients. DLL-only Debug updates do not install sample PNGs. Give personal texture replacements a separate filename, because package updates can replace bundled files. Existing configuration and sample YAML files are not rewritten: when adopting the renamed PNGs, update old texture references such as `boar2` to `cm_boar2`, or retain the matching old PNGs.
 
-### Server Localization
-
-Files directly under `localization/` are flat `token: text` mappings. Both `.yml` and `.yaml` are accepted, but keep only one file for each Valheim language name. A token key may have one leading `$`; CreatureManager removes it while loading, so `rootwitch` and `$rootwitch` define the same token. Use `$token` in `creatures.yml` or another localized field. English is applied as the fallback before the client's selected language.
-
-`localization/English.yml`
-
-```yaml
-cm_rootwitch_name: Root Witch
-```
-
-`localization/Korean.yml`
-
-```yaml
-cm_rootwitch_name: 뿌리 마녀
-```
-
-`creatures.yml`
-
-```yaml
-character:
-  name: $cm_rootwitch_name
-```
-
-Only the server, listen host, or current single-player authority reads these files. Connected clients ignore their local `CreatureManager/localization` folder and use the synchronized language maps. Existing vanilla or mod tokens can be referenced without redefining them. Redefining an existing token overrides every use of that token, so use a unique `cm_...` token for clone-specific names.
-
 ## Generated References
 
 | File | Contents |
@@ -324,16 +293,6 @@ Enforcers turn high Karma into encounters. A biome or dungeon table can choose a
 New default `karma.yml` files include three DeepNorth encounters: Barka alone outdoors, ElakingMole with one Elaking in `TheHole01`, and JotunWarrior with one BlobMork in `MorkBorg`. Each uses `[40, 30, 2]` for required Karma, consumed Karma, and additional level bonus, inherits the Enforcer modifier rules, and grants its Enforcer's trophy plus two Silver Necklaces as bonus loot. The level bonus is not a final star cap. Dungeon entries match the location prefab names, not the dungeon generator names. Existing `karma.yml` files are preserved; add a DeepNorth section manually to enable these encounters in an existing configuration.
 
 Enforcer behavior can be used together with Karma levels or independently through BepInEx configuration. Current Karma appears near the minimap, and Enforcer events use localized center-screen messages.
-
-Karma is currently stored in server memory and resets when the server process restarts.
-
-The boss-blocking options use server-side ZDO discovery as well as loaded creatures, so stored bosses and bosses simulated by remote clients can block kill Karma and Enforcer summons even when their GameObjects are not loaded on the server. Discovery is independent of the level mode and still runs in `KarmaLevelOnly`. The existing outdoor/dungeon and regional boundaries apply; killing the last nearby boss can still award Karma. These options do not clear existing Karma level bonuses or change Blamer's separate Karma gain.
-
-`Dungeon Enforcer Spawn Delay (s)` in `3 - Karma` defaults to **5** (0–30). Dungeon periodic and Omen summons select their encounter and position once, announce the delay to players in that interior anchor zone, and spawn at the reserved point after the delay. Minions arrive with the Enforcer; outdoor summons and a delay of 0 remain immediate. Pending reservations count toward the regional Enforcer limit. A reservation is canceled if no living connected player remains in its interior anchor zone, boss/cap/cooldown/Karma checks no longer allow it, or the reserved point is no longer valid. Omen retains its existing cooldown/Karma bypass settings. Position checks use loaded geometry or the existing ZDO spawner anchor on an unloaded server; they never relocate a reservation. Karma cost and cooldown begin only after successful creation. Existing deadlines do not change when the delay setting changes. Disabling Enforcers, successfully reloading `karma.yml`, or ending the server session clears reservations; they are not saved or restored.
-
-`1 - General` contains two independent, server-synchronized switches, both **On** by default: `Block Nearby Spawns While Boss Is Active` and `Block Nearby Spawns While Enforcer Is Active`. They stop new ordinary creatures from `SpawnSystem`, `SpawnArea`, and `CreatureSpawner` while the selected kind of living blocker is nearby. Boss means a non-Enforcer boss; pending Enforcer reservations and ordinary minions do not count. These switches also work with Karma or the level system Off, and live edits apply on the next spawn attempt.
-
-Nearby means the game's synchronized **near-loaded sectors**, centered on the candidate point for `SpawnSystem` or the spawner position for `SpawnArea`/`CreatureSpawner`. The current simulation distance and classic/circular sector shape are respected; interiors require the same interior anchor zone, separate from outdoors. Each spawn owner checks its loaded characters and received nearby ZDOs, not all bosses anywhere on the server. Network propagation delay still applies. Existing creatures, raid spawns, boss prefabs, non-character items/fish, direct ability/altar summons, and CM's Enforcer/minion encounter creation are unaffected. Ordinary animals are included. A fixed dungeon spawner's first spawn can be postponed, but blocking never marks it as already spawned. Normal attempt intervals continue; no deferred spawn queue or accumulated wave is created. Other mods that implement a special encounter through ordinary spawners may need these switches Off.
 
 ## Common Workflows
 

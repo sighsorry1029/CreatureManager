@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1
+
+- Reuse temporary Karma blocker buffers and scoped spawn-query state, and share prefab classifications within each nearby search to reduce repeated allocations and lookups. Preserve live boss/Enforcer checks, spawn exclusions, and pending summon rules.
+- Add dungeon-only Blink collision and destination checks. Stop before solid obstacles when a safe position remains, or cancel unsafe Blinks, with clearance checks for creature size and nearby walkable ground for grounded creatures. Outdoor Blink behavior remains unchanged.
+- Increase the default Dungeon Enforcer Spawn Delay from 5 to **7 seconds** and replace the English/Korean countdown notice with an in-world warning. Existing saved delay values are preserved.
+- Ship all 11 sample PNG textures under `BepInEx/config/CreatureManager/textures/` with `cm_` filename prefixes, update the creature sample, and remove embedded sample PNGs and the `Generate Sample Textures` option.
+- Install the package's `BepInEx` folder along with the DLL, including on servers supplying textures to clients. Existing YAML is not rewritten: update old texture references such as `boar2` to `cm_boar2`, or retain their matching old PNG files. Use separate filenames for personal replacements so package updates do not overwrite them.
+
 ## 1.2.0
 
 - Add independent, server-synchronized switches to block nearby ordinary spawns while a boss or Enforcer is active, both On by default. Cover SpawnSystem, SpawnArea, and CreatureSpawner within the game's near-loaded sectors while preserving raids, boss prefabs, direct summons, and Enforcer encounters. These switches work independently of Karma and level settings.
