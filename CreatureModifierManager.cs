@@ -238,6 +238,9 @@ internal static class CreatureModifierManager
     private const byte VortexOriginalHitTypeMask = 0x3F;
     private const float BlinkAiMaxAngle = 90f;
     private const float BlinkDestinationRadius = 2f;
+    private const float DungeonBlinkSkin = 0.02f;
+    private const float DungeonBlinkWallMargin = 0.05f;
+    private const float DungeonBlinkMinimumDistance = 0.5f;
     private const float ReapingRadius = 24f;
     private const int InitialReapingOverlapBufferSize = 128;
     private const float InactivePlayerDebuffProbeInterval = 1f;
@@ -470,6 +473,7 @@ internal static class CreatureModifierManager
     private static FieldInfo? CachedSneakField;
     private static bool SneakMemberLookupDone;
     private static int HoverRaycastMask = -1;
+    private static int DungeonBlinkSolidMask;
     private static TMP_FontAsset? CachedHudFont;
     private static readonly HashSet<int> PassiveModifierProbeDoneCharacters = new();
     private static readonly HashSet<int> ActivePassiveModifierCharacters = new();
@@ -5694,7 +5698,7 @@ internal static class CreatureModifierManager
             return;
         }
 
-        if (!TryGetBlinkDestination(target, out Vector3 destination))
+        if (!TryGetBlinkDestination(character, target, out Vector3 destination))
         {
             return;
         }
@@ -6072,22 +6076,153 @@ internal static class CreatureModifierManager
         return CachedMonsterAiTargetField?.GetValue(monsterAI) as Character;
     }
 
-    private static bool TryGetBlinkDestination(Player target, out Vector3 destination)
+    private static bool TryGetBlinkDestination(Character character, Player target, out Vector3 destination)
     {
         Vector3 targetPosition = target.transform.position;
         Vector2 offset2d = UnityEngine.Random.insideUnitCircle * BlinkDestinationRadius;
         destination = new Vector3(targetPosition.x + offset2d.x, targetPosition.y, targetPosition.z + offset2d.y);
-        return true;
+        Vector3 origin = character.transform.position;
+        bool originInDungeon = Character.InInterior(origin);
+        bool targetInDungeon = Character.InInterior(targetPosition);
+        if (!originInDungeon && !targetInDungeon)
+        {
+            return true;
+        }
+
+        return originInDungeon && targetInDungeon &&
+               TryConstrainDungeonBlink(character, origin, targetPosition, ref destination);
+    }
+
+    private static bool TryConstrainDungeonBlink(
+        Character character, Vector3 origin, Vector3 targetPosition, ref Vector3 destination)
+    {
+        CapsuleCollider? capsule = character.GetCollider();
+        if (!IsFinite(origin) || !IsFinite(destination) ||
+            capsule == null || !capsule.enabled || capsule.isTrigger)
+        {
+            return false;
+        }
+
+        // Layer names are fixed for the running game. Cache only the mask, never scene geometry.
+        if (DungeonBlinkSolidMask == 0)
+        {
+            DungeonBlinkSolidMask = LayerMask.GetMask(
+                "Default", "static_solid", "Default_small", "piece", "terrain", "blocker", "vehicle");
+        }
+
+        int mask = DungeonBlinkSolidMask;
+        if (mask == 0 || !TryGetBlinkCapsule(capsule, origin, character.transform.rotation,
+                out Vector3 start0, out Vector3 start1, out float radius))
+        {
+            return false;
+        }
+
+        // A small inset tolerates floor contact. Casts alone do not detect starting overlaps.
+        float checkRadius = Mathf.Max(radius - DungeonBlinkSkin, radius * 0.9f);
+        if (Physics.CheckCapsule(start0, start1, checkRadius, mask, QueryTriggerInteraction.Ignore))
+        {
+            return false;
+        }
+
+        Vector3 movement = destination - origin;
+        float distance = movement.magnitude;
+        if (distance < DungeonBlinkMinimumDistance)
+        {
+            return false;
+        }
+
+        Vector3 direction = movement / distance;
+        if (Physics.CapsuleCast(start0, start1, checkRadius, direction, out RaycastHit wall,
+                distance, mask, QueryTriggerInteraction.Ignore))
+        {
+            distance = Mathf.Min(distance, wall.distance - DungeonBlinkWallMargin);
+            if (distance < DungeonBlinkMinimumDistance)
+            {
+                return false;
+            }
+
+            destination = origin + direction * distance;
+        }
+
+        // TeleportCharacter faces the target, so clearance must use that final rotation too.
+        Quaternion rotation = GetBlinkRotation(character, destination, targetPosition);
+        if (!TryGetBlinkCapsule(capsule, destination, rotation,
+                out Vector3 end0, out Vector3 end1, out _))
+        {
+            return false;
+        }
+
+        if (!character.IsFlying())
+        {
+            float feetY = Mathf.Min(end0.y, end1.y) - radius;
+            Vector3 probe = (end0 + end1) * 0.5f;
+            probe.y = feetY + 1f;
+            // Search only the nearby floor, not terrain thousands of metres below the dungeon.
+            if (!Physics.Raycast(probe, Vector3.down, out RaycastHit floor, 2.5f, mask,
+                    QueryTriggerInteraction.Ignore) || !IsFinite(floor.point) || floor.normal.y < 0.5f)
+            {
+                return false;
+            }
+
+            float heightAdjustment = floor.point.y - feetY;
+            destination.y += heightAdjustment;
+            end0.y += heightAdjustment;
+            end1.y += heightAdjustment;
+            if (Mathf.Abs(heightAdjustment) > DungeonBlinkSkin)
+            {
+                // Snapping to a floor must not introduce a new path through a wall or a slab.
+                movement = destination - origin;
+                distance = movement.magnitude;
+                if (distance < DungeonBlinkMinimumDistance ||
+                    Physics.CapsuleCast(start0, start1, checkRadius, movement / distance, out _,
+                        distance, mask, QueryTriggerInteraction.Ignore))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return IsFinite(destination) && Character.InInterior(destination) &&
+               Utils.DistanceXZ(origin, destination) >= DungeonBlinkMinimumDistance &&
+               !Physics.CheckCapsule(end0, end1, checkRadius, mask, QueryTriggerInteraction.Ignore);
+    }
+
+    private static bool TryGetBlinkCapsule(
+        CapsuleCollider capsule, Vector3 position, Quaternion rotation,
+        out Vector3 point0, out Vector3 point1, out float radius)
+    {
+        Vector3 scale = capsule.transform.lossyScale;
+        int axis = capsule.direction;
+        point0 = point1 = position;
+        radius = 0f;
+        if (axis < 0 || axis > 2 || !IsFinite(scale))
+        {
+            return false;
+        }
+
+        radius = capsule.radius * Mathf.Max(Mathf.Abs(scale[(axis + 1) % 3]), Mathf.Abs(scale[(axis + 2) % 3]));
+        float height = Mathf.Max(capsule.height * Mathf.Abs(scale[axis]), radius * 2f);
+        Vector3 localAxis = axis == 0 ? Vector3.right : axis == 1 ? Vector3.up : Vector3.forward;
+        Vector3 halfSegment = rotation * localAxis * (height * 0.5f - radius);
+        Vector3 center = position + rotation * Vector3.Scale(capsule.center, scale);
+        point0 = center - halfSegment;
+        point1 = center + halfSegment;
+        return radius > 0f && !float.IsNaN(radius) && !float.IsInfinity(radius) &&
+               IsFinite(point0) && IsFinite(point1);
+    }
+
+    private static Quaternion GetBlinkRotation(Character character, Vector3 destination, Vector3 lookAt)
+    {
+        Vector3 direction = lookAt - destination;
+        direction.y = 0f;
+        return direction.sqrMagnitude > 0.001f
+            ? Quaternion.LookRotation(direction.normalized, Vector3.up)
+            : character.transform.rotation;
     }
 
     private static void TeleportCharacter(Character character, Vector3 destination, Vector3 lookAt)
     {
-        Vector3 direction = lookAt - destination;
-        direction.y = 0f;
-        if (direction.sqrMagnitude > 0.001f)
-        {
-            character.transform.rotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
-        }
+        character.transform.rotation = GetBlinkRotation(character, destination, lookAt);
 
         if (character.TryGetComponent(out Rigidbody body))
         {

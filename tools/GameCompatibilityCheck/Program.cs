@@ -71,6 +71,7 @@ internal static class Program
         ModifierLimitContracts.Run(plugin);
         EnforcerDelayContracts.Run(plugin);
         SpawnBlockerContracts.Run(plugin);
+        DungeonBlinkContracts.Run(plugin);
     }
 
     private static void CheckReferences(string pluginPath)
