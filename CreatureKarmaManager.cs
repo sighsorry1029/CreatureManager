@@ -2848,7 +2848,7 @@ DeepNorth:
             }
         }
 
-        int delay = dungeonSummon ? Mathf.Clamp(CreatureManagerPlugin.DungeonEnforcerSpawnDelay?.Value ?? 5, 0, 30) : 0;
+        int delay = dungeonSummon ? Mathf.Clamp(CreatureManagerPlugin.DungeonEnforcerSpawnDelay?.Value ?? 7, 0, 30) : 0;
         EnforcerSummonPlan plan = new()
         {
             Candidate = candidate,
