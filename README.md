@@ -64,6 +64,8 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 
 Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains a CreatureManager page with modifier names, icons, and descriptions using the active global values.
 
+When using WackyEpicMMOSystem, `1 - General` → `Adjust EpicMMO LevelBar Position` is a server-synchronized switch, **On** by default. It places regular creature level labels at `(70, -15)`, including recreated labels, without editing EpicMMO's configuration. This displayed position takes priority over EpicMMO's configured coordinates. **Off** restores the position recorded before adjustment. Boss, player, and mount HUDs are unchanged. The switch applies live and works independently of CreatureManager's level and modifier settings; clients without EpicMMO and dedicated servers do not adjust UI.
+
 ### In-game Tools
 
 ![Defensive modifier entries in the Compendium](https://i.ibb.co/C3VG6r3B/compendium.png)

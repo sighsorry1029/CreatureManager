@@ -11135,9 +11135,21 @@ internal static class CreatureModifierManager
             return;
         }
 
-        foreach (var hud in enemyHud.m_huds)
+        bool adjustEpicMmo = CreatureEpicMmoHud.BeginUpdate();
+        try
         {
-            UpdateEnemyHud(hud.Key, hud.Value.m_isMount);
+            foreach (var hud in enemyHud.m_huds)
+            {
+                if (adjustEpicMmo)
+                {
+                    CreatureEpicMmoHud.Update(hud.Key, hud.Value.m_name != null ? hud.Value.m_name.rectTransform : null, hud.Value.m_isMount);
+                }
+                UpdateEnemyHud(hud.Key, hud.Value.m_isMount);
+            }
+        }
+        finally
+        {
+            if (adjustEpicMmo) CreatureEpicMmoHud.EndUpdate();
         }
     }
 

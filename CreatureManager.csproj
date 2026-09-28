@@ -143,6 +143,7 @@
         <Compile Include="CreatureDomainManager.cs"/>
         <Compile Include="CreatureFactionManager.cs"/>
         <Compile Include="CreatureHarmonyPatches.cs"/>
+        <Compile Include="CreatureEpicMmoHud.cs"/>
         <Compile Include="CreatureSpawnBlocker.cs"/>
         <Compile Include="CreatureAppearanceRuntime.cs"/>
         <Compile Include="CreatureKarmaManager.cs"/>

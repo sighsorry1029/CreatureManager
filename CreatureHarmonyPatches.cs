@@ -1050,6 +1050,7 @@ internal static class CreatureManagerZNetSceneOnDestroyPatch
     {
         CreatureDomainManager.NotifyGameDataUnavailable();
         CreatureAppearanceRuntime.Reset();
+        CreatureEpicMmoHud.Reset();
         CreatureManagerSpawnLifecycle.ResetRuntimeState();
         CreatureKarmaManager.ResetRuntimeState();
         CreatureModifierManager.ResetRuntimeState();
@@ -2151,6 +2152,7 @@ internal static class CreatureManagerEnemyHudUpdateHudsPatch
         __state = CreatureBossHudOnlyScope.Begin(__instance);
     }
 
+    [HarmonyAfter(CreatureEpicMmoHud.PluginGuid)]
     private static void Postfix(EnemyHud __instance, List<Character>? __state)
     {
         CreatureModifierManager.UpdateEnemyHuds(__instance);
@@ -2161,6 +2163,12 @@ internal static class CreatureManagerEnemyHudUpdateHudsPatch
         CreatureBossHudOnlyScope.End(__state);
         return __exception;
     }
+}
+
+[HarmonyPatch(typeof(EnemyHud), "OnDestroy")]
+internal static class CreatureManagerEnemyHudDestroyPatch
+{
+    private static void Prefix() => CreatureEpicMmoHud.Reset();
 }
 
 [HarmonyPatch(typeof(EnemyHud), "TestShow")]
