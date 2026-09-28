@@ -5047,7 +5047,7 @@ DeepNorth:
             }
 
             message = CreatureLocalization.Format("cm_message_enforcer_warning",
-                "An Enforcer will appear in {seconds} seconds. Prepare yourself!",
+                "Run while you can. I grant you {seconds} seconds.",
                 ("seconds", warningSeconds.ToString(CultureInfo.InvariantCulture)));
         }
 
