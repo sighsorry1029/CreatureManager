@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.3
+
+- Rename the level-system choices to `Off`, `ExceptLevel`, and `Full`. `Full` remains the default behavior; `ExceptLevel` keeps levels assigned by the game or other mods while applying configured stat, distance, scale, and modifier rules.
+- Preserve saved settings: `On` (or `1`) is read as `Full`, and `Vanilla` (or `2`) as `ExceptLevel`. Save the current names and show only the three current choices in ConfigurationManager. Existing creature state and YAML files are unchanged.
+- Clarify config help, the README, and the generated YAML comment. Global `damagePerLevel` stays at 0.25; setting it to 0.5 in a new default `levels.yml` matches vanilla per-star damage growth for regular creatures. In `ExceptLevel`, default health growth and prefab level sizes already follow vanilla; other rules, modifiers, Karma, Enforcer encounters, and loot settings remain separately applicable.
+
 ## 1.2.2
 
 - Add the server-synchronized `Adjust EpicMMO LevelBar Position` switch under `1 - General`, On by default. Clients with WackyEpicMMOSystem position regular creature level labels at `(70, -15)`, including labels recreated by EpicMMO's fallback path.
