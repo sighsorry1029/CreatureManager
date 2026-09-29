@@ -88,12 +88,12 @@ internal static class BossBlockerContracts
         {
             foreach (var pair in saved) pair.Key.SetValue(null, pair.Value);
         }
-        System.Console.WriteLine("Boss blocker contracts passed: unloaded saved bosses, Vanilla/KarmaLevelOnly, delayed prefab/duplicate observation, owner changes, bounded bootstrap, clone/dirty/Off-On discovery, region union/realm, last-vs-second boss, dead/missing data, Enforcer classification and loaded/tracked deduplication. Production bodies with native/world/query boundaries substituted; no network or Unity scene.");
+        System.Console.WriteLine("Boss blocker contracts passed: unloaded saved bosses, ExceptLevel/KarmaLevelOnly, delayed prefab/duplicate observation, owner changes, bounded bootstrap, clone/dirty/Off-On discovery, region union/realm, last-vs-second boss, dead/missing data, Enforcer classification and loaded/tracked deduplication. Production bodies with native/world/query boundaries substituted; no network or Unity scene.");
     }
 
     private static void CheckStoredBosses()
     {
-        foreach (string level in new[] { "On", "Vanilla", "Off" })
+        foreach (string level in new[] { "Full", "ExceptLevel", "Off" })
         {
             Reset();
             Set("EnableLevelSystem", level);

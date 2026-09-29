@@ -60,8 +60,11 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     public enum LevelSystemMode
     {
         Off = 0,
+        // Keep saved On/1 and Vanilla/2 readable; validation maps them to the current choices.
         On = 1,
-        Vanilla = 2
+        Vanilla = 2,
+        ExceptLevel = 3,
+        Full = 4
     }
 
     public enum ModifierLimit
@@ -121,9 +124,9 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             AdjustEpicMmoLevelBarPosition = config("1 - General", "Adjust EpicMMO LevelBar Position", Toggle.On, Ordered("When EpicMMOSystem is installed on a client, position its regular creature level labels at (70, -15), including recreated labels. Overrides the displayed position even if EpicMMO's server setting specifies other coordinates, without changing its config. Boss, player and mount HUDs are unchanged. Off restores the position recorded before adjustment. Applies live, independently of the level and modifier systems.", 60));
             BlockNearbySpawnsWhileBossActive = config("1 - General", "Block Nearby Spawns While Boss Is Active", Toggle.On, Ordered("Block new ordinary creatures from SpawnSystem, SpawnArea, and CreatureSpawner while a living non-Enforcer boss is in the surrounding near-loaded sectors (using the game's synchronized simulation distance). Checked around the candidate point for SpawnSystem and the spawner position for SpawnArea/CreatureSpawner. Interiors only match the same interior anchor zone. Existing creatures, raid spawns, boss prefabs, direct ability/altar summons, and Enforcer encounters are unchanged. Independent of Karma and level settings; applies on the next spawn attempt.", 50));
             BlockNearbySpawnsWhileEnforcerActive = config("1 - General", "Block Nearby Spawns While Enforcer Is Active", Toggle.On, Ordered("Block new ordinary creatures from SpawnSystem, SpawnArea, and CreatureSpawner while a living Enforcer is in the surrounding near-loaded sectors. Uses the same scope and exclusions as the Boss option. Pending Enforcer reservations do not block. Independent of Karma and level settings; applies on the next spawn attempt.", 49));
-            EnableLevelSystem = config("2 - Levels", "Enable Level System", LevelSystemMode.On, Ordered("Off disables CreatureManager level rules, level damage/health scaling, distance scaling, modifiers, and level visuals. On enables all of them. Vanilla keeps the levels assigned by the game or other mods, skips CreatureManager level rolls and Karma/Enforcer level bonuses, and still applies stat, distance, scale, and modifier rules. Vanilla still uses levels.yml stat values: Global damagePerLevel defaults to 0.25, not the vanilla value of 0.5. With no matching scalePerLevel rule, Vanilla uses the prefab's original level sizes; explicit 0 disables star growth. Explicit spawn-command levels remain available. Changing this setting does not reroll existing creatures.", 100));
-            BiomeLevelPreset = config("2 - Levels", "Biome Level Preset", LevelBiomePreset.Easy, Ordered("Built-in level weights for vanilla biome names when Enable Level System is On. Explicit biome, group, and prefab level rules in levels.yml override the preset; Global remains the fallback for non-boss creatures and Enforcers.", 90));
-            BossesFollowBiomeLevelPreset = config("2 - Levels", "Bosses Follow Biome Level Preset", Toggle.On, Ordered("If on and Enable Level System is On, regular bosses can use the built-in Biome Level Preset as a level fallback when no Boss, group, or prefab level rule applies. Other omitted boss fields never fall back to Global.", 85));
+            EnableLevelSystem = config("2 - Levels", "Enable Level System", LevelSystemMode.Full, Ordered("Off disables CreatureManager level rules, level damage/health scaling, distance scaling, modifiers, and level visuals. ExceptLevel keeps the levels assigned by the game or other mods, skips CreatureManager level rolls and Karma/Enforcer level bonuses, and applies stat, distance, scale, and modifier rules using the actual level. Full also enables CreatureManager level assignment. In a new default levels.yml, change Global.damagePerLevel from 0.25 to 0.5 to match vanilla per-star damage growth for regular creatures; ExceptLevel already preserves the default vanilla health growth and prefab level sizes. Other matching rules and modifiers still apply. With no matching scalePerLevel rule, ExceptLevel uses the prefab's original level sizes; explicit 0 disables star growth. Karma tracking, Enforcer summons, and loot settings remain independent. Explicit spawn-command levels remain available. Changing this setting does not reroll existing creatures.", 100, new AcceptableLevelSystemModes()));
+            BiomeLevelPreset = config("2 - Levels", "Biome Level Preset", LevelBiomePreset.Easy, Ordered("Built-in level weights for vanilla biome names when Enable Level System is Full. Explicit biome, group, and prefab level rules in levels.yml override the preset; Global remains the fallback for non-boss creatures and Enforcers.", 90));
+            BossesFollowBiomeLevelPreset = config("2 - Levels", "Bosses Follow Biome Level Preset", Toggle.On, Ordered("If on and Enable Level System is Full, regular bosses can use the built-in Biome Level Preset as a level fallback when no Boss, group, or prefab level rule applies. Other omitted boss fields never fall back to Global.", 85));
             ApplyLevelScaleToSaddleableCreatures = config("2 - Levels", "Apply Level Scale To Saddle-able Creatures", Toggle.On, Ordered("If off, levels.yml scalePerLevel is not applied to creatures that can use a saddle.", 70));
             EnableGlobalModifiers = config("2 - Levels", "Global Modifiers", ModifierLimit.Max4, ModifierLimitDescription("Controls non-boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 69));
             EnableBossModifiers = config("2 - Levels", "Boss Modifiers", ModifierLimit.Max4, ModifierLimitDescription("Controls regular boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 68));
@@ -463,6 +466,31 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     internal static ConfigEntry<CharacterLootSystem> LootSystem = null!;
     internal static ConfigEntry<int> AdditionalLootChancePerStarCreature = null!;
     internal static ConfigEntry<int> AdditionalLootChancePerStarBoss = null!;
+
+    private sealed class AcceptableLevelSystemModes : AcceptableValueBase
+    {
+        // Expose only the current choices in ConfigurationManager, as for modifier limits.
+        [UsedImplicitly] public LevelSystemMode[] AcceptableValues { get; } = new[]
+            { LevelSystemMode.Off, LevelSystemMode.ExceptLevel, LevelSystemMode.Full };
+
+        internal AcceptableLevelSystemModes() : base(typeof(LevelSystemMode)) { }
+
+        public override object Clamp(object value)
+        {
+            return value is LevelSystemMode.Vanilla ? LevelSystemMode.ExceptLevel :
+                IsValid(value) ? value : LevelSystemMode.Full;
+        }
+
+        public override bool IsValid(object value)
+        {
+            return value is LevelSystemMode.Off or LevelSystemMode.ExceptLevel or LevelSystemMode.Full;
+        }
+
+        public override string ToDescriptionString()
+        {
+            return "# Acceptable values: Off, ExceptLevel, Full\n# Legacy On is read as Full; Vanilla is read as ExceptLevel";
+        }
+    }
 
     private static ConfigDescription ModifierLimitDescription(string description, int order)
     {

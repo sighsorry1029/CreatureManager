@@ -38,11 +38,15 @@ internal static class LevelModeContracts
         FieldInfo field = entry.GetField("EnableLevelSystem", Static)!;
         object? saved = field.GetValue(null);
         Type modeType = field.FieldType.GetGenericArguments()[0];
-        var config = new ConfigFile(Path.Combine(Path.GetTempPath(), "CreatureManager-level-mode-" + Guid.NewGuid() + ".cfg"), false) { SaveOnConfigSet = false };
+        string configPath = Path.Combine(Path.GetTempPath(), "CreatureManager-level-mode-" + Guid.NewGuid() + ".cfg");
+        File.WriteAllText(configPath, "[2 - Levels]\nEnable Level System = Vanilla\n");
+        var config = new ConfigFile(configPath, false) { SaveOnConfigSet = false };
+        var acceptable = (AcceptableValueBase)Activator.CreateInstance(
+            entry.GetNestedType("AcceptableLevelSystemModes", BindingFlags.NonPublic)!, true)!;
         MethodInfo bind = typeof(ConfigFile).GetMethods().Single(m => m.Name == "Bind" && m.IsGenericMethodDefinition &&
             m.GetParameters().Length == 4 && m.GetParameters()[3].ParameterType == typeof(ConfigDescription));
         var mode = (ConfigEntryBase)bind.MakeGenericMethod(modeType).Invoke(config,
-            new[] { "2 - Levels", "Enable Level System", Enum.Parse(modeType, "On"), (object)new ConfigDescription("") })!;
+            new[] { "2 - Levels", "Enable Level System", Enum.Parse(modeType, "Full"), (object)new ConfigDescription("", acceptable) })!;
         Rule = Activator.CreateInstance(plugin.GetType("CreatureManager.LevelDefinition", true)!)!;
         foreach (var pair in new Dictionary<string, float> { ["Health"] = 2f, ["HealthPerLevel"] = 0.5f,
                      ["Damage"] = 3f, ["DamagePerLevel"] = 0.25f, ["ScalePerLevel"] = 0.1f })
@@ -50,24 +54,49 @@ internal static class LevelModeContracts
         field.SetValue(null, mode);
         try
         {
-            foreach (string value in new[] { "Off", "On", "Vanilla" })
+            Require(mode.GetSerializedValue() == "ExceptLevel", "saved Vanilla loads without falling back to Full");
+            Require(mode.DefaultValue.ToString() == "Full", "default remains full application");
+            string[] choices = ((IEnumerable)acceptable.GetType().GetProperty("AcceptableValues")!.GetValue(acceptable)!)
+                .Cast<object>().Select(v => v.ToString()!).ToArray();
+            Require(choices.SequenceEqual(new[] { "Off", "ExceptLevel", "Full" }), "three canonical UI choices");
+            foreach (string value in choices)
             {
                 mode.SetSerializedValue(value);
                 Require(mode.GetSerializedValue() == value, "config round trip: " + value);
                 Require((bool)Call("IsLevelSystemEnabled")! == (value != "Off"), "master gate: " + value);
             }
-            Require(Convert.ToInt32(Enum.Parse(modeType, "Off")) == 0 && Convert.ToInt32(Enum.Parse(modeType, "On")) == 1, "old enum values retained");
+            Require(Convert.ToInt32(Enum.Parse(modeType, "Off")) == 0 && Convert.ToInt32(Enum.Parse(modeType, "On")) == 1 &&
+                    Convert.ToInt32(Enum.Parse(modeType, "Vanilla")) == 2, "old enum values retained");
+            foreach (var item in new[] { ("0", "Off"), ("1", "Full"), ("2", "ExceptLevel"), ("On", "Full"),
+                         ("on", "Full"), ("full", "Full"), ("3", "ExceptLevel"), ("4", "Full"),
+                         ("Vanilla", "ExceptLevel"), ("vanilla", "ExceptLevel"), ("exceptlevel", "ExceptLevel") })
+            {
+                mode.SetSerializedValue(item.Item1);
+                Require(mode.GetSerializedValue() == item.Item2, "legacy/case-insensitive config: " + item.Item1);
+            }
+            mode.BoxedValue = Enum.Parse(modeType, "Vanilla");
+            Require(mode.GetSerializedValue() == "ExceptLevel", "boxed legacy value normalizes before runtime use");
+            config.Save();
+            Require(File.ReadAllText(configPath).Contains("Enable Level System = ExceptLevel"), "save uses canonical mode name");
+            mode.SetSerializedValue("Off");
+            config.Reload();
+            Require(mode.GetSerializedValue() == "ExceptLevel", "saved mode reloads without changing behavior");
+            File.WriteAllText(configPath, "[2 - Levels]\nEnable Level System = 2\n");
+            config.Reload();
+            Require(mode.GetSerializedValue() == "ExceptLevel", "live numeric legacy reload normalizes");
 
-            mode.SetSerializedValue("On");
+            mode.BoxedValue = Enum.Parse(modeType, "On");
+            Require(mode.GetSerializedValue() == "Full", "boxed legacy On normalizes before runtime use");
+            mode.SetSerializedValue("Full");
             Character character = NewCharacter(1);
             Require((bool)Call("TryApplyLevelState", character)! && GetLevel(character) == 6 && LevelWrites == 1 &&
-                    KarmaQueries == 1 && WeightQueries == 1, "On still assigns weighted level plus Karma bonus");
+                    KarmaQueries == 1 && WeightQueries == 1, "Full still assigns weighted level plus Karma bonus");
             mode.SetSerializedValue("Off");
             character = NewCharacter(3);
             Require(!(bool)Call("TryApplyLevelState", character)! && GetLevel(character) == 3 && MaxHealth == 300f &&
                     !CurrentZdo.GetBool(Key("ProcessingCompleteKey")), "Off does not initialize stats or levels");
 
-            mode.SetSerializedValue("Vanilla");
+            mode.SetSerializedValue("ExceptLevel");
             foreach (int initialLevel in new[] { 1, 3 })
             {
                 character = NewCharacter(initialLevel);
@@ -77,9 +106,9 @@ internal static class LevelModeContracts
                 Owner = false;
                 Require(!(bool)Call("TryApplyLevelState", character)! && !CurrentZdo.GetBool(Key("AppliedKey")), "non-owner cannot initialize");
                 Owner = true;
-                Require((bool)Call("TryApplyLevelState", character)!, "Vanilla initializes owner stats");
+                Require((bool)Call("TryApplyLevelState", character)!, "ExceptLevel initializes owner stats");
                 CheckStats(character, initialLevel);
-                Require(LevelWrites == 0 && KarmaQueries == 0 && WeightQueries == 0, "Vanilla never requests a CM level or Karma bonus");
+                Require(LevelWrites == 0 && KarmaQueries == 0 && WeightQueries == 0, "ExceptLevel never requests a CM level or Karma bonus");
                 object?[] scale = { character, 0f };
                 Require((bool)Call("TrySelectScalePerLevel", scale)! && (float)scale[1]! == 0.1f, "scale rule remains eligible");
                 Require((bool)Call("AllowsModifierEffects", character)! && (bool)Call("ShouldRollModifiers", character)!, "natural spawn modifiers remain eligible");
@@ -96,29 +125,29 @@ internal static class LevelModeContracts
                     CheckStats(character, externalLevel);
                 }
                 Require(LevelWrites == 0, "external levels adopted without recursively overriding SetLevel");
-                mode.SetSerializedValue("On");
+                mode.SetSerializedValue("Full");
                 Require((bool)Call("TryApplyLevelState", character)!, "completed creature restores across mode change");
                 CheckStats(character, 1);
                 Require(LevelWrites == 0 && KarmaQueries == 0 && WeightQueries == 0, "mode change does not reroll saved creature");
-                mode.SetSerializedValue("Vanilla");
+                mode.SetSerializedValue("ExceptLevel");
             }
 
             // Keep lifecycle restrictions independent of the choice of level source.
             character = NewCharacter(1);
             for (Source = 0; Source <= 7; Source++)
             {
-                mode.SetSerializedValue("On");
+                mode.SetSerializedValue("Full");
                 object original = Call("GetSpawnPolicy", character)!;
-                mode.SetSerializedValue("Vanilla");
-                object vanilla = Call("GetSpawnPolicy", character)!;
-                Require(original.GetType().GetFields(Instance).All(f => Equals(f.GetValue(original), f.GetValue(vanilla))), "unchanged spawn policy: " + Source);
+                mode.SetSerializedValue("ExceptLevel");
+                object keptLevel = Call("GetSpawnPolicy", character)!;
+                Require(original.GetType().GetFields(Instance).All(f => Equals(f.GetValue(original), f.GetValue(keptLevel))), "unchanged spawn policy: " + Source);
                 Require(!(bool)Call("ShouldRollLevel", character)!, "no automatic level roll for source: " + Source);
             }
             Source = 0;
             CheckScaleModes(plugin, mode, character);
             CheckDefaultTemplate(plugin);
             typeof(ZDO).GetField("m_prefab", Instance)!.SetValue(CurrentZdo, "FrozenKing_p2".GetStableHashCode());
-            Require(!(bool)Call("TryApplyLevelState", character)! && !(bool)Call("AllowsModifierEffects", character)!, "FrozenKing phase two stays protected in Vanilla");
+            Require(!(bool)Call("TryApplyLevelState", character)! && !(bool)Call("AllowsModifierEffects", character)!, "FrozenKing phase two stays protected in ExceptLevel");
         }
         finally
         {
@@ -126,8 +155,9 @@ internal static class LevelModeContracts
             Source = 0;
             Owner = Ready = true;
             Dungeon = Saddle = false;
+            File.Delete(configPath);
         }
-        System.Console.WriteLine("Level mode contracts passed: config On/Off/Vanilla, weighted On, disabled Off, vanilla levels 1/3, sync/owner gates, health/damage/distance/scale/modifier eligibility, later level increases/decreases, missing-health preservation, no reroll, spawn policies, FrozenKing guard, native prefab sizes vs explicit overrides, default YAML. Rule inputs and native/world boundaries substituted.");
+        System.Console.WriteLine("Level mode contracts passed: three config choices, legacy On/Vanilla/numeric/boxed values, canonical save/reload, weighted Full, disabled Off, ExceptLevel levels 1/3, sync/owner gates, health/damage/distance/scale/modifier eligibility, later level increases/decreases, missing-health preservation, no reroll, spawn policies, FrozenKing guard, native prefab sizes vs explicit overrides, default YAML. Rule inputs and native/world boundaries substituted.");
     }
 
     private static void CheckScaleModes(Assembly plugin, ConfigEntryBase mode, Character character)
@@ -143,7 +173,7 @@ internal static class LevelModeContracts
         stateType.GetProperty("OriginalLocalScale", Instance)!.SetValue(state, original);
         PropertyInfo scaleRule = Rule.GetType().GetProperty("ScalePerLevel")!;
         scaleRule.SetValue(Rule, null);
-        mode.SetSerializedValue("Vanilla");
+        mode.SetSerializedValue("ExceptLevel");
 
         foreach (bool restricted in new[] { false, true })
         {
@@ -180,13 +210,13 @@ internal static class LevelModeContracts
         Require(LocalScale == original, "explicit scale retains saddle restriction");
         Saddle = false;
 
-        mode.SetSerializedValue("On");
+        mode.SetSerializedValue("Full");
         Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Require(LocalScale == original * 1.2f, "On retains explicit size formula");
+        Require(LocalScale == original * 1.2f, "Full retains explicit size formula");
         scaleRule.SetValue(Rule, null);
         Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Require(LocalScale == original, "On retains no-growth meaning for omitted scale");
-        mode.SetSerializedValue("Vanilla");
+        Require(LocalScale == original, "Full retains no-growth meaning for omitted scale");
+        mode.SetSerializedValue("ExceptLevel");
         LocalScale = original;
         ScaleWrites = 0;
         effects.m_levelSetups.Clear();

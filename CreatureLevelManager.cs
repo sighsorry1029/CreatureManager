@@ -122,9 +122,9 @@ internal static class CreatureLevelManager
         return CreatureManagerPlugin.EnableLevelSystem?.Value != CreatureManagerPlugin.LevelSystemMode.Off;
     }
 
-    private static bool UsesVanillaLevels()
+    private static bool KeepsAssignedLevels()
     {
-        return CreatureManagerPlugin.EnableLevelSystem?.Value == CreatureManagerPlugin.LevelSystemMode.Vanilla;
+        return CreatureManagerPlugin.EnableLevelSystem?.Value == CreatureManagerPlugin.LevelSystemMode.ExceptLevel;
     }
 
     // Phase two's health is an encounter counter: seven Aspect explosions exhaust it.
@@ -1251,8 +1251,8 @@ internal static class CreatureLevelManager
 
     private static bool TryAdoptPreexistingExternalLevel(Character character, ZDO zdo)
     {
-        bool vanillaLevels = UsesVanillaLevels();
-        if (!vanillaLevels && (CreatureManagerSpawnLifecycle.IsManagedSpawn(character) || ShouldRollLevel(character)))
+        bool keepAssignedLevels = KeepsAssignedLevels();
+        if (!keepAssignedLevels && (CreatureManagerSpawnLifecycle.IsManagedSpawn(character) || ShouldRollLevel(character)))
         {
             return false;
         }
@@ -1260,7 +1260,7 @@ internal static class CreatureLevelManager
         int currentLevel = Math.Max(1, character.GetLevel());
         // Track even a natural level-one spawn so later game/external SetLevel calls
         // can refresh its level-dependent stats without assigning a CM level.
-        if (!vanillaLevels && currentLevel <= 1)
+        if (!keepAssignedLevels && currentLevel <= 1)
         {
             return false;
         }
@@ -1410,7 +1410,7 @@ internal static class CreatureLevelManager
 
     private static void ApplyLevelEffectsScale(LevelEffects levelEffects, CreatureLevelEffectsState state, Character character, int level)
     {
-        if (UsesVanillaLevels() && !TrySelectScalePerLevel(character, out _))
+        if (KeepsAssignedLevels() && !TrySelectScalePerLevel(character, out _))
         {
             // Match LevelEffects: prefab sizes are absolute, not multipliers of the
             // captured transform. Level one and unsupported levels leave size alone.
@@ -1430,7 +1430,7 @@ internal static class CreatureLevelManager
 
     private static void ApplyCharacterScaleFallback(Character character, int level)
     {
-        if (UsesVanillaLevels() && !TrySelectScalePerLevel(character, out _))
+        if (KeepsAssignedLevels() && !TrySelectScalePerLevel(character, out _))
         {
             // A prefab without LevelEffects has no vanilla star-size adjustment.
             return;
@@ -1595,7 +1595,7 @@ internal static class CreatureLevelManager
 
     private static bool ShouldRollLevel(Character character)
     {
-        return !UsesVanillaLevels() && GetSpawnPolicy(character).RollLevel;
+        return !KeepsAssignedLevels() && GetSpawnPolicy(character).RollLevel;
     }
 
     private static bool ShouldPreserveExistingRolls(Character character)
