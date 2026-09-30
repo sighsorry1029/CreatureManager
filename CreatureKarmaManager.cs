@@ -2662,6 +2662,7 @@ DeepNorth:
         RuntimeEnforcerSettings[id] = settings.Clone();
         RuntimeEnforcerLoot[id] = loot?.Select(CloneEnforcerLoot).ToList() ?? new List<EnforcerLootDefinition>();
         TryStoreRuntimeEnforcerZdo(character, settings);
+        CreatureSpawnBlocker.ObserveCharacter(character);
     }
 
     private static void TryStoreRuntimeSummonedZdo(Character character)

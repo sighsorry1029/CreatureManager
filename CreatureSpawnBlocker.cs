@@ -8,7 +8,8 @@ using UnityEngine;
 namespace CreatureManager;
 
 // Spawn owners query their received world state, independently of the server's Karma ledger.
-// Cache only inside a synchronous list/group attempt. No timer, RPC, or persisted blocker state.
+// Cache decisions only inside a synchronous list/group attempt. Loaded candidates are hints,
+// never proof of absence: external mods and late ZDO data can change an ordinary creature.
 internal static class CreatureSpawnBlocker
 {
     internal sealed class QueryScope
@@ -23,6 +24,7 @@ internal static class CreatureSpawnBlocker
     private static readonly Stack<QueryScope> QueryPool = new();
     private static readonly List<ZDO> NearbyZdos = new();
     private static readonly Dictionary<int, bool> NearbyBossPrefabs = new();
+    private static readonly HashSet<Character> LoadedBlockers = new();
 
     private static bool BlockBoss => CreatureManagerPlugin.BlockNearbySpawnsWhileBossActive?.Value == CreatureManagerPlugin.Toggle.On;
     private static bool BlockEnforcer => CreatureManagerPlugin.BlockNearbySpawnsWhileEnforcerActive?.Value == CreatureManagerPlugin.Toggle.On;
@@ -51,6 +53,30 @@ internal static class CreatureSpawnBlocker
     {
         // Another spawn/hook can create a boss during this very list/group attempt.
         for (QueryScope? scope = CurrentQuery; scope != null; scope = scope.Previous) scope.Results.Clear();
+    }
+
+    internal static void ObserveCharacter(Character character)
+    {
+        if ((!BlockBoss && !BlockEnforcer) || !IsActiveBlocker(character, true, true)) return;
+        LoadedBlockers.Add(character);
+        InvalidateQueries();
+    }
+
+    internal static void ForgetCharacter(Character character)
+    {
+        if (LoadedBlockers.Remove(character)) InvalidateQueries();
+    }
+
+    internal static void ResetRuntimeState()
+    {
+        LoadedBlockers.Clear();
+        InvalidateQueries();
+    }
+
+    private static bool IsActiveBlocker(Character character, bool bosses, bool enforcers)
+    {
+        if (character == null || character.IsPlayer() || character.IsDead()) return false;
+        return CreatureKarmaManager.IsEnforcer(character) ? enforcers : bosses && character.IsBoss();
     }
 
     internal static bool AllowSystemSpawn(GameObject prefab, Vector3 position)
@@ -95,11 +121,19 @@ internal static class CreatureSpawnBlocker
 
     private static bool FindBlocker(Vector2s zone, bool interior, SimulationDistance distance, bool bosses, bool enforcers)
     {
+        // Re-read live category, health and position; do not cache a positive decision.
+        foreach (Character character in LoadedBlockers)
+        {
+            if (IsActiveBlocker(character, bosses, enforcers) &&
+                InQueryArea(character.transform.position, zone, interior, distance)) return true;
+        }
+
+        // Preserve recovery for late Enforcer flags, direct m_boss changes, characters
+        // without a ZDO, and transforms not yet reflected in their ZDO sector.
         foreach (Character character in Character.GetAllCharacters())
         {
-            if (character == null || character.IsPlayer() || character.IsDead()) continue;
-            bool enforcer = CreatureKarmaManager.IsEnforcer(character);
-            if (!(enforcer ? enforcers : bosses && character.IsBoss())) continue;
+            if (!IsActiveBlocker(character, bosses, enforcers)) continue;
+            if (LoadedBlockers.Add(character)) InvalidateQueries();
             if (InQueryArea(character.transform.position, zone, interior, distance)) return true;
         }
 

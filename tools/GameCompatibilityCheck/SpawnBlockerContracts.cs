@@ -27,6 +27,9 @@ internal static class SpawnBlockerContracts
     private static readonly ZoneSystem Zone = New<ZoneSystem>();
     private static readonly List<ZDO> Zdos = new();
     private static readonly List<Character> Loaded = new();
+    // Unity object equality/hash initialization needs the native engine. Keep the
+    // production HashSet operations, substituting only object identity in this fixture.
+    private static readonly HashSet<Character> Candidates = new(ReferenceComparer.Instance);
     private static readonly Dictionary<int, GameObject> Prefabs = new();
     private static readonly Dictionary<UnityEngine.Object, Character> Characters = new(ReferenceComparer.Instance);
     private static readonly Dictionary<Character, ZDO> CharacterZdos = new(ReferenceComparer.Instance);
@@ -37,7 +40,7 @@ internal static class SpawnBlockerContracts
     private static readonly Dictionary<string, ConfigEntryBase> Settings = new();
     private static SimulationDistance Distance;
     private static bool QueryThrows;
-    private static int Queries, Errors, PrefabQueries, ThrowPrefabHash;
+    private static int Queries, Errors, PrefabQueries, ThrowPrefabHash, LoadedScans, Classifications;
     private static uint NextId = 85000;
     private static GameObject Ordinary = null!, BossPrefab = null!, Item = null!;
 
@@ -67,6 +70,7 @@ internal static class SpawnBlockerContracts
             CheckArea();
             CheckScopes(plugin);
             CheckPrefabQueryWork();
+            CheckLoadedCandidateWork();
             CheckHooks(plugin);
             CheckGroupTranspilers(plugin);
         }
@@ -85,10 +89,11 @@ internal static class SpawnBlockerContracts
         foreach (bool enforcerOption in new[] { false, true })
         foreach (bool enforcer in new[] { false, true })
         foreach (bool boss in new[] { false, true })
+        foreach (bool loaded in new[] { false, true })
         {
             Reset(); SetOptions(bossOption, enforcerOption);
             Settings["KarmaMode"].SetSerializedValue("Off"); Settings["EnableLevelSystem"].SetSerializedValue("Off");
-            Add(boss, enforcer, Vector3.zero);
+            Add(boss, enforcer, Vector3.zero, loaded);
             Require(Allowed(Vector3.zero) == !(enforcer ? enforcerOption : boss && bossOption), $"independent category/options with Karma+levels Off: options={bossOption}/{enforcerOption}, creature={boss}/{enforcer}, queries={Queries}");
             if (!bossOption && !enforcerOption) Require(Queries == 0, "both Off avoid world queries");
         }
@@ -205,6 +210,72 @@ internal static class SpawnBlockerContracts
         System.Console.WriteLine("Spawn query work: 1,000 unloaded ordinary ZDOs of one prefab require one prefab classification per search; no result survives the search.");
     }
 
+    private static void CheckLoadedCandidateWork()
+    {
+        Reset();
+        for (int i = 0; i < 1000; i++) Add(false, false, Vector3.zero, true);
+        Add(true, false, Vector3.zero, true);
+        Classifications = LoadedScans = 0;
+        Require(!Allowed(Vector3.zero) && LoadedScans == 0 && Queries == 0 && Classifications == 1,
+            "registered boss bypasses 1,000 ordinary loaded creatures and the ZDO query");
+        Character boss = Loaded.Last();
+        Position(boss, new Vector3(6400, 0, 0));
+        Require(Allowed(Vector3.zero), "candidate movement rechecks live position despite stale nearby ZDO");
+        Position(boss, new Vector3(0, 4000, 0));
+        Require(Allowed(Vector3.zero), "candidate in another realm does not block outdoors");
+        Position(boss, Vector3.zero); Dead.Add(boss);
+        Require(Allowed(Vector3.zero), "dead candidate cannot leave a stale positive result");
+        Dead.Remove(boss); int before = LoadedScans;
+        Require(!Allowed(Vector3.zero) && LoadedScans == before, "revived candidate is checked live");
+
+        Reset(); ZDO enforcer = Add(false, false, Vector3.zero, true);
+        SetOptions(false, true);
+        SetBool(enforcer, "CreatureManager_KarmaEnforcer".GetStableHashCode(), true);
+        Require(!Allowed(Vector3.zero) && LoadedScans == 1 && Queries == 0, "late received Enforcer flag is recovered");
+        Require(!Allowed(Vector3.zero) && LoadedScans == 1, "recovered Enforcer is a candidate on the next attempt");
+        SetBool(enforcer, "CreatureManager_KarmaEnforcer".GetStableHashCode(), false);
+        Require(Allowed(Vector3.zero), "removed Enforcer flag is not cached as positive");
+
+        Reset(); Add(true, false, Vector3.zero, true);
+        SetOptions(true, false);
+        SetBool(CharacterZdos[Loaded[0]], "CreatureManager_KarmaEnforcer".GetStableHashCode(), true);
+        Require(Allowed(Vector3.zero), "boss candidate reclassified as Enforcer respects independent options");
+
+        Reset(); ZDO changed = Add(false, false, new Vector3(6400, 0, 0), true);
+        Character lateBoss = Loaded[0]; SetBoss(lateBoss, true); Position(lateBoss, Vector3.zero);
+        SetBool(changed, ZDOVars.s_dead, true);
+        Require(!Allowed(Vector3.zero) && LoadedScans == 1 && Queries == 0,
+            "external live boss/position changes take precedence over stale distant/dead ZDO");
+        Call("ResetRuntimeState"); CharacterZdos.Remove(lateBoss); Instances.Remove(changed); Zdos.Clear();
+        before = LoadedScans;
+        Require(!Allowed(Vector3.zero) && LoadedScans == before + 1 && Queries == 0, "boss without ZDO is still discovered");
+        Call("ForgetCharacter", lateBoss); Loaded.Clear();
+        Require(Allowed(Vector3.zero), "destroyed candidate does not survive its lifetime");
+
+        Reset(); SetOptions(false, false); Add(true, false, Vector3.zero, true);
+        Require(Allowed(Vector3.zero) && LoadedScans == 0 && Queries == 0, "both Off skip candidate/world queries");
+        SetOptions(true, true);
+        Require(!Allowed(Vector3.zero) && LoadedScans == 1, "live enable discovers creatures loaded while disabled");
+        Require(!Allowed(Vector3.zero) && LoadedScans == 1, "live enable recovery populates candidates");
+
+        Reset(); ZDO unloaded = Add(true, false, Vector3.zero, true);
+        Character departing = Loaded[0]; Call("ForgetCharacter", departing); Loaded.Clear(); Instances.Remove(unloaded);
+        Require(!Allowed(Vector3.zero) && Queries == 1, "unloading removes the hint but retains received ZDO blocking");
+        Zdos.Clear(); Require(Allowed(Vector3.zero), "removed unloaded ZDO releases the block");
+
+        Reset(); object scope = Call("BeginQuery", false)!;
+        Require(Allowed(Vector3.zero), "empty scope initially allows");
+        Add(true, false, Vector3.zero, true);
+        Require(!Allowed(Vector3.zero), "newly observed boss invalidates negative scope decision");
+        Call("ForgetCharacter", Loaded[0]); Loaded.Clear(); Zdos.Clear(); Instances.Clear();
+        Require(Allowed(Vector3.zero), "destroy notification invalidates positive scope decision");
+        Call("EndQuery", scope);
+        Add(true, false, Vector3.zero, true);
+        Call("ResetRuntimeState"); Loaded.Clear(); Zdos.Clear(); Instances.Clear();
+        Require(Allowed(Vector3.zero), "world reset drops old loaded references");
+        System.Console.WriteLine("Loaded blocker work: registered boss with 1,000 ordinary creatures requires one live classification, zero full-list/sector queries. Miss recovery covers late flags, direct boss changes, stale sectors, no ZDO, live options, destruction and world reset. Counts only; no frame-time measurement.");
+    }
+
     private static void CheckHooks(Assembly plugin)
     {
         Reset(); Add(true, false, Vector3.zero);
@@ -236,6 +307,23 @@ internal static class SpawnBlockerContracts
         int creation = spawn.FindIndex(i => i.operand is MethodInfo m && m.Name == "Instantiate");
         int write = spawn.FindIndex(i => i.operand is MethodInfo m && m.Name == "SetConnection");
         Require(creation >= 0 && write > creation, "blocked original cannot consume one-shot state before instantiate");
+
+        foreach (var hook in new[]
+        {
+            ("CreatureManagerCharacterAwakePatch", "Postfix", "ObserveCharacter"),
+            ("CreatureManagerCharacterLifecycle", "ApplyLevelAndModifiers", "ObserveCharacter"),
+            ("CreatureKarmaManager", "MarkRuntimeEnforcer", "ObserveCharacter"),
+            ("CreatureManagerCharacterOnDestroyPatch", "Prefix", "ForgetCharacter"),
+            ("CreatureManagerZNetSceneOnDestroyPatch", "Prefix", "ResetRuntimeState"),
+            ("CreatureManagerPlugin", "CleanupRuntime", "ResetRuntimeState")
+        })
+        {
+            Type owner = plugin.GetType("CreatureManager." + hook.Item1, true)!;
+            MethodInfo target = Blocker.GetMethod(hook.Item3, Static)!;
+            MethodInfo source = owner.GetMethod(hook.Item2, Static | Instance)!;
+            Require(source != null && PatchProcessor.GetOriginalInstructions(source).Any(i => i.operand is MethodInfo m && m == target),
+                "candidate lifecycle wiring: " + hook.Item1 + "." + hook.Item2);
+        }
     }
 
     private static void CheckGroupTranspilers(Assembly plugin)
@@ -276,8 +364,9 @@ internal static class SpawnBlockerContracts
     }
     private static void Reset()
     {
+        Call("ResetRuntimeState");
         Zdos.Clear(); Loaded.Clear(); Instances.Clear(); CharacterZdos.Clear(); Dead.Clear();
-        Queries = Errors = PrefabQueries = ThrowPrefabHash = 0; QueryThrows = false; Distance = SimulationDistance.OriginalDistance;
+        Queries = Errors = PrefabQueries = ThrowPrefabHash = LoadedScans = Classifications = 0; QueryThrows = false; Distance = SimulationDistance.OriginalDistance;
         if (Settings.Count > 0) SetOptions(true, true);
     }
     private static GameObject Prefab(string name, bool boss)
@@ -298,6 +387,7 @@ internal static class SpawnBlockerContracts
             var character = New<Character>(); SetBoss(character, boss); Position(character, position);
             Loaded.Add(character); CharacterZdos[character] = zdo;
             var view = New<ZNetView>(); Instances[zdo] = view; Characters[view] = character;
+            Call("ObserveCharacter", character);
         }
         return zdo;
     }
@@ -320,6 +410,8 @@ internal static class SpawnBlockerContracts
         {
             if (instruction.Operand is FieldReference field && field.FullName == "ZoneSystem ZoneSystem::instance")
             { instruction.Operand = copy.Module.ImportReference(typeof(SpawnBlockerContracts).GetField(nameof(Zone), Static)!); continue; }
+            if (instruction.Operand is FieldReference candidates && candidates.DeclaringType.FullName == Blocker.FullName && candidates.Name == "LoadedBlockers")
+            { instruction.Operand = copy.Module.ImportReference(typeof(SpawnBlockerContracts).GetField(nameof(Candidates), Static)!); continue; }
             if (instruction.Operand is not MethodReference method) continue;
             string type = method.DeclaringType.FullName;
             string? boundary = type == "UnityEngine.Object" ? method.Name switch { "op_Equality" => nameof(Equal), "op_Inequality" => nameof(NotEqual), _ => null }
@@ -351,10 +443,14 @@ internal static class SpawnBlockerContracts
     private static SimulationDistance GetDistance(ZNet net) => Distance;
     private static ZDOMan GetManager() => Manager;
     private static ZNetScene GetScene() => Scene;
-    private static List<Character> GetLoaded() => Loaded;
-    private static bool IsDead(Character c) => Dead.Contains(c) || CharacterZdos[c].GetFloat(ZDOVars.s_health) <= 0;
+    private static List<Character> GetLoaded() { LoadedScans++; return Loaded; }
+    private static bool IsDead(Character c) => Dead.Contains(c) || CharacterZdos.TryGetValue(c, out ZDO zdo) && zdo.GetFloat(ZDOVars.s_health) <= 0;
     private static bool IsPlayer(Character c) => false;
-    private static bool IsEnforcer(Character c) => CharacterZdos[c].GetBool("CreatureManager_KarmaEnforcer");
+    private static bool IsEnforcer(Character c)
+    {
+        Classifications++;
+        return CharacterZdos.TryGetValue(c, out ZDO zdo) && zdo.GetBool("CreatureManager_KarmaEnforcer");
+    }
     private static GameObject? GetPrefab(ZNetScene scene, int hash)
     {
         PrefabQueries++;

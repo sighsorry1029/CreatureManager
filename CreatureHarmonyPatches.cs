@@ -545,6 +545,7 @@ internal static class CreatureManagerCharacterLifecycle
     {
         CreatureKarmaManager.ObservePotentialBlocker(character);
         CreatureLevelManager.TryApplyLevel(character);
+        CreatureSpawnBlocker.ObserveCharacter(character);
     }
 }
 
@@ -682,6 +683,7 @@ internal static class CreatureManagerCharacterAwakePatch
         CreatureModifierManager.RegisterCharacterRpcs(__instance);
         CreatureModifierManager.RefreshStoredReapingScale(__instance);
         CreatureManagerSpawnLifecycle.RecordAwake(__instance);
+        CreatureSpawnBlocker.ObserveCharacter(__instance);
     }
 }
 
@@ -1036,6 +1038,7 @@ internal static class CreatureManagerCharacterOnDestroyPatch
 {
     private static void Prefix(Character __instance)
     {
+        CreatureSpawnBlocker.ForgetCharacter(__instance);
         CreatureManagerSpawnLifecycle.ForgetCharacter(__instance);
         CreatureLevelManager.ForgetCharacter(__instance);
         CreatureKarmaManager.ForgetCharacter(__instance);
@@ -1052,6 +1055,7 @@ internal static class CreatureManagerZNetSceneOnDestroyPatch
         CreatureAppearanceRuntime.Reset();
         CreatureEpicMmoHud.Reset();
         CreatureManagerSpawnLifecycle.ResetRuntimeState();
+        CreatureSpawnBlocker.ResetRuntimeState();
         CreatureKarmaManager.ResetRuntimeState();
         CreatureModifierManager.ResetRuntimeState();
         CreatureLevelManager.ResetRuntimeState();

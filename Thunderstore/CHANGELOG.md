@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.4
+
+- Check known loaded bosses and Enforcers first when blocking nearby ordinary spawns, avoiding full creature-list scans when a matching blocker is present. Recheck their current health, category, and position, and clean up tracked candidates on destruction and world/plugin shutdown.
+- Retain full creature and received-ZDO checks when no tracked candidate blocks the spawn, preserving detection of late Enforcer flags, external boss-state changes, and unloaded bosses. Keep the existing simulation-distance-based range, dungeon boundaries, settings, and spawn exclusions.
+- Add regression coverage for candidate tracking, live settings, death/revival, movement, late state changes, and lifecycle cleanup. Verify reduced query counts in isolated checks; actual gameplay performance has not been measured.
+
 ## 1.2.3
 
 - Rename the level-system choices to `Off`, `ExceptLevel`, and `Full`. `Full` remains the default behavior; `ExceptLevel` keeps levels assigned by the game or other mods while applying configured stat, distance, scale, and modifier rules.
