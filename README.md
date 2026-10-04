@@ -296,6 +296,8 @@ New default `karma.yml` files include three DeepNorth encounters: Barka alone ou
 
 Enforcer behavior can be used together with Karma levels or independently through BepInEx configuration. Current Karma appears near the minimap, and Enforcer events use localized center-screen messages.
 
+DropNSpawn's optional periodic dungeon spawner can consult `CreatureManager.CreatureManagerSpawnApi.CanSpawn(GameObject prefab, Vector3 position)` to honor the existing boss/Enforcer ordinary-spawn blocking settings. Call this API on Unity's main thread immediately before creation using the registered prefab and final world position. It evaluates current settings/state; it does not reserve a spawn or apply Enforcer/Karma summon behavior. Use the updated builds of both mods for this integration.
+
 ## Common Workflows
 
 **Tune an existing creature**

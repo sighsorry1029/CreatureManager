@@ -7,6 +7,14 @@ using UnityEngine;
 
 namespace CreatureManager;
 
+/// <summary>Optional integration for ordinary creature spawners. Call on Unity's main thread
+/// immediately before spawning, with the registered prefab and the final world position.
+/// Uses the live boss/Enforcer settings and the same area policy as native spawners.</summary>
+public static class CreatureManagerSpawnApi
+{
+    public static bool CanSpawn(GameObject prefab, Vector3 position) => CreatureSpawnBlocker.AllowSpawn(prefab, position);
+}
+
 // Spawn owners query their received world state, independently of the server's Karma ledger.
 // Cache decisions only inside a synchronous list/group attempt. Loaded candidates are hints,
 // never proof of absence: external mods and late ZDO data can change an ordinary creature.

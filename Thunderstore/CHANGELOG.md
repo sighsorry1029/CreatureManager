@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.5
+
+- Add the public `CreatureManagerSpawnApi.CanSpawn(GameObject, Vector3)` integration for ordinary creature spawners. DropNSpawn 1.3.18 uses it to honor the existing boss/Enforcer spawn-blocking settings for periodic dungeon encounters.
+- Reuse the current blocker policy, live settings and loaded/remote detection without adding a dependency or changing native spawn exclusions, simulation-distance range or dungeon boundaries. The API does not assign Enforcer identity, Karma summon flags or bonus loot.
+- Document the main-thread/final-position API contract and add regression coverage for both blocker toggles, including when Karma and the level system are Off. Update CM on the server and all clients together; actual cross-mod dungeon gameplay remains an in-game verification step.
+
 ## 1.2.4
 
 - Check known loaded bosses and Enforcers first when blocking nearby ordinary spawns, avoiding full creature-list scans when a matching blocker is present. Recheck their current health, category, and position, and clean up tracked candidates on destruction and world/plugin shutdown.

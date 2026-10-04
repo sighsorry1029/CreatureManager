@@ -95,6 +95,9 @@ internal static class SpawnBlockerContracts
             Settings["KarmaMode"].SetSerializedValue("Off"); Settings["EnableLevelSystem"].SetSerializedValue("Off");
             Add(boss, enforcer, Vector3.zero, loaded);
             Require(Allowed(Vector3.zero) == !(enforcer ? enforcerOption : boss && bossOption), $"independent category/options with Karma+levels Off: options={bossOption}/{enforcerOption}, creature={boss}/{enforcer}, queries={Queries}");
+            MethodInfo api = Blocker.Assembly.GetType("CreatureManager.CreatureManagerSpawnApi", true)!.GetMethod("CanSpawn", BindingFlags.Public | BindingFlags.Static)!;
+            Require((bool)Copy(api).Invoke(null, new object[] { Ordinary, Vector3.zero })! == !(enforcer ? enforcerOption : boss && bossOption),
+                "public spawner API preserves independent live boss/Enforcer options and loaded/remote detection");
             if (!bossOption && !enforcerOption) Require(Queries == 0, "both Off avoid world queries");
         }
         foreach (bool loaded in new[] { false, true })
