@@ -1227,6 +1227,13 @@ internal static class CreatureManagerCharacterSetLevelPatch
     [HarmonyPriority(Priority.Last)]
     private static void Postfix(Character __instance, int level, float __state)
     {
+        // Finish CM-owned assignments once at their caller, after all external postfixes.
+        if (CreatureLevelManager.IsSettingManagedLevel(__instance))
+        {
+            return;
+        }
+
+        level = __instance.GetLevel();
         if (CreatureManagerSpawnLifecycle.IsCommandSpawn(__instance))
         {
             CreatureLevelManager.TryAdoptCommandLevel(__instance, level);

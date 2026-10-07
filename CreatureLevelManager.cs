@@ -33,7 +33,7 @@ internal static class CreatureLevelManager
     private const string EmissionColorProperty = "_EmissionColor";
     private static readonly object Sync = new();
     private static LevelDefinition[] ActiveDefinitions = Array.Empty<LevelDefinition>();
-    private static int ManagedSetLevelDepth;
+    private static readonly HashSet<int> ManagedLevelCharacters = new();
     private static readonly Stack<(string Reason, Character? Source)> ExplicitLevelContexts = new();
     private static Character? CachedRuleSearchCharacter;
     private static LevelRuleScope CachedRuleSearchScope;
@@ -165,7 +165,7 @@ internal static class CreatureLevelManager
     internal static void ResetRuntimeState()
     {
         ExplicitLevelContexts.Clear();
-        ManagedSetLevelDepth = 0;
+        ManagedLevelCharacters.Clear();
         NextKarmaBonusRequestId = 0;
         PendingLevelCharacters.Clear();
         PendingKarmaBonusRequests.Clear();
@@ -1141,7 +1141,8 @@ internal static class CreatureLevelManager
 
     internal static void RestoreConfiguredLevel(Character character, int level)
     {
-        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer() || IsFrozenKingPhaseTwo(character))
+        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer() ||
+            IsFrozenKingPhaseTwo(character) || IsSettingManagedLevel(character))
         {
             return;
         }
@@ -1175,19 +1176,18 @@ internal static class CreatureLevelManager
             return;
         }
 
+        // Another postfix can complete a nested SetLevel before this outer postfix runs.
+        // Its original argument is no longer authoritative in that case.
+        level = Math.Max(1, character.GetLevel());
         if (desiredLevel == level)
         {
             RestoreStoredHealthMultiplier(character, zdo);
             return;
         }
 
-        if (TryAdoptExternalLevelOverride(character, zdo, level))
-        {
-            return;
-        }
-
-        SetManagedLevel(character, desiredLevel);
-        RestoreStoredHealthMultiplier(character, zdo);
+        zdo.Set(DesiredLevelKey, level);
+        zdo.Set(AppliedKey, true);
+        ReapplyLevelDependentRuntimeState(character, zdo);
     }
 
     internal static void BeginExplicitExternalLevelContext(string reason, Character? source = null)
@@ -1205,7 +1205,7 @@ internal static class CreatureLevelManager
 
     internal static bool TryAdoptContextualExternalLevel(Character character, int level)
     {
-        if (ExplicitLevelContexts.Count <= 0 || ManagedSetLevelDepth > 0)
+        if (ExplicitLevelContexts.Count <= 0 || IsSettingManagedLevel(character))
         {
             return false;
         }
@@ -1270,38 +1270,42 @@ internal static class CreatureLevelManager
         return true;
     }
 
-    private static bool TryAdoptExternalLevelOverride(Character character, ZDO zdo, int level)
-    {
-        if (ManagedSetLevelDepth > 0)
-        {
-            return false;
-        }
-
-        int externalLevel = Math.Max(1, level);
-        zdo.Set(DesiredLevelKey, externalLevel);
-        zdo.Set(AppliedKey, true);
-        ReapplyLevelDependentRuntimeState(character, zdo);
-        return true;
-    }
+    internal static bool IsSettingManagedLevel(Character character) =>
+        character != null && ManagedLevelCharacters.Contains(character.GetInstanceID());
 
     private static void SetManagedLevel(Character character, int level)
     {
         float previousMaxHealth = character.GetMaxHealth();
         float previousHealth = character.GetHealth();
         float missingHealth = Mathf.Max(0f, previousMaxHealth - previousHealth);
-        ManagedSetLevelDepth++;
+        int instanceId = character.GetInstanceID();
+        if (!ManagedLevelCharacters.Add(instanceId))
+        {
+            return;
+        }
+
         try
         {
             character.SetLevel(level);
-            float updatedMaxHealth = character.GetMaxHealth();
-            if (previousHealth > 0f && previousMaxHealth > 0f && updatedMaxHealth > 0f)
-            {
-                character.SetHealth(Mathf.Max(1f, updatedMaxHealth - missingHealth));
-            }
         }
         finally
         {
-            ManagedSetLevelDepth--;
+            ManagedLevelCharacters.Remove(instanceId);
+        }
+
+        if (character == null || !TryGetOwnedZdo(character, out ZDO zdo))
+        {
+            return;
+        }
+
+        // External level postfixes (including PoV's extra stars) may change the level.
+        // Accept the completed result without calling SetLevel again or consuming an
+        // external spawn context. Both callers apply stats/visuals after this returns.
+        zdo.Set(DesiredLevelKey, Math.Max(1, character.GetLevel()));
+        float updatedMaxHealth = character.GetMaxHealth();
+        if (previousHealth > 0f && previousMaxHealth > 0f && updatedMaxHealth > 0f && character.GetHealth() > 0f)
+        {
+            character.SetHealth(Mathf.Clamp(updatedMaxHealth - missingHealth, Mathf.Min(1f, updatedMaxHealth), updatedMaxHealth));
         }
     }
 

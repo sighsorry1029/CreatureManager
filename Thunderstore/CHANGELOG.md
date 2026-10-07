@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.6
+
+- Fix recursive level changes with Path of Valheiman's additional-star assignment that can exhaust the stack and hard-crash the game. Complete each CM-owned level assignment using the final level left by other mods, without repeatedly restoring the initial roll.
+- Track active assignments per creature, defer CM's level-postfix updates until the assignment completes, and preserve missing health. Keep existing configuration, saved-state keys, and optional dependencies unchanged; update CM on the server and all clients together.
+- Add regression coverage for nested level changes, both postfix orders, independent creatures, external spawn contexts, and exception cleanup. Include an English crash investigation in the repository; actual modpack and multiplayer gameplay still require verification.
+
 ## 1.2.5
 
 - Add the public `CreatureManagerSpawnApi.CanSpawn(GameObject, Vector3)` integration for ordinary creature spawners. DropNSpawn 1.3.18 uses it to honor the existing boss/Enforcer spawn-blocking settings for periodic dungeon encounters.

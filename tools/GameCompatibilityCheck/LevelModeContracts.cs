@@ -30,10 +30,15 @@ internal static class LevelModeContracts
     private static Vector3 LocalScale;
     private static readonly Transform ScaleTransform = Uninitialized<Transform>();
     private static readonly FieldInfo LevelField = typeof(Character).GetField("m_level", Instance)!;
+    private static MethodInfo LevelPostfix = null!;
+    private static bool ExercisePostfixes, CmPostfixFirst;
+    private static Action<Character, int>? ExternalPostfix;
+    private static int RolledLevel = 4, VisualUpdates, ModifierRequests;
 
     internal static void Run(Assembly plugin)
     {
         Levels = plugin.GetType("CreatureManager.CreatureLevelManager", true)!;
+        LevelPostfix = plugin.GetType("CreatureManager.CreatureManagerCharacterSetLevelPatch", true)!.GetMethod("Postfix", Static)!;
         Type entry = plugin.GetType("CreatureManager.CreatureManagerPlugin", true)!;
         FieldInfo field = entry.GetField("EnableLevelSystem", Static)!;
         object? saved = field.GetValue(null);
@@ -91,6 +96,7 @@ internal static class LevelModeContracts
             Character character = NewCharacter(1);
             Require((bool)Call("TryApplyLevelState", character)! && GetLevel(character) == 6 && LevelWrites == 1 &&
                     KarmaQueries == 1 && WeightQueries == 1, "Full still assigns weighted level plus Karma bonus");
+            CheckReentrantLevels(mode);
             mode.SetSerializedValue("Off");
             character = NewCharacter(3);
             Require(!(bool)Call("TryApplyLevelState", character)! && GetLevel(character) == 3 && MaxHealth == 300f &&
@@ -119,7 +125,7 @@ internal static class LevelModeContracts
                     // Model the game's SetLevel between the existing Harmony prefix/postfix.
                     LevelField.SetValue(character, externalLevel);
                     SetInt(CurrentZdo, "level", externalLevel);
-                    MaxHealth = Health = 100f * externalLevel;
+                    SetMaxHealth(character, 100f * externalLevel);
                     Call("RestoreConfiguredLevel", character, externalLevel);
                     Call("RestoreStoredHealthDeficit", character, deficit);
                     CheckStats(character, externalLevel);
@@ -158,6 +164,111 @@ internal static class LevelModeContracts
             File.Delete(configPath);
         }
         System.Console.WriteLine("Level mode contracts passed: three config choices, legacy On/Vanilla/numeric/boxed values, canonical save/reload, weighted Full, disabled Off, ExceptLevel levels 1/3, sync/owner gates, health/damage/distance/scale/modifier eligibility, later level increases/decreases, missing-health preservation, no reroll, spawn policies, FrozenKing guard, native prefab sizes vs explicit overrides, default YAML. Rule inputs and native/world boundaries substituted.");
+    }
+
+    private static void CheckReentrantLevels(ConfigEntryBase mode)
+    {
+        ExercisePostfixes = true;
+        RolledLevel = 1; // Together with the existing +2 Karma fixture, CM requests level 3.
+        try
+        {
+            foreach (bool cmFirst in new[] { false, true })
+            foreach (int finalLevel in new[] { 5, 2, 3 })
+            {
+                CmPostfixFirst = cmFirst;
+                Character character = NewCharacter(1);
+                VisualUpdates = ModifierRequests = 0;
+                // A foreign postfix deterministically changes CM's request, then stabilizes.
+                // With PoV's stored base/seed, this is the 3 -> 5 leg of the reported cycle.
+                ExternalPostfix = (c, requested) =>
+                {
+                    if (requested == 3 && finalLevel != 3) SetLevel(c, finalLevel);
+                };
+                Call("TryApplyLevel", character);
+                Require(LevelWrites == (finalLevel == 3 ? 1 : 2), "reentrant assignment terminates in either postfix order");
+                CheckStats(character, finalLevel);
+                Require(VisualUpdates == 1 && ModifierRequests == 1, "CM visuals/modifier request wait for completed managed assignment");
+                Require(!(bool)Call("IsSettingManagedLevel", character)!, "managed scope released after success");
+
+                // Later ordinary external changes must also ignore the outer stale argument.
+                ExternalPostfix = null;
+                SetLevel(character, 1);
+                ExternalPostfix = (c, requested) => { if (requested == 3) SetLevel(c, 5); };
+                SetLevel(character, 3);
+                CheckStats(character, 5);
+                ExternalPostfix = null;
+            }
+
+            // B's ordinary change and external spawn context must remain independent of A.
+            Character other = NewCharacter(2);
+            ZDO otherZdo = CurrentZdo;
+            SetBool(otherZdo, Key("AppliedKey"), true);
+            SetInt(otherZdo, Key("DesiredLevelKey"), 2);
+            Character outer = NewCharacter(1);
+            ExternalPostfix = (c, requested) =>
+            {
+                if (!ReferenceEquals(c, outer)) return;
+                ZDO outerZdo = CurrentZdo;
+                float outerMax = MaxHealth, outerHealth = Health;
+                CurrentZdo = otherZdo;
+                MaxHealth = 200f; Health = 190f;
+                Call("BeginExplicitExternalLevelContext", "other creature callback", null);
+                try { SetLevel(other, 4); }
+                finally
+                {
+                    Call("EndExplicitExternalLevelContext");
+                    CurrentZdo = outerZdo; MaxHealth = outerMax; Health = outerHealth;
+                }
+            };
+            Call("BeginExplicitExternalLevelContext", "must not be adopted by CM", null);
+            try { Call("TryApplyLevel", outer); }
+            finally { Call("EndExplicitExternalLevelContext"); }
+            Require(GetLevel(other) == 4 && otherZdo.GetInt(Key("DesiredLevelKey")) == 4 &&
+                    otherZdo.GetString(Key("DesiredLevelSourceKey")) == "other creature callback", "another creature retains external context during CM assignment");
+            Require(CurrentZdo.GetString(Key("DesiredLevelSourceKey"), "") == "", "CM completion does not consume ambient external context");
+            CheckStats(outer, 3);
+
+            Character forced = NewCharacter(1);
+            ExternalPostfix = (c, requested) => { if (requested == 3) SetLevel(c, 5); };
+            object?[] forcedArgs = { forced, 3, null };
+            Require((bool)Call("TryApplyForcedLevel", forcedArgs)! && LevelWrites == 2, "forced CM spawn accepts completed foreign level without recursion");
+            Require(CurrentZdo.GetString(Key("DesiredLevelSourceKey")) == "cm:spawn", "forced level retains its source tag");
+            CheckStats(forced, 5);
+
+            Character failed = NewCharacter(1);
+            ExternalPostfix = (c, requested) =>
+            {
+                if (requested != 3) return;
+                SetLevel(c, 5);
+                throw new InvalidOperationException("foreign postfix failure");
+            };
+            bool threw = false;
+            try { Call("TryApplyLevel", failed); }
+            catch (TargetInvocationException) { threw = true; }
+            Require(threw && !(bool)Call("IsSettingManagedLevel", failed)!, "exception propagates and releases scope");
+            Require(CurrentZdo.GetInt(Key("DesiredLevelKey")) == 3, "failed assignment does not publish successful completion");
+            ExternalPostfix = null;
+            SetLevel(failed, 2);
+            Require(CurrentZdo.GetInt(Key("DesiredLevelKey")) == 2, "later external change works after failed assignment");
+
+            foreach (string modeName in new[] { "ExceptLevel", "Off" })
+            {
+                mode.SetSerializedValue(modeName);
+                Character character = NewCharacter(1);
+                ExternalPostfix = (c, requested) => { if (requested == 3) SetLevel(c, 5); };
+                Call("TryApplyLevelState", character);
+                SetLevel(character, 3);
+                Require(LevelWrites == 2 && GetLevel(character) == 5, modeName + " allows foreign level assignment without recursive restoration");
+            }
+        }
+        finally
+        {
+            ExternalPostfix = null;
+            ExercisePostfixes = false;
+            RolledLevel = 4;
+            mode.SetSerializedValue("Full");
+        }
+        System.Console.WriteLine("Reentrant level contracts passed: foreign increase/decrease/no-op, both postfix orders, final stored level/stats/health deficit, deferred CM visuals/modifier request, stale outer arguments, independent second creature and spawn contexts, exception recovery, ExceptLevel/Off. Compiled CM methods executed; foreign postfix and Unity/world boundaries substituted.");
     }
 
     private static void CheckScaleModes(Assembly plugin, ConfigEntryBase mode, Character character)
@@ -306,19 +417,22 @@ internal static class LevelModeContracts
                 : type == "ZNetView" && method.Name == "IsOwner" ? nameof(IsOwner)
                 : type == "ZDO" && method.Name == "Set" && method.Parameters[0].ParameterType.FullName == "System.String" ? method.Parameters[1].ParameterType.Name switch
                 {
-                    "Int32" => nameof(SetInt), "Single" => nameof(SetFloat), "Boolean" => nameof(SetBool), _ => null
+                    "Int32" => nameof(SetInt), "Single" => nameof(SetFloat), "Boolean" => nameof(SetBool), "String" => nameof(SetString), _ => null
                 }
                 : type == "CreatureManager.CreatureDomainManager" && method.Name == "IsSynchronizedConfigurationReady" ? nameof(ConfigurationReady)
                 : type == "CreatureManager.CreatureKarmaManager" && method.Name == "IsEnforcer" ? nameof(FalseCharacter)
                 : type == "CreatureManager.CreatureManagerSpawnLifecycle" ? method.Name switch
                 {
-                    "GetSpawnSource" => nameof(GetSource), "IsManagedSpawn" => nameof(IsManaged), _ => null
+                    "GetSpawnSource" => nameof(GetSource), "IsManagedSpawn" => nameof(IsManaged), "IsCommandSpawn" => nameof(IsCommand), _ => null
                 }
+                : type == "CreatureManager.CreatureModifierManager" && method.Name == "TryRollModifiers" ? nameof(RequestModifiers)
+                : type == "CreatureManager.CreatureModifierManager" && method.Name == "RefreshStoredReapingScale" ? nameof(NoCharacterAction)
                 : type == Levels.FullName ? method.Name switch
                 {
                     "TrySelectFloatValue" => nameof(SelectFloat), "TrySelectDistanceScalingMultiplier" => nameof(SelectDistance),
                     "TryResolveKarmaBonus" => nameof(KarmaBonus), "TrySelectLevelWeights" => nameof(LevelWeights), "GetPrefabName" => nameof(GetPrefabName),
-                    "IsDungeonCreature" => nameof(IsDungeon), "IsSaddleableCreature" => nameof(IsSaddleable), _ => null
+                    "IsDungeonCreature" => nameof(IsDungeon), "IsSaddleableCreature" => nameof(IsSaddleable),
+                    "ApplyRuntimeVisuals" => nameof(UpdateVisuals), _ => null
                 } : null;
             MethodInfo? replacement = boundary == null ? null : typeof(LevelModeContracts).GetMethod(boundary, Static);
             if (replacement == null && (type == Levels.FullName ||
@@ -334,7 +448,7 @@ internal static class LevelModeContracts
     private static T Uninitialized<T>() => (T)FormatterServices.GetUninitializedObject(typeof(T));
     private static bool SameObject(UnityEngine.Object a, UnityEngine.Object b) => ReferenceEquals(a, b);
     private static bool DifferentObject(UnityEngine.Object a, UnityEngine.Object b) => !ReferenceEquals(a, b);
-    private static int GetInstanceId(UnityEngine.Object value) => (int)NextId;
+    private static int GetInstanceId(UnityEngine.Object value) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value);
     private static GameObject GetGameObject(Component value) => null!;
     private static Transform GetTransform(Component value) => ScaleTransform;
     private static void SetScale(Transform transform, Vector3 scale) { LocalScale = scale; ScaleWrites++; }
@@ -346,17 +460,35 @@ internal static class LevelModeContracts
     private static bool ConfigurationReady() => Ready;
     private static int GetSource(Character character) => Source;
     private static bool IsManaged(Character character) => true;
+    private static bool IsCommand(Character character) => Source == 2;
+    private static void UpdateVisuals(Character character) => VisualUpdates++;
+    private static void RequestModifiers(Character character) => ModifierRequests++;
+    private static void NoCharacterAction(Character character) { }
     private static int GetLevel(Character character) => (int)LevelField.GetValue(character)!;
-    private static ZDOID GetZdoId(Character character) => CurrentZdo.m_uid;
+    private static ZDOID GetZdoId(Character character) =>
+        ((ZNetView)typeof(Character).GetField("m_nview", Instance)!.GetValue(character)!).GetZDO().m_uid;
     private static float GetBaseHealth(Character character) => 100f;
     private static float GetMaxHealth(Character character) => MaxHealth;
     private static float GetHealth(Character character) => Health;
-    private static void SetMaxHealth(Character character, float value) { MaxHealth = Health = value; }
+    // Original Character.SetMaxHealth only clamps current HP downward; it does not heal.
+    private static void SetMaxHealth(Character character, float value) { MaxHealth = value; if (Health > value) Health = value; }
     private static void SetHealth(Character character, float value) { Health = value; }
-    private static void SetLevel(Character character, int level) { LevelWrites++; LevelField.SetValue(character, level); SetInt(CurrentZdo, "level", level); MaxHealth = Health = 100f * level; }
+    private static void SetLevel(Character character, int level)
+    {
+        if (++LevelWrites > 24) throw new InvalidOperationException("Reentrant SetLevel exceeded the bounded call limit");
+        float deficit = ExercisePostfixes ? (float)Call("CaptureStoredHealthDeficit", character)! : float.NaN;
+        LevelField.SetValue(character, level);
+        SetInt(CurrentZdo, "level", level);
+        SetMaxHealth(character, 100f * level);
+        if (!ExercisePostfixes) return;
+        if (CmPostfixFirst) Copy(LevelPostfix).Invoke(null, new object[] { character, level, deficit });
+        ExternalPostfix?.Invoke(character, level);
+        if (!CmPostfixFirst) Copy(LevelPostfix).Invoke(null, new object[] { character, level, deficit });
+    }
     private static void SetInt(ZDO zdo, string key, int value) => ZDOExtraData.Set(zdo.m_uid, key.GetStableHashCode(), value);
     private static void SetBool(ZDO zdo, string key, bool value) => SetInt(zdo, key, value ? 1 : 0);
     private static void SetFloat(ZDO zdo, string key, float value) => ZDOExtraData.Set(zdo.m_uid, key.GetStableHashCode(), value);
+    private static void SetString(ZDO zdo, string key, string value) => ZDOExtraData.Set(zdo.m_uid, key.GetStableHashCode(), value);
     private static bool SelectFloat(Character character, Delegate selector, out float value, int scope)
     {
         object? result = selector.DynamicInvoke(Rule);
@@ -365,7 +497,7 @@ internal static class LevelModeContracts
     }
     private static bool SelectDistance(Character character, int index, out float multiplier, int scope) { multiplier = index == 1 ? 1.5f : 1.25f; return true; }
     private static bool KarmaBonus(Character character, ZDO zdo, out int bonus) { KarmaQueries++; bonus = 2; return true; }
-    private static bool LevelWeights(Character character, out List<float> weights) { WeightQueries++; weights = new List<float> { 0f, 0f, 0f, 1f }; return true; }
+    private static bool LevelWeights(Character character, out List<float> weights) { WeightQueries++; weights = Enumerable.Repeat(0f, RolledLevel - 1).Concat(new[] { 1f }).ToList(); return true; }
     private static float RandomRange(float min, float max) => (min + max) / 2f;
     private static void Require(bool condition, string label)
     {
