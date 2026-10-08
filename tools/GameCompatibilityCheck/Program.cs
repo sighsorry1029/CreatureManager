@@ -65,6 +65,8 @@ internal static class Program
         StateOwnershipContracts.Run(plugin);
         LootContracts.Run(plugin, dropThatPath);
         ManagedContracts.Run(plugin);
+        DotAttributionContracts.Run(plugin);
+        ReapingContracts.Run(plugin);
         FrozenKingContracts.Run(plugin);
         LevelModeContracts.Run(plugin);
         BossBlockerContracts.Run(plugin);

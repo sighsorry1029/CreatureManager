@@ -636,7 +636,7 @@ DeepNorth:
             character == null ||
             character.IsPlayer() ||
             character.IsTamed() ||
-            !attribution.HasSource)
+            !attribution.HasRewardSource)
         {
             return;
         }
@@ -664,7 +664,7 @@ DeepNorth:
             if (TryBuildCreatureDeathContext(
                     zdo,
                     character,
-                    attribution.Source,
+                    attribution.RewardSource,
                     attribution.Kind,
                     deathPosition,
                     out CreatureDeathContext context))
@@ -682,7 +682,7 @@ DeepNorth:
 
         ZPackage package = new();
         package.Write(zdo.m_uid);
-        package.Write(attribution.Source);
+        package.Write(attribution.RewardSource);
         package.Write((int)attribution.Kind);
         package.Write(deathPosition);
         ZRoutedRpc.instance.InvokeRoutedRPC(

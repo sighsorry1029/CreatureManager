@@ -1771,9 +1771,9 @@ internal static class CreatureManagerPoisonSourcePatch
         __state = damage >= __instance.m_damageLeft;
     }
 
-    private static void Postfix(SE_Poison __instance, bool __state)
+    private static void Postfix(SE_Poison __instance, bool __state, bool __runOriginal)
     {
-        CreatureModifierManager.RecordPoisonDamageSource(__instance, __state);
+        CreatureModifierManager.RecordPoisonDamageSource(__instance, __state && __runOriginal);
     }
 }
 
@@ -1899,7 +1899,7 @@ internal static class CreatureManagerCharacterOnDeathPatch
         CreatureKarmaManager.DropStoredEnforcerLoot(__instance);
         CreatureModifierManager.FinalDeathAttribution attribution =
             CreatureModifierManager.CaptureFinalDeathAttribution(__instance);
-        CreatureModifierManager.HandleDeath(__instance, attribution);
+        CreatureModifierManager.HandleDeath(__instance);
         if (!__instance.IsPlayer())
         {
             CreatureKarmaManager.RecordDeath(__instance, attribution);

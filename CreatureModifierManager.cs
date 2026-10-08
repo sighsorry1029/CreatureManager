@@ -402,7 +402,7 @@ internal static class CreatureModifierManager
         new(ModifierGroup.Special, "vampiric", "Vampiric", ModifierMask.Vampiric, VampiricPowerKey, VampiricDefaultPower, power => $"Heals the creature for {FormatPercent(power)} of health removed by direct hits. Delayed damage-over-time is excluded."),
         new(ModifierGroup.Special, "reaping", "Reaping", ModifierMask.Reaping, ReapingPowerKey, ReapingDefaultPower, power => DescribeReaping(power, ReapingDefaultMaxHealthPerKill, ReapingDefaultDamagePerKill, ReapingDefaultScalePerKill)),
         new(ModifierGroup.Special, "blink", "Blink", ModifierMask.Blink, BlinkPowerKey, BlinkFixedProcChance, _ => DescribeBlink(BlinkDefaultCooldown, BlinkDefaultMaxRange)),
-        new(ModifierGroup.Special, "omen", "Omen", ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, power => $"When killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player, has a {FormatPercent(power)} chance to force an Enforcer summon check. Cooldown blocking follows the server setting."),
+        new(ModifierGroup.Special, "omen", "Omen", ModifierMask.Omen, OmenPowerKey, OmenDefaultPower, power => $"When killed directly by a player or by a lethal poison, fire, or spirit tick with a confirmed player contribution, has a {FormatPercent(power)} chance to force an Enforcer summon check. Mixed damage qualifies; summon-only or unknown-only damage does not. Cooldown blocking follows the server setting."),
         new(ModifierGroup.Special, "juggernaut", "Juggernaut", ModifierMask.Knockback, KnockbackPowerKey, KnockbackDefaultPower, power => DescribeKnockback(power, KnockbackDefaultCooldown), ClampKnockbackPower),
         new(ModifierGroup.Special, "blamer", "Blamer", ModifierMask.Blamer, BlamerKarmaPerSecondKey, BlamerDefaultKarmaPerSecond, power => DescribeBlamer(power, BlamerDefaultMaxKarmaGain, BlamerDefaultFleeHealthRatio), ResolveBlamerKarmaPerSecond)
     };
@@ -1053,23 +1053,30 @@ internal static class CreatureModifierManager
         internal DelayedDamageAttribution(
             DelayedDamageAttributionKind kind,
             ZDOID source,
-            bool sourceWasPlayer = false)
+            bool sourceWasPlayer = false,
+            ZDOID rewardSource = default,
+            bool rewardSourceWasPlayer = false)
         {
             Kind = kind;
             Source = source;
             SourceWasPlayer = sourceWasPlayer;
+            RewardSource = rewardSource;
+            RewardSourceWasPlayer = rewardSourceWasPlayer;
         }
 
         internal DelayedDamageAttributionKind Kind { get; }
         internal ZDOID Source { get; }
         internal bool SourceWasPlayer { get; }
         internal bool IsExact => Kind == DelayedDamageAttributionKind.Exact && Source != ZDOID.None;
+        internal ZDOID RewardSource { get; }
+        internal bool RewardSourceWasPlayer { get; }
 
-        internal static DelayedDamageAttribution FromSource(ZDOID source, bool sourceWasPlayer)
+        internal static DelayedDamageAttribution FromSource(ZDOID source, bool sourceWasPlayer, bool sourceWasPlayerSide = false)
         {
             return source == ZDOID.None
                 ? new DelayedDamageAttribution(DelayedDamageAttributionKind.Unattributed, ZDOID.None)
-                : new DelayedDamageAttribution(DelayedDamageAttributionKind.Exact, source, sourceWasPlayer);
+                : new DelayedDamageAttribution(DelayedDamageAttributionKind.Exact, source, sourceWasPlayer,
+                    sourceWasPlayer || sourceWasPlayerSide ? source : ZDOID.None, sourceWasPlayer);
         }
     }
 
@@ -1086,16 +1093,14 @@ internal static class CreatureModifierManager
 
     private readonly struct DelayedDamageDeathCredit
     {
-        internal DelayedDamageDeathCredit(Character target, ZDOID source, bool sourceWasPlayer)
+        internal DelayedDamageDeathCredit(Character target, DelayedDamageAttribution attribution)
         {
             Target = target;
-            Source = source;
-            SourceWasPlayer = sourceWasPlayer;
+            Attribution = attribution;
         }
 
         internal Character Target { get; }
-        internal ZDOID Source { get; }
-        internal bool SourceWasPlayer { get; }
+        internal DelayedDamageAttribution Attribution { get; }
     }
 
     internal enum DeathAttributionKind
@@ -1108,22 +1113,17 @@ internal static class CreatureModifierManager
     internal readonly struct FinalDeathAttribution
     {
         internal FinalDeathAttribution(
-            ZDOID source,
-            DeathAttributionKind kind,
-            bool sourceWasPlayer,
-            Character? resolvedSource)
+            ZDOID rewardSource,
+            DeathAttributionKind kind)
         {
-            Source = source;
             Kind = kind;
-            SourceWasPlayer = sourceWasPlayer;
-            ResolvedSource = resolvedSource;
+            RewardSource = rewardSource;
         }
 
-        internal ZDOID Source { get; }
         internal DeathAttributionKind Kind { get; }
-        internal bool SourceWasPlayer { get; }
-        internal Character? ResolvedSource { get; }
-        internal bool HasSource => Source != ZDOID.None && Kind != DeathAttributionKind.None;
+        // Karma/Omen contribution is independent of Reaping's nearby-death policy.
+        internal ZDOID RewardSource { get; }
+        internal bool HasRewardSource => RewardSource != ZDOID.None && Kind != DeathAttributionKind.None;
     }
 
     internal struct RpcDamageContext
@@ -1139,7 +1139,7 @@ internal static class CreatureModifierManager
     {
         internal Character? Target;
         internal HitData.HitType HitType;
-        internal DelayedDamageAttribution Attribution;
+        internal StatusEffect? Status;
     }
 
     internal readonly struct RpcDamageScopeState
@@ -1303,16 +1303,22 @@ internal static class CreatureModifierManager
         internal ApplyDamageState(
             DirectDamageState directDamage,
             bool eligibleAtEntry,
-            float healthBefore)
+            float healthBefore,
+            bool delayed,
+            DelayedDamageAttribution delayedAttribution)
         {
             DirectDamage = directDamage;
             EligibleAtEntry = eligibleAtEntry;
             HealthBefore = healthBefore;
+            Delayed = delayed;
+            DelayedAttribution = delayedAttribution;
         }
 
         internal DirectDamageState DirectDamage { get; }
         internal bool EligibleAtEntry { get; }
         internal float HealthBefore { get; }
+        internal bool Delayed { get; }
+        internal DelayedDamageAttribution DelayedAttribution { get; }
     }
 
     private readonly struct VampiricDamageContext
@@ -2076,7 +2082,7 @@ internal static class CreatureModifierManager
         float damagePerKill,
         float scalePerKill)
     {
-        string fallback = $"When a player or this creature kills a nearby creature, this creature heals for {FormatPercent(healPerKill)} of its base max health and gains {FormatPercent(maxHealthPerKill)} base max health, {FormatPercent(damagePerKill)} outgoing damage, and {FormatPercent(scalePerKill)} size.";
+        string fallback = $"When any other creature or player dies within 24m, regardless of faction, taming, killer or damage source, this creature heals for {FormatPercent(healPerKill)} of its base max health and gains {FormatPercent(maxHealthPerKill)} base max health, {FormatPercent(damagePerKill)} outgoing damage, and {FormatPercent(scalePerKill)} size. Each death counts once per Reaping creature. Existing gain limits apply.";
         return LocalizeModifierDescription(
             "reaping",
             fallback,
@@ -6338,7 +6344,13 @@ internal static class CreatureModifierManager
                                !target.IsTeleporting() &&
                                !target.InCutscene();
         float healthBefore = target == null ? 0f : Mathf.Max(0f, target.GetHealth());
-        return new ApplyDamageState(BeginDirectDamage(target!, hit!), eligibleAtEntry, healthBefore);
+        // Freeze attribution before modifier callbacks or nested damage can mutate a
+        // pool. Non-damaging status updates no longer need a ledger lookup.
+        bool delayed = target != null && hit != null && IsVanillaDelayedDamageTick(target, hit);
+        DelayedDamageAttribution attribution = delayed && eligibleAtEntry
+            ? GetCurrentDelayedDamageTickAttribution(target!, hit!)
+            : default;
+        return new ApplyDamageState(BeginDirectDamage(target!, hit!), eligibleAtEntry, healthBefore, delayed, attribution);
     }
 
     internal static void CompleteApplyDamage(Character target, HitData hit, ApplyDamageState state)
@@ -6357,7 +6369,7 @@ internal static class CreatureModifierManager
         bool hasResolvedOriginalHit = GetResolvedOriginalPlayerHitDamage(target, hit) > 0.1f;
         TryApplyPendingPlayerSpiritDamage(target, hit, hasResolvedOriginalHit);
         TryApplyPlayerDebuffModifiers(target, hit, hasResolvedOriginalHit);
-        CaptureDelayedDamageDeathCredit(target, hit, state.HealthBefore);
+        CaptureDelayedDamageDeathCredit(target, hit, state);
     }
 
     internal static DirectDamageState BeginDirectDamage(Character target, HitData hit)
@@ -6789,15 +6801,21 @@ internal static class CreatureModifierManager
         DelayedDamageAttribution current,
         DelayedDamageAttribution incoming)
     {
+        // Stable representative, not a damage-share winner: retain the first known
+        // candidate, preferring an actual player over a tame/summon for Omen.
+        DelayedDamageAttribution reward = (incoming.RewardSourceWasPlayer && !current.RewardSourceWasPlayer) ||
+                                          current.RewardSource == ZDOID.None
+            ? incoming : current;
         if (current.Kind == DelayedDamageAttributionKind.Exact &&
             incoming.Kind == DelayedDamageAttributionKind.Exact &&
             current.Source == incoming.Source)
         {
             // The ZDOID is the source identity. A remote player Character may resolve on only
             // some contributing hits; keep the exact source and let the server validate its type.
-            return DelayedDamageAttribution.FromSource(
+            return new DelayedDamageAttribution(DelayedDamageAttributionKind.Exact,
                 current.Source,
-                current.SourceWasPlayer || incoming.SourceWasPlayer);
+                current.SourceWasPlayer || incoming.SourceWasPlayer,
+                reward.RewardSource, reward.RewardSourceWasPlayer);
         }
 
         if (current.Kind == DelayedDamageAttributionKind.Unattributed &&
@@ -6808,7 +6826,7 @@ internal static class CreatureModifierManager
 
         return new DelayedDamageAttribution(
             DelayedDamageAttributionKind.Ambiguous,
-            ZDOID.None);
+            ZDOID.None, false, reward.RewardSource, reward.RewardSourceWasPlayer);
     }
 
     private static DelayedDamageSourceLedger GetDelayedDamageSourceLedger(Character target)
@@ -6836,27 +6854,19 @@ internal static class CreatureModifierManager
         Character? source = sourceHit.GetAttacker();
         return DelayedDamageAttribution.FromSource(
             sourceHit.m_attacker,
-            source != null && source.IsPlayer());
+            source != null && source.IsPlayer(),
+            source != null && (source.IsTamed() || source.GetFaction() == Character.Faction.PlayerSpawned));
     }
 
     internal static DelayedDamageTickScopeState BeginPoisonDamageTick(SE_Poison status)
     {
         DelayedDamageTickContext previous = CurrentDelayedDamageTickContext;
-        DelayedDamageAttribution attribution = default;
         Character? target = status?.m_character;
-        if (target != null &&
-            DelayedDamageSourceLedgers.TryGetValue(target.GetInstanceID(), out DelayedDamageSourceLedger ledger) &&
-            ReferenceEquals(ledger.Target, target) &&
-            ReferenceEquals(ledger.PoisonStatus, status))
-        {
-            attribution = ledger.Poison;
-        }
-
         CurrentDelayedDamageTickContext = new DelayedDamageTickContext
         {
             Target = target,
             HitType = HitData.HitType.Poisoned,
-            Attribution = attribution
+            Status = status
         };
         return new DelayedDamageTickScopeState(previous);
     }
@@ -6865,30 +6875,11 @@ internal static class CreatureModifierManager
     {
         DelayedDamageTickContext previous = CurrentDelayedDamageTickContext;
         Character? target = status?.m_character;
-        DelayedDamageAttribution fire = default;
-        DelayedDamageAttribution spirit = default;
-        if (target != null &&
-            DelayedDamageSourceLedgers.TryGetValue(target.GetInstanceID(), out DelayedDamageSourceLedger ledger) &&
-            ReferenceEquals(ledger.Target, target))
-        {
-            if (ReferenceEquals(ledger.FireStatus, status))
-            {
-                fire = ledger.Fire;
-            }
-
-            if (ReferenceEquals(ledger.SpiritStatus, status))
-            {
-                spirit = ledger.Spirit;
-            }
-        }
-
-        bool hasFire = status != null && status.m_fireDamagePerHit > 0f;
-        bool hasSpirit = status != null && status.m_spiritDamagePerHit > 0f;
         CurrentDelayedDamageTickContext = new DelayedDamageTickContext
         {
             Target = target,
             HitType = HitData.HitType.Burning,
-            Attribution = CombineDelayedDamageTickAttribution(fire, hasFire, spirit, hasSpirit)
+            Status = status
         };
         return new DelayedDamageTickScopeState(previous);
     }
@@ -6899,6 +6890,26 @@ internal static class CreatureModifierManager
         {
             CurrentDelayedDamageTickContext = state.Previous;
         }
+    }
+
+    private static DelayedDamageAttribution GetCurrentDelayedDamageTickAttribution(Character target, HitData hit)
+    {
+        if (!DelayedDamageSourceLedgers.TryGetValue(target.GetInstanceID(), out DelayedDamageSourceLedger ledger) ||
+            !ReferenceEquals(ledger.Target, target))
+        {
+            return default;
+        }
+
+        StatusEffect? status = CurrentDelayedDamageTickContext.Status;
+        if (hit.m_hitType == HitData.HitType.Poisoned)
+        {
+            return ReferenceEquals(ledger.PoisonStatus, status) ? ledger.Poison : default;
+        }
+
+        // Use actual channels: vanilla has already decremented the remaining pools.
+        return CombineDelayedDamageTickAttribution(
+            ReferenceEquals(ledger.FireStatus, status) ? ledger.Fire : default, hit.m_damage.m_fire > 0f,
+            ReferenceEquals(ledger.SpiritStatus, status) ? ledger.Spirit : default, hit.m_damage.m_spirit > 0f);
     }
 
     private static DelayedDamageAttribution CombineDelayedDamageTickAttribution(
@@ -6917,32 +6928,15 @@ internal static class CreatureModifierManager
             return fire;
         }
 
-        if (fire.Kind == DelayedDamageAttributionKind.Exact &&
-            spirit.Kind == DelayedDamageAttributionKind.Exact &&
-            fire.Source == spirit.Source)
-        {
-            return DelayedDamageAttribution.FromSource(
-                fire.Source,
-                fire.SourceWasPlayer || spirit.SourceWasPlayer);
-        }
-
-        if (fire.Kind == DelayedDamageAttributionKind.Unattributed &&
-            spirit.Kind == DelayedDamageAttributionKind.Unattributed)
-        {
-            return fire;
-        }
-
-        return new DelayedDamageAttribution(
-            DelayedDamageAttributionKind.Ambiguous,
-            ZDOID.None);
+        return MergeDelayedDamageAttribution(fire, spirit);
     }
 
     private static void CaptureDelayedDamageDeathCredit(
         Character target,
         HitData hit,
-        float healthBefore)
+        ApplyDamageState state)
     {
-        if (healthBefore <= 0f ||
+        if (state.HealthBefore <= 0f ||
             target.GetHealth() > 0f ||
             !ReferenceEquals(target.m_lastHit, hit))
         {
@@ -6950,8 +6944,7 @@ internal static class CreatureModifierManager
         }
 
         int id = target.GetInstanceID();
-        if (!ReferenceEquals(CurrentDelayedDamageTickContext.Target, target) ||
-            CurrentDelayedDamageTickContext.HitType != hit.m_hitType)
+        if (!state.Delayed)
         {
             PendingDelayedDamageDeathCredits.Remove(id);
             return;
@@ -6959,11 +6952,7 @@ internal static class CreatureModifierManager
 
         // This is the first health > 0 -> health <= 0 transition. Later ticks in the same
         // frame may overwrite m_lastHit, but they must not steal or erase the lethal source.
-        DelayedDamageAttribution attribution = CurrentDelayedDamageTickContext.Attribution;
-        PendingDelayedDamageDeathCredits[id] = new DelayedDamageDeathCredit(
-            target,
-            attribution.IsExact ? attribution.Source : ZDOID.None,
-            attribution.IsExact && attribution.SourceWasPlayer);
+        PendingDelayedDamageDeathCredits[id] = new DelayedDamageDeathCredit(target, state.DelayedAttribution);
     }
 
     internal static void ClearRecoveredDelayedDamageDeathCredit(Character character)
@@ -8718,7 +8707,7 @@ internal static class CreatureModifierManager
         }
     }
 
-    internal static void HandleDeath(Character character, FinalDeathAttribution attribution)
+    internal static void HandleDeath(Character character)
     {
         if (!CreatureLevelManager.IsLevelSystemEnabled() || character == null || character.IsPlayer())
         {
@@ -8732,16 +8721,8 @@ internal static class CreatureModifierManager
             return;
         }
 
-        Character? finalAttacker = ResolveFinalDeathAttributionCharacter(attribution);
         ClearDelayedDamageTracking(character);
-        if (attribution.SourceWasPlayer)
-        {
-            ApplyReapingForNearbyDeaths(character);
-        }
-        else
-        {
-            TryApplyDirectReapingGain(finalAttacker, character);
-        }
+        ApplyReapingForNearbyDeaths(character);
 
         if (!TryGetModifierPower(character, ModifierMask.ToxicDeath, ToxicDeathPowerKey, ToxicDeathDefaultPower, out float power))
         {
@@ -8785,10 +8766,14 @@ internal static class CreatureModifierManager
             return;
         }
 
-        FinalDeathAttribution attribution = CaptureFinalDeathAttribution(player);
-        Character? finalAttacker = ResolveFinalDeathAttributionCharacter(attribution);
+        ZNetView? nview = player.m_nview;
+        if (nview == null || !nview.IsValid() || !nview.IsOwner())
+        {
+            return;
+        }
+
         ClearDelayedDamageTracking(player);
-        TryApplyDirectReapingGain(finalAttacker, player);
+        ApplyReapingForNearbyDeaths(player);
     }
 
     internal static void NotifyPlayerRespawn(Player player)
@@ -8819,21 +8804,13 @@ internal static class CreatureModifierManager
         if (PendingDelayedDamageDeathCredits.TryGetValue(id, out DelayedDamageDeathCredit credit) &&
             ReferenceEquals(credit.Target, dead))
         {
-            if (credit.Source == ZDOID.None)
-            {
-                return default;
-            }
-
-            Character? resolvedSource = credit.SourceWasPlayer
-                ? null
-                : TryFindCharacter(credit.Source, out Character delayedSource)
-                    ? delayedSource
-                    : null;
-            return new FinalDeathAttribution(
-                credit.Source,
-                DeathAttributionKind.Delayed,
-                credit.SourceWasPlayer,
-                resolvedSource);
+            DelayedDamageAttribution evidence = credit.Attribution;
+            ZDOID rewardSource = evidence.RewardSource != ZDOID.None
+                ? evidence.RewardSource
+                : evidence.IsExact ? evidence.Source : ZDOID.None;
+            return rewardSource == ZDOID.None
+                ? default
+                : new FinalDeathAttribution(rewardSource, DeathAttributionKind.Delayed);
         }
 
         Character? directAttacker = dead.m_lastHit?.GetAttacker();
@@ -8845,26 +8822,7 @@ internal static class CreatureModifierManager
 
         return directSource == ZDOID.None
             ? default
-            : new FinalDeathAttribution(
-                directSource,
-                DeathAttributionKind.Direct,
-                directAttacker != null && directAttacker.IsPlayer(),
-                directAttacker);
-    }
-
-    private static Character? ResolveFinalDeathAttributionCharacter(FinalDeathAttribution attribution)
-    {
-        if (attribution.ResolvedSource != null)
-        {
-            return attribution.ResolvedSource;
-        }
-
-        if (!attribution.HasSource || attribution.SourceWasPlayer)
-        {
-            return null;
-        }
-
-        return TryFindCharacter(attribution.Source, out Character source) ? source : null;
+            : new FinalDeathAttribution(directSource, DeathAttributionKind.Direct);
     }
 
     private static void ClearDelayedDamageTracking(Character character)
@@ -8872,24 +8830,6 @@ internal static class CreatureModifierManager
         int id = character.GetInstanceID();
         DelayedDamageSourceLedgers.Remove(id);
         PendingDelayedDamageDeathCredits.Remove(id);
-    }
-
-    private static bool TryApplyDirectReapingGain(Character? attacker, Character dead)
-    {
-        if (attacker == null || dead == null || attacker == dead || attacker.IsPlayer() || attacker.IsDead() ||
-            !TryGetReapingSettings(attacker, out _))
-        {
-            return false;
-        }
-
-        Vector3 deathPosition = dead.transform.position;
-        float squaredDistance = (attacker.transform.position - deathPosition).sqrMagnitude;
-        if (squaredDistance > ReapingRadius * ReapingRadius)
-        {
-            return false;
-        }
-
-        return RequestReapingGain(attacker, dead, deathPosition);
     }
 
     private static bool RequestReapingGain(Character reaper, Character dead, Vector3 deathPosition)
@@ -8958,6 +8898,7 @@ internal static class CreatureModifierManager
         ZDO deadZdo = ZDOMan.instance.GetZDO(deadId);
         if (deadZdo == null ||
             deadZdo.GetOwner() != sender ||
+            !IsEligibleReapingDeathVictim(deadZdo) ||
             !IsFinite(deadZdo.GetPosition()) ||
             (deadZdo.GetPosition() - deathPosition).sqrMagnitude >
             ReapingDeathPositionTolerance * ReapingDeathPositionTolerance)
@@ -9118,7 +9059,10 @@ internal static class CreatureModifierManager
 
                 if (observedDead)
                 {
-                    AuthorizeReapingGain(reaper, deadId, deathPosition);
+                    if (IsEligibleReapingDeathVictim(deadZdo))
+                    {
+                        AuthorizeReapingGain(reaper, deadId, deathPosition);
+                    }
                     yield break;
                 }
 
@@ -9336,9 +9280,18 @@ internal static class CreatureModifierManager
         }
     }
 
+    private static bool IsEligibleReapingDeathVictim(ZDO deadZdo)
+    {
+        // All Character victims count, but arbitrary destroyed objects do not.
+        if (TryFindCharacter(deadZdo.m_uid, out _)) return true;
+        GameObject? prefab = ZNetScene.instance != null ? ZNetScene.instance.GetPrefab(deadZdo.GetPrefab()) : null;
+        return prefab != null && prefab.GetComponent<Character>() != null;
+    }
+
     private static void ApplyReapingForNearbyDeaths(Character dead)
     {
-        if (ActiveReapingModifierCharacters.Count == 0)
+        if (ActiveReapingModifierCharacters.Count == 0 || dead == null ||
+            !(dead.IsDead() || dead.GetHealth() <= 0f))
         {
             return;
         }

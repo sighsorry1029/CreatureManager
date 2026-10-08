@@ -56,9 +56,9 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 | <img src="https://i.ibb.co/3mfDdZgF/swift.png" width="40" height="40" alt="Swift icon"> | **Swift** | Increases movement speed, acceleration, and turning speed by 40%. |
 | <img src="https://i.ibb.co/xKKMTzcq/attack-Speed.png" width="40" height="40" alt="Attack Speed icon"> | **Attack Speed** | Increases animation speed by 30%; attack intervals become 76.92% of normal. |
 | <img src="https://i.ibb.co/SXqZd5Pq/vampiric.png" width="40" height="40" alt="Vampiric icon"> | **Vampiric** | Heals for 30% of health removed by direct hits; delayed damage over time is excluded. |
-| <img src="https://i.ibb.co/Jw9yV49Z/reaping.png" width="40" height="40" alt="Reaping icon"> | **Reaping** | Nearby kills heal 5% of base max health (up to 20 activations) and grant +10% max health, +1% damage, and +5% size per kill, capped at +200%, +20%, and +50%. No new size is gained in dungeons. |
+| <img src="https://i.ibb.co/Jw9yV49Z/reaping.png" width="40" height="40" alt="Reaping icon"> | **Reaping** | Absorbs actual deaths within 24m, including players, tamed creatures and PlayerSpawned summons, regardless of killer or damage source. Each death can grant healing and configured stat growth once per surviving Reaping creature, within the existing limits. No new size is gained in dungeons. |
 | <img src="https://i.ibb.co/Gfqc089L/blink.png" width="40" height="40" alt="Blink icon"> | **Blink** | Teleports near its player target within 16m every 6s. By default, Blink and its extended attack range unlock 3s after the creature becomes alerted, even if no attack could start during that time. |
-| <img src="https://i.ibb.co/ZpnXrfGq/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** | Has a 50% chance when killed directly by a player or by unambiguously player-attributed poison, fire, or spirit damage over time to force an Enforcer check; cooldown blocking follows the server setting. |
+| <img src="https://i.ibb.co/ZpnXrfGq/omen.png" width="40" height="40" alt="Omen icon"> | **Omen** | Can force an Enforcer check when killed directly by a player or by a lethal poison, fire, or spirit tick with a confirmed player contribution. Mixed damage qualifies; summon-only and unknown-only damage do not. Cooldown blocking follows the server setting. |
 | <img src="https://i.ibb.co/spF4n7Wg/juggernaut.png" width="40" height="40" alt="Juggernaut icon"> | **Juggernaut** | Player hits have at least 150 push force. An actual push starts a 5s cooldown, and the creature is immune to attack push. |
 | <img src="https://i.ibb.co/TBCgrbkt/blamer.png" width="40" height="40" alt="Blamer icon"> | **Blamer** | Below 75% health, flees and adds 0.5 Karma per second up to 45 lifetime Karma. When exhausted, the modifier, icon, and flee behavior end. |
 
@@ -122,7 +122,11 @@ When using WackyEpicMMOSystem, `1 - General` → `Adjust EpicMMO LevelBar Positi
 
 ![Omen modifier triggering an Enforcer check](https://i.ibb.co/G4x2sPfH/omen.gif)
 
-*Omen can request an Enforcer encounter when the affected creature is killed directly by a player or by poison, fire, or spirit damage over time attributed unambiguously to a player.*
+*Omen can request an Enforcer encounter when the affected creature is killed directly by a player or by a lethal poison, fire, or spirit tick with a confirmed player contribution, including mixed damage.*
+
+Karma/Omen DoT rewards use the damage pool that actually killed the creature, not unrelated active effects or a recent-hit timeout. Karma accepts confirmed player/tamed/PlayerSpawned contributors; Omen still requires a real player. Within each pool the first confirmed player takes precedence over a tame/summon. Simultaneous fire/spirit ticks also prefer a real player, then use the fire candidate if both are equally eligible. This selects a reward representative, not the largest damage contributor. The server still validates that source, ownership and duplicate deaths; a disconnected/unverifiable selected source is not replaced with a nearby player.
+
+Reaping is independent of this contributor policy: all creature and player deaths within 24m count, including tamed creatures, PlayerSpawned summons, mixed DoT, monster combat and environmental deaths. A death can benefit each nearby surviving Reaping creature once, not the dead creature itself. Despawns, unloads and deletion without a confirmed death do not count. Owner, distance, duplicate-death and growth-limit checks remain in place; a confirmed player respawn allows that player's next death to count again. Summon-heavy fights and repeated player deaths can reach the existing growth caps faster.
 
 ![Juggernaut modifier producing heavy knockback](https://i.ibb.co/xKxGBpjK/juggernaut.gif)
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.7
+
+- Reaping now absorbs every actual creature or player death within 24m, including tamed creatures and PlayerSpawned summons, regardless of killer or damage source. Each death can benefit every nearby surviving Reaping creature once; the dying creature cannot benefit from itself. Existing healing/growth limits, owner checks and confirmed player-respawn resets remain in place. Despawns, unloads and deletion without a confirmed death do not count.
+- Allow Karma rewards from lethal poison, fire or spirit pools with a confirmed player, tamed or PlayerSpawned contributor, including mixed damage. Omen still requires a real player; summon-only and unknown-only pools cannot trigger it. Preserve the server's source, ownership and duplicate-death checks.
+- Snapshot the lethal DoT contribution before damage callbacks can change it, and defer source-ledger lookups until actual damage ticks. Preserve poison replacement and fire/spirit pool boundaries; unrelated active effects do not qualify another cause of death.
+- Remove Reaping-only killer resolution and update English/Korean descriptions. Add isolated checks for inclusive nearby deaths, the player death-prefix timing, remote death confirmation, replay protection and respawn reuse. Update the server and all clients together; actual multiplayer gameplay remains to be verified.
+
 ## 1.2.6
 
 - Fix recursive level changes with Path of Valheiman's additional-star assignment that can exhaust the stack and hard-crash the game. Complete each CM-owned level assignment using the final level left by other mods, without repeatedly restoring the initial roll.
