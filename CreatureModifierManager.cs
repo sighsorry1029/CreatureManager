@@ -2187,6 +2187,7 @@ internal static class CreatureModifierManager
         }
 
         ZRoutedRpc.instance.Register<ZPackage>(VortexHitEffectRpc, RPC_VortexHitEffect);
+        ZRoutedRpc.instance.Register<ZPackage>(VortexHitEffectRequestRpc, RPC_VortexHitEffectRequest);
         ZRoutedRpc.instance.Register<ZPackage>(ReflectionEffectRpc, RPC_ReflectionEffect);
         ZRoutedRpc.instance.Register<ZPackage>(ReflectionDamageRequestRpc, RPC_ReflectionDamageRequest);
         ZRoutedRpc.instance.Register<ZPackage>(BlinkEffectRpc, RPC_BlinkEffect);
@@ -2225,9 +2226,6 @@ internal static class CreatureModifierManager
         character.m_nview.Register(
             ReapingRespawnRequestRpc,
             sender => RPC_ReapingRespawnRequest(character, sender));
-        character.m_nview.Register<Vector3>(
-            VortexHitEffectRequestRpc,
-            (sender, position) => RPC_VortexHitEffectRequest(character, sender, position));
         InitializeServerReflectionObservation(character);
     }
 
@@ -4434,10 +4432,14 @@ internal static class CreatureModifierManager
             {
                 try
                 {
-                    targetView.InvokeRPC(
+                    ZPackage package = new();
+                    package.Write(targetId);
+                    package.Write(position);
+                    // Dedicated servers may know the ZDO without instantiating its ZNetView.
+                    ZRoutedRpc.instance.InvokeRoutedRPC(
                         ZRoutedRpc.instance.GetServerPeerID(),
                         VortexHitEffectRequestRpc,
-                        position);
+                        package);
                     return;
                 }
                 catch (Exception ex)
@@ -4450,29 +4452,55 @@ internal static class CreatureModifierManager
         PlayVortexHitEffectsLocal(position, targetId, target.transform);
     }
 
-    private static void RPC_VortexHitEffectRequest(Character target, long sender, Vector3 position)
+    private static void RPC_VortexHitEffectRequest(long sender, ZPackage package)
     {
         if (ZNet.instance == null ||
             !ZNet.instance.IsServer() ||
-            ZRoutedRpc.instance == null ||
-            target == null ||
-            target.IsDead() ||
-            !IsFinite(position) ||
-            !TryGetZdo(target, out ZDO zdo) ||
-            zdo.GetOwner() != sender ||
-            !TryGetModifierPower(target, ModifierMask.Vortex, VortexPowerKey, VortexDefaultPower, out _))
+            ZRoutedRpc.instance == null || ZDOMan.instance == null)
         {
             return;
         }
 
-        Vector3 offset = position - target.GetCenterPoint();
-        if (offset.sqrMagnitude > VortexEffectRequestValidationRange * VortexEffectRequestValidationRange)
+        ZDOID targetId;
+        Vector3 position;
+        try
+        {
+            targetId = package.ReadZDOID();
+            position = package.ReadVector3();
+        }
+        catch
         {
             return;
         }
 
-        ZDOID targetId = target.GetZDOID();
-        if (targetId == ZDOID.None)
+        if (targetId == ZDOID.None || !IsFinite(position) || !IsModifierPeerAvailable(sender)) return;
+        ZDO zdo = ZDOMan.instance.GetZDO(targetId);
+        if (zdo == null || zdo.GetOwner() != sender || !HasModifier(zdo, ModifierMask.Vortex)) return;
+
+        Vector3 targetPosition;
+        if (TryFindCharacter(targetId, out Character target))
+        {
+            if (target.IsDead() ||
+                !TryGetModifierPower(target, ModifierMask.Vortex, VortexPowerKey, VortexDefaultPower, out _)) return;
+            targetPosition = target.GetCenterPoint();
+        }
+        else
+        {
+            // Preserve live instance policies above (including runtime boss flags).
+            // Use synchronized state only when the server has not loaded the creature.
+            Character? prefab = GetCharacterPrefab(zdo);
+            if (prefab == null || prefab.IsPlayer() ||
+                !CreatureLevelManager.AllowsModifierEffects(zdo, prefab.IsBoss(), zdo.GetBool(KarmaEnforcerKey, false)) ||
+                !IsPositiveFinite(Mathf.Clamp01(zdo.GetFloat(VortexPowerKey, VortexDefaultPower)))) return;
+
+            float health = zdo.GetFloat(ZDOVars.s_health, zdo.GetFloat(ZDOVars.s_maxHealth, prefab.m_health));
+            if (!IsPositiveFinite(health) || zdo.GetBool(ZDOVars.s_dead, false)) return;
+            targetPosition = zdo.GetPosition();
+        }
+
+        Vector3 offset = position - targetPosition;
+        if (!IsFinite(targetPosition) ||
+            offset.sqrMagnitude > VortexEffectRequestValidationRange * VortexEffectRequestValidationRange)
         {
             return;
         }
@@ -5098,11 +5126,11 @@ internal static class CreatureModifierManager
         sourceZdo = ZDOMan.instance.GetZDO(sourceId);
         targetZdo = ZDOMan.instance.GetZDO(targetId);
         if (sourceZdo == null || targetZdo == null || sourceZdo.GetOwner() != sender ||
-            !IsReflectionPeerAvailable(sender) || !IsReflectionPeerAvailable(targetZdo.GetOwner()) ||
+            !IsModifierPeerAvailable(sender) || !IsModifierPeerAvailable(targetZdo.GetOwner()) ||
             !HasModifier(sourceZdo, ModifierMask.Reflection)) return false;
 
-        Character? sourcePrefab = GetReflectionCharacterPrefab(sourceZdo);
-        Character? targetPrefab = GetReflectionCharacterPrefab(targetZdo);
+        Character? sourcePrefab = GetCharacterPrefab(sourceZdo);
+        Character? targetPrefab = GetCharacterPrefab(targetZdo);
         if (sourcePrefab == null || sourcePrefab.IsPlayer() || targetPrefab == null ||
             !CreatureLevelManager.AllowsModifierEffects(sourceZdo, sourcePrefab.IsBoss(),
                 sourceZdo.GetBool(KarmaEnforcerKey, false))) return false;
@@ -5129,7 +5157,7 @@ internal static class CreatureModifierManager
             : CreatureFactionManager.IsHostileFromSynchronizedState(sourceZdo, sourcePrefab, targetZdo, targetPrefab);
     }
 
-    private static bool IsReflectionPeerAvailable(long owner)
+    private static bool IsModifierPeerAvailable(long owner)
     {
         if (owner == 0 || ZRoutedRpc.instance == null || ZNet.instance == null) return false;
         if (owner == ZRoutedRpc.instance.GetServerPeerID()) return true;
@@ -5140,7 +5168,7 @@ internal static class CreatureModifierManager
         return false;
     }
 
-    private static Character? GetReflectionCharacterPrefab(ZDO zdo)
+    private static Character? GetCharacterPrefab(ZDO zdo)
     {
         GameObject? prefab = ZNetScene.instance != null ? ZNetScene.instance.GetPrefab(zdo.GetPrefab()) : null;
         return prefab != null ? prefab.GetComponent<Character>() : null;
@@ -5275,7 +5303,7 @@ internal static class CreatureModifierManager
         // Vanilla omits s_health for full-health creatures. An explicitly invalid HP
         // value must still be rejected rather than mistaken for a missing value.
         float maxHealth = sourceZdo.GetFloat(ZDOVars.s_maxHealth, float.NaN);
-        if (float.IsNaN(maxHealth)) maxHealth = GetReflectionCharacterPrefab(sourceZdo)?.m_health ?? float.NaN;
+        if (float.IsNaN(maxHealth)) maxHealth = GetCharacterPrefab(sourceZdo)?.m_health ?? float.NaN;
         float health = sourceZdo.GetFloat(ZDOVars.s_health, maxHealth);
         if (float.IsNaN(health) || float.IsInfinity(health) || health < 0f)
         {

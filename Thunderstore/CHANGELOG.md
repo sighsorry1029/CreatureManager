@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.9
+
+- Fix missing Vortex hit effects on dedicated servers when projectile damage is ignored but the server has no loaded creature instance. Send effect requests through a global RPC, validate the synchronized creature data, and broadcast the effects to clients.
+- Preserve Vortex's projectile-ignore chance and damage handling, owner and modifier checks, effect distance limit, and per-peer/per-creature request throttles. Add isolated regression coverage for unloaded targets and rejected or repeated requests. Update the server and all clients together; actual dedicated-server gameplay remains to be verified.
+- Change the default Dungeon Enforcer Spawn Delay from 7 to **5 seconds**. Existing saved delay values are preserved.
+
 ## 1.2.8
 
 - Fix Reflection requests being silently dropped when a dedicated server has synchronized creature data but no loaded creature instance. Use a global request RPC and ZDO-based server validation, then send approved damage to the attacker's owner and broadcast the effects.

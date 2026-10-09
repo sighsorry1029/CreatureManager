@@ -23,6 +23,7 @@ internal static class ReflectionContracts
     private static readonly Dictionary<ZDOID, Vector3> Positions = new();
     private static readonly List<IEnumerator> Pending = new();
     private static readonly List<(long Owner, ZDOID Target, string Name, float Damage)> Sent = new();
+    private static readonly List<(long Receiver, string Name, ZDOID Target, Vector3 Position)> VortexEffects = new();
     private static readonly ZDOMan Manager = New<ZDOMan>();
     private static readonly ZNet Net = New<ZNet>();
     private static readonly ZRoutedRpc Router = New<ZRoutedRpc>();
@@ -30,6 +31,9 @@ internal static class ReflectionContracts
     private static bool HasAi = true;
     private static float Now;
     private static bool Effects = true;
+    private static Character? LoadedTarget;
+    private static ZDO? LoadedZdo;
+    private static bool LoadedDead, LoadedEffects = true;
     private static int Fx, Checks;
     private static uint NextId = 99000;
     private static long Mask;
@@ -51,6 +55,10 @@ internal static class ReflectionContracts
             CheckObservations();
             CheckFactions();
             CheckTransport(plugin);
+            int reflectionChecks = Checks;
+            CheckVortexRequests();
+            System.Console.WriteLine($"Vortex FX network contracts: {Checks - reflectionChecks} checks passed. Global request/broadcast, unloaded target, owner/config/health/position validation and peer/target throttles. Scene/transport boundaries substituted; no multiplayer session.");
+            Checks = reflectionChecks;
         }
         finally
         {
@@ -241,6 +249,92 @@ internal static class ReflectionContracts
         Require(hook.GetMethod("Prefix", All) != null && hook.GetMethod("Postfix", All) != null, "health hook observes both sides of Deserialize");
     }
 
+    private static void CheckVortexRequests()
+    {
+        long vortexMask = Convert.ToInt64(Enum.Parse(Modifiers.GetNestedType("ModifierMask", All)!, "Vortex"));
+        ZDO AddVortex(long owner = 42, bool player = false)
+        {
+            ZDO zdo = Add(player, owner, Character.Faction.ForestMonsters);
+            ZDOExtraData.Set(zdo.m_uid, "CreatureManager_ModifierMask64".GetStableHashCode(), vortexMask);
+            // Leave power and health absent to exercise the real defaults for a full-health creature.
+            return zdo;
+        }
+        void RequestFx(ZDO zdo, Vector3 position, long sender = 42)
+        {
+            ZPackage package = new(); package.Write(zdo.m_uid); package.Write(position); package.SetPos(0);
+            Call("RPC_VortexHitEffectRequest", sender, package);
+        }
+        void Reject(Action<ZDO> change, Vector3 position, long sender = 42)
+        {
+            Reset(); ZDO zdo = AddVortex(); change(zdo); RequestFx(zdo, position, sender);
+            Require(VortexEffects.Count == 0 && Dictionary("ServerVortexPeerNextAllowedTimes").Count == 0 &&
+                    Dictionary("ServerVortexEffectNextAllowedTimes").Count == 0, "invalid Vortex request has no FX or throttle side effects");
+        }
+
+        Reset(); ZDO target = AddVortex(); Vector3 hit = new(2f, 1f, 3f);
+        RequestFx(target, hit);
+        Require(VortexEffects.Count == 1 && VortexEffects[0].Receiver == ZRoutedRpc.Everybody &&
+                VortexEffects[0].Name == "CreatureManager_VortexHitEffect" &&
+                VortexEffects[0].Target == target.m_uid && VortexEffects[0].Position == hit,
+            "unloaded Vortex target broadcasts exact position and identity with default power/full health");
+        RequestFx(target, hit); Require(VortexEffects.Count == 1, "Vortex duplicate target throttled");
+        ZDO second = AddVortex(); RequestFx(second, hit);
+        Require(VortexEffects.Count == 1 && !Dictionary("ServerVortexEffectNextAllowedTimes").Contains(second.m_uid), "Vortex peer throttle spans targets");
+        Owners[target.m_uid] = 43; RequestFx(target, hit, 43);
+        Require(VortexEffects.Count == 1 && !Dictionary("ServerVortexPeerNextAllowedTimes").Contains(43L), "Vortex target throttle survives owner change");
+        Now = .1f; RequestFx(target, hit, 43);
+        Require(VortexEffects.Count == 2, "Vortex throttle expires for new owner");
+        RequestFx(second, hit);
+        Require(VortexEffects.Count == 3, "independent Vortex target and peer can broadcast");
+
+        Reject(z => Owners[z.m_uid] = 43, hit);
+        Reject(z => Owners[z.m_uid] = 99, hit, 99);
+        Reject(z => Owners[z.m_uid] = 0, hit, 0);
+        Reject(z => Zdos.Remove(z.m_uid), hit);
+        Reject(z => Prefabs.Remove(z.m_uid), hit);
+        Reject(z => Prefabs[z.m_uid] = New<Player>(), hit);
+        Reject(z => ZDOExtraData.Set(z.m_uid, "CreatureManager_ModifierMask64".GetStableHashCode(), Mask), hit);
+        Reject(z => Set(z, "CreatureManager_VortexPower".GetStableHashCode(), 0f), hit);
+        Reject(z => Set(z, "CreatureManager_VortexPower".GetStableHashCode(), float.NaN), hit);
+        Reject(z => Effects = false, hit);
+        Reject(z => Set(z, ZDOVars.s_dead, 1), hit);
+        Reject(z => Set(z, ZDOVars.s_health, 0f), hit);
+        Reject(z => Set(z, ZDOVars.s_health, float.NaN), hit);
+        Reject(z => Set(z, ZDOVars.s_health, float.PositiveInfinity), hit);
+        Reject(z => Positions[z.m_uid] = new Vector3(float.NaN, 0f, 0f), hit);
+        Reject(z => { }, new Vector3(float.NaN, 0f, 0f));
+        Reject(z => { }, new Vector3(0f, float.PositiveInfinity, 0f));
+        Reject(z => { }, new Vector3(64.01f, 0f, 0f));
+        Reset(); target = AddVortex(); RequestFx(target, new Vector3(64f, 0f, 0f));
+        Require(VortexEffects.Count == 1, "Vortex 64m validation boundary retained");
+
+        Reset(); target = AddVortex(); LoadedTarget = New<Character>(); LoadedZdo = target; Effects = false;
+        RequestFx(target, new Vector3(0f, 65f, 0f));
+        Require(VortexEffects.Count == 1, "live Vortex policy and center override prefab classification and origin");
+        Now = .1f; Effects = true; LoadedEffects = false; RequestFx(target, hit);
+        Require(VortexEffects.Count == 1, "live Vortex exclusion overrides allowed prefab policy");
+        LoadedEffects = true; LoadedDead = true; RequestFx(target, hit);
+        Require(VortexEffects.Count == 1, "live dead Vortex target rejected");
+        LoadedDead = false; RequestFx(target, hit);
+        Require(VortexEffects.Count == 2, "live Vortex target broadcasts after valid recheck");
+
+        Reset(); Call("RPC_VortexHitEffectRequest", 42L, new ZPackage());
+        ZPackage noTarget = new(); noTarget.Write(ZDOID.None); noTarget.Write(Vector3.zero); noTarget.SetPos(0);
+        Call("RPC_VortexHitEffectRequest", 42L, noTarget);
+        Require(VortexEffects.Count == 0 && Dictionary("ServerVortexPeerNextAllowedTimes").Count == 0, "malformed and empty target requests ignored");
+
+        var send = PatchProcessor.GetOriginalInstructions(Modifiers.GetMethod("PlayVortexHitEffects", All)!).ToList();
+        Require(send.Any(i => i.operand is MethodInfo m && m.DeclaringType == typeof(ZRoutedRpc) && m.Name == "InvokeRoutedRPC" &&
+                    m.GetParameters().Length == 3) &&
+                !send.Any(i => i.operand is MethodInfo m && m.DeclaringType == typeof(ZNetView) && m.Name == "InvokeRPC"),
+            "Vortex request uses global routing without a server target instance");
+        var register = PatchProcessor.GetOriginalInstructions(Modifiers.GetMethod("RegisterRpcs", All)!).ToList();
+        Require(register.Any(i => Equals(i.operand, "CreatureManager_VortexHitEffectRequest")) &&
+                register.Any(i => i.operand is MethodInfo m && m.Name == "RPC_VortexHitEffectRequest"), "Vortex request registered globally");
+        var registerObject = PatchProcessor.GetOriginalInstructions(Modifiers.GetMethod("RegisterCharacterRpcs", All)!).ToList();
+        Require(!registerObject.Any(i => Equals(i.operand, "CreatureManager_VortexHitEffectRequest")), "Vortex object request registration removed");
+    }
+
     private static ZDO Add(bool player, long owner, Character.Faction faction)
     {
         ZDO zdo = New<ZDO>(); zdo.m_uid = new ZDOID(98765L, ++NextId);
@@ -256,8 +350,10 @@ internal static class ReflectionContracts
     private static void Reset()
     {
         foreach (string name in new[] { "ServerReflectionRequestStates", "ServerPendingReflectionRequests",
-                     "ServerPendingReflectionRequestCounts", "ServerReflectionNextAllowedTimes" }) Dictionary(name).Clear();
-        Zdos.Clear(); Prefabs.Clear(); Owners.Clear(); Positions.Clear(); Pending.Clear(); Sent.Clear(); Now = 0f; Fx = 0; Effects = true; HasAi = true;
+                     "ServerPendingReflectionRequestCounts", "ServerReflectionNextAllowedTimes",
+                     "ServerVortexPeerNextAllowedTimes", "ServerVortexEffectNextAllowedTimes" }) Dictionary(name).Clear();
+        Zdos.Clear(); Prefabs.Clear(); Owners.Clear(); Positions.Clear(); Pending.Clear(); Sent.Clear(); VortexEffects.Clear(); Now = 0f; Fx = 0; Effects = true; HasAi = true;
+        LoadedTarget = null; LoadedZdo = null; LoadedDead = false; LoadedEffects = true;
     }
     private static void Observe(ZDO zdo, bool before = false) => Call("ObserveSynchronizedReflectionHealth", zdo, before);
     private static void SyncHealth(ZDO zdo, float health) { Observe(zdo, true); Set(zdo, ZDOVars.s_health, health); Observe(zdo); }
@@ -290,15 +386,19 @@ internal static class ReflectionContracts
                 : type == "ZNet" ? method.Name switch { "get_instance" => nameof(GetNet), "IsServer" => nameof(IsServer), _ => null }
                 : type == "ZDOMan" ? method.Name switch { "get_instance" => nameof(GetManager), "GetZDO" => nameof(GetZdo), _ => null }
                 : type == "ZDO" ? method.Name switch { "GetOwner" => nameof(Owner), "GetPosition" => nameof(Position), _ => null }
-                : type == "ZRoutedRpc" ? method.Name switch { "get_instance" => nameof(GetRouter), "InvokeRoutedRPC" => nameof(Send), _ => null }
+                : type == "ZRoutedRpc" ? method.Name switch { "get_instance" => nameof(GetRouter),
+                    "InvokeRoutedRPC" => method.Parameters.Count == 3 ? nameof(SendGlobal) : nameof(Send), _ => null }
                 : type == "UnityEngine.MonoBehaviour" && method.Name == "StartCoroutine" ? nameof(Start)
                 : type == "UnityEngine.Time" && method.Name == "get_realtimeSinceStartup" ? nameof(Time)
                 : type == "UnityEngine.Random" && method.Name == "Range" ? nameof(Random)
-                : type == "Character" ? method.Name switch { "IsPlayer" => nameof(IsPlayer), "IsBoss" => nameof(IsBoss), _ => null }
+                : type == "Character" ? method.Name switch { "IsPlayer" => nameof(IsPlayer), "IsBoss" => nameof(IsBoss),
+                    "IsDead" => nameof(IsDead), "GetCenterPoint" => nameof(Center), _ => null }
                 : type == "UnityEngine.Component" && method.Name == "GetComponent" ? nameof(GetAi)
-                : type == "CreatureManager.CreatureLevelManager" && method.Name == "AllowsModifierEffects" ? nameof(Allowed)
+                : type == "CreatureManager.CreatureLevelManager" && method.Name == "AllowsModifierEffects"
+                    ? method.Parameters.Count == 3 ? nameof(Allowed) : nameof(AllowedLive)
                 : type == Modifiers.FullName ? method.Name switch {
-                    "GetReflectionCharacterPrefab" => nameof(Prefab), "IsReflectionPeerAvailable" => nameof(PeerAvailable),
+                    "GetCharacterPrefab" => nameof(Prefab), "IsModifierPeerAvailable" => nameof(PeerAvailable),
+                    "TryGetZdo" => nameof(CharacterZdo),
                     "TryFindCharacter" => nameof(Find), "GetNetworkTimeSeconds" => nameof(Time), "GetNetworkTimeSecondsDouble" => nameof(PreciseTime),
                     "PlayReflectionEffects" => nameof(PlayFx), _ => null } : null;
             MethodInfo? replacement = boundary == null ? null : typeof(ReflectionContracts).GetMethod(boundary, All);
@@ -324,11 +424,23 @@ internal static class ReflectionContracts
     private static Vector3 Position(ZDO zdo) => Positions[zdo.m_uid];
     private static Character? Prefab(ZDO zdo) => Prefabs.TryGetValue(zdo.m_uid, out Character value) ? value : null;
     private static bool PeerAvailable(long owner) => owner == 42 || owner == 43;
-    private static bool Find(ZDOID _, out Character character) { character = null!; return false; }
+    private static bool Find(ZDOID id, out Character character)
+    {
+        character = LoadedZdo != null && LoadedZdo.m_uid == id ? LoadedTarget! : null!;
+        return !ReferenceEquals(character, null);
+    }
+    private static bool CharacterZdo(Character character, out ZDO zdo)
+    {
+        zdo = ReferenceEquals(character, LoadedTarget) ? LoadedZdo! : null!;
+        return zdo != null;
+    }
+    private static bool IsDead(Character _) => LoadedDead;
+    private static Vector3 Center(Character _) => Positions[LoadedZdo!.m_uid] + Vector3.up;
     private static bool IsPlayer(Character c) => c is Player;
     private static bool IsBoss(Character c) => false;
     private static BaseAI? GetAi(Component c) => HasAi && c is not Player ? PrefabAi : null;
     private static bool Allowed(ZDO _, bool boss, bool enforcer) => Effects;
+    private static bool AllowedLive(Character _) => LoadedEffects;
     private static float Time() => Now;
     private static double PreciseTime() => Now;
     private static float Random(float min, float max) => 0f;
@@ -336,4 +448,10 @@ internal static class ReflectionContracts
     private static void PlayFx(ZDO source, ZDO target) => Fx++;
     private static void Send(ZRoutedRpc _, long owner, ZDOID target, string name, params object[] args) =>
         Sent.Add((owner, target, name, (float)args[1]));
+    private static void SendGlobal(ZRoutedRpc _, long receiver, string name, params object[] args)
+    {
+        ZPackage package = (ZPackage)args[0]; package.SetPos(0);
+        Vector3 position = package.ReadVector3(); ZDOID target = package.ReadZDOID();
+        VortexEffects.Add((receiver, name, target, position));
+    }
 }
