@@ -67,6 +67,7 @@ internal static class Program
         ManagedContracts.Run(plugin);
         DotAttributionContracts.Run(plugin);
         ReapingContracts.Run(plugin);
+        ReflectionContracts.Run(plugin);
         FrozenKingContracts.Run(plugin);
         LevelModeContracts.Run(plugin);
         BossBlockerContracts.Run(plugin);

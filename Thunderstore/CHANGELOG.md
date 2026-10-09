@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.8
+
+- Fix Reflection requests being silently dropped when a dedicated server has synchronized creature data but no loaded creature instance. Use a global request RPC and ZDO-based server validation, then send approved damage to the attacker's owner and broadcast the effects.
+- Observe health before and after synchronization so an observed first hit can be authorized regardless of packet order. Retain observation and replay protection across instance unloads, and discard old evidence and pending requests on ownership changes. Do not infer past damage from an already wounded first snapshot.
+- Preserve Reflection's melee eligibility, proc chance, damage cap, ownership and duplicate-request checks. Resolve unloaded creature relationships from synchronized faction, taming and AI state while retaining the existing live checks when both instances are available.
+- Add 97 isolated Reflection regression checks, including missing server instances, synchronization order, request replay, ownership changes, NPC attackers and custom faction rules. Update the server and all clients together; actual dedicated-server gameplay remains to be verified.
+
 ## 1.2.7
 
 - Reaping now absorbs every actual creature or player death within 24m, including tamed creatures and PlayerSpawned summons, regardless of killer or damage source. Each death can benefit every nearby surviving Reaping creature once; the dying creature cannot benefit from itself. Existing healing/growth limits, owner checks and confirmed player-respawn resets remain in place. Despawns, unloads and deletion without a confirmed death do not count.

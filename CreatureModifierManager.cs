@@ -2188,6 +2188,7 @@ internal static class CreatureModifierManager
 
         ZRoutedRpc.instance.Register<ZPackage>(VortexHitEffectRpc, RPC_VortexHitEffect);
         ZRoutedRpc.instance.Register<ZPackage>(ReflectionEffectRpc, RPC_ReflectionEffect);
+        ZRoutedRpc.instance.Register<ZPackage>(ReflectionDamageRequestRpc, RPC_ReflectionDamageRequest);
         ZRoutedRpc.instance.Register<ZPackage>(BlinkEffectRpc, RPC_BlinkEffect);
         ZRoutedRpc.instance.Register<ZPackage>(DeathwardEffectRpc, RPC_DeathwardEffect);
         ZRoutedRpc.instance.Register<ZPackage>(ReapingFeedbackRpc, RPC_ReapingFeedback);
@@ -2204,10 +2205,6 @@ internal static class CreatureModifierManager
             return;
         }
 
-        character.m_nview.Register<long, ZDOID, float>(
-            ReflectionDamageRequestRpc,
-            (sender, requestId, targetId, amount) =>
-                RPC_ReflectionDamageRequest(character, sender, requestId, targetId, amount));
         character.m_nview.Register<ZDOID, float>(
             ReflectionDamageRpc,
             (sender, sourceId, amount) => ApplyAuthorizedReflectionDamage(character, sender, sourceId, amount));
@@ -2259,7 +2256,12 @@ internal static class CreatureModifierManager
         ZDOID characterId = character.GetZDOID();
         if (characterId != ZDOID.None)
         {
-            RemoveServerReflectionState(characterId);
+            // Unloading the Unity instance does not destroy its synchronized identity.
+            // Keep health observations and replay protection until the ZDO is removed.
+            if (ZDOMan.instance == null || ZDOMan.instance.GetZDO(characterId) == null)
+            {
+                RemoveServerReflectionState(characterId);
+            }
             ServerVortexEffectNextAllowedTimes.Remove(characterId);
             ServerKnockbackNextAllowedTimes.Remove(characterId);
             RemoveReapingAuthorizationsForReaper(characterId);
@@ -2404,10 +2406,7 @@ internal static class CreatureModifierManager
                 !zdo.GetBool(ZDOVars.s_dead, false) &&
                 (float.IsNaN(health) || !float.IsInfinity(health) && health > 0f))
             {
-                float fallbackHealth = TryFindCharacter(entry.Key, out Character source)
-                    ? source.GetHealth()
-                    : float.NaN;
-                ObserveServerReflectionHealth(zdo, entry.Value, now, fallbackHealth);
+                ObserveServerReflectionHealth(zdo, entry.Value, now);
                 continue;
             }
 
@@ -4690,13 +4689,16 @@ internal static class CreatureModifierManager
         }
     }
 
-    private static void PlayReflectionEffects(Character source, Character target, Vector3 hitPoint)
+    private static void PlayReflectionEffects(ZDO source, ZDO target)
     {
-        Vector3 position = hitPoint.sqrMagnitude > 0.001f ? hitPoint : source.GetCenterPoint();
-        Vector3 direction = target.GetCenterPoint() - position;
+        Vector3 position = TryFindCharacter(source.m_uid, out Character sourceCharacter)
+            ? sourceCharacter.GetCenterPoint() : source.GetPosition() + Vector3.up;
+        Vector3 targetPosition = TryFindCharacter(target.m_uid, out Character targetCharacter)
+            ? targetCharacter.GetCenterPoint() : target.GetPosition() + Vector3.up;
+        Vector3 direction = targetPosition - position;
         if (direction.sqrMagnitude <= 0.001f)
         {
-            direction = source.transform.forward;
+            direction = Vector3.forward;
         }
 
         if (ZNet.instance != null && ZNet.instance.IsServer() && ZRoutedRpc.instance != null)
@@ -4946,84 +4948,42 @@ internal static class CreatureModifierManager
     }
 
     private static void RPC_ReflectionDamageRequest(
-        Character source,
         long sender,
-        long requestId,
-        ZDOID targetId,
-        float amount)
+        ZPackage package)
     {
         if (ZNet.instance == null ||
             !ZNet.instance.IsServer() ||
             ZDOMan.instance == null ||
-            ZRoutedRpc.instance == null ||
-            source == null ||
-            source.IsPlayer() ||
-            source.m_nview == null ||
-            !source.m_nview.IsValid() ||
-            requestId <= 0 ||
-            targetId == ZDOID.None ||
-            amount <= 0f ||
-            float.IsNaN(amount) ||
-            float.IsInfinity(amount) ||
-            !TryGetProcModifierState(
-                source,
-                ModifierMask.Reflection,
-                ReflectionChanceKey,
-                out ZDO sourceZdo,
-                out float procChance) ||
-            sourceZdo.GetOwner() != sender ||
-            !TryFindCharacter(targetId, out Character target) ||
-            target == source ||
-            target.IsDead() ||
-            !IsHostileAttacker(source, target) ||
-            Vector3.Distance(source.transform.position, target.transform.position) > ModifierRequestValidationRange ||
-            !IsServerObservedReflectionMelee(source, targetId))
+            ZRoutedRpc.instance == null)
         {
             return;
         }
 
-        ZDOID sourceId = source.GetZDOID();
-        float reflectionPower = Mathf.Clamp01(sourceZdo.GetFloat(ReflectionPowerKey, ReflectionDefaultPower));
-        if (sourceId == ZDOID.None || reflectionPower <= 0f)
+        ZDOID sourceId;
+        ZDOID targetId;
+        long requestId;
+        float amount;
+        try
+        {
+            sourceId = package.ReadZDOID();
+            requestId = package.ReadLong();
+            targetId = package.ReadZDOID();
+            amount = package.ReadSingle();
+        }
+        catch
         {
             return;
         }
 
-        float maximumAmount = Mathf.Max(0f, source.GetMaxHealth()) * Mathf.Clamp01(reflectionPower);
-        if (maximumAmount <= 0f || amount > maximumAmount + 0.1f)
+        if (requestId <= 0 || !IsPositiveFinite(amount) ||
+            !TryValidateReflectionRequest(sender, sourceId, targetId, amount,
+                out ZDO sourceZdo, out _, out float reflectionPower, out _))
         {
             return;
         }
 
-        ZNetView? targetView = target.m_nview;
-        if (targetView == null || !targetView.IsValid())
-        {
-            return;
-        }
-
-        if (!ServerReflectionRequestStates.TryGetValue(sourceId, out ServerReflectionRequestState requestState))
-        {
-            requestState = new ServerReflectionRequestState();
-            ServerReflectionRequestStates[sourceId] = requestState;
-            ObserveServerReflectionHealth(
-                sourceZdo,
-                requestState,
-                GetNetworkTimeSeconds(),
-                source.GetHealth());
-        }
-
-        if (!requestState.RequestOwnerInitialized)
-        {
-            requestState.RequestOwnerInitialized = true;
-            requestState.RequestOwner = sender;
-        }
-        else if (requestState.RequestOwner != sender)
-        {
-            ReleasePendingReflectionRequestsForSource(sourceId);
-            requestState.RequestOwner = sender;
-            requestState.LastRequestId = 0;
-            ResetServerReflectionObservation(sourceZdo, requestState);
-        }
+        ServerReflectionRequestState requestState = GetServerReflectionState(sourceZdo);
+        ObserveServerReflectionHealth(sourceZdo, requestState, GetNetworkTimeSeconds());
 
         if (requestId <= requestState.LastRequestId ||
             ServerPendingReflectionRequests.Count >= MaximumPendingReflectionRequests ||
@@ -5043,14 +5003,11 @@ internal static class CreatureModifierManager
         {
             ZNet.instance.StartCoroutine(
                 AuthorizeReflectionAfterHealthSync(
-                    source,
-                    target,
                     sender,
                     sourceId,
                     targetId,
-                    Mathf.Min(amount, maximumAmount),
+                    amount,
                     reflectionPower,
-                    procChance,
                     requestState,
                     pendingRequest,
                     authority,
@@ -5064,14 +5021,11 @@ internal static class CreatureModifierManager
     }
 
     private static IEnumerator AuthorizeReflectionAfterHealthSync(
-        Character source,
-        Character target,
         long sender,
         ZDOID sourceId,
         ZDOID targetId,
         float amount,
         float reflectionPower,
-        float procChance,
         ServerReflectionRequestState requestState,
         ReflectionPendingRequestKey pendingRequest,
         ZDOMan authority,
@@ -5088,31 +5042,20 @@ internal static class CreatureModifierManager
                     !ReferenceEquals(currentState, requestState) ||
                     requestState.RequestOwner != sender ||
                     !ServerPendingReflectionRequests.TryGetValue(pendingRequest, out long pendingSender) ||
-                    pendingSender != sender ||
-                    source == null ||
-                    source.GetZDOID() != sourceId ||
-                    source.m_nview == null ||
-                    !source.m_nview.IsValid() ||
-                    target == null ||
-                    target.GetZDOID() != targetId ||
-                    target.IsDead() ||
-                    target.m_nview == null ||
-                    !target.m_nview.IsValid() ||
-                    !IsHostileAttacker(source, target) ||
-                    Vector3.Distance(source.transform.position, target.transform.position) >
-                    ModifierRequestValidationRange)
+                    pendingSender != sender)
                 {
                     yield break;
                 }
 
-                ZDO sourceZdo = authority.GetZDO(sourceId);
-                if (sourceZdo == null || sourceZdo.GetOwner() != sender)
+                if (!TryValidateReflectionRequest(sender, sourceId, targetId, amount,
+                        out ZDO sourceZdo, out ZDO targetZdo, out float currentPower, out float procChance) ||
+                    currentPower != reflectionPower)
                 {
                     yield break;
                 }
 
                 float now = GetNetworkTimeSeconds();
-                ObserveServerReflectionHealth(sourceZdo, requestState, now, source.GetHealth());
+                ObserveServerReflectionHealth(sourceZdo, requestState, now);
                 float actualDamage = amount / reflectionPower;
                 if (TryConsumeServerReflectionDamage(requestState, actualDamage, now))
                 {
@@ -5127,11 +5070,11 @@ internal static class CreatureModifierManager
                         yield break;
                     }
 
-                    ZNetView targetView = target.m_nview;
-                    PlayReflectionEffects(source, target, source.GetCenterPoint());
+                    PlayReflectionEffects(sourceZdo, targetZdo);
                     // Consume the full observed health loss above before limiting the outgoing damage.
                     // Capping the request first would leave part of that loss available for another request.
-                    targetView.InvokeRPC(ReflectionDamageRpc, sourceId, LimitReflectionDamage(amount));
+                    ZRoutedRpc.instance.InvokeRoutedRPC(targetZdo.GetOwner(), targetId,
+                        ReflectionDamageRpc, sourceId, LimitReflectionDamage(amount));
                     yield break;
                 }
 
@@ -5140,9 +5083,70 @@ internal static class CreatureModifierManager
         }
         finally
         {
-            ReleasePendingReflectionRequest(pendingRequest);
+            ReleasePendingReflectionRequest(pendingRequest, sender);
         }
     }
+
+    private static bool TryValidateReflectionRequest(long sender, ZDOID sourceId, ZDOID targetId, float amount,
+        out ZDO sourceZdo, out ZDO targetZdo, out float power, out float chance)
+    {
+        sourceZdo = null!;
+        targetZdo = null!;
+        power = chance = 0f;
+        if (ZDOMan.instance == null || sourceId == ZDOID.None || targetId == ZDOID.None ||
+            sourceId == targetId || sender == 0 || !IsPositiveFinite(amount)) return false;
+        sourceZdo = ZDOMan.instance.GetZDO(sourceId);
+        targetZdo = ZDOMan.instance.GetZDO(targetId);
+        if (sourceZdo == null || targetZdo == null || sourceZdo.GetOwner() != sender ||
+            !IsReflectionPeerAvailable(sender) || !IsReflectionPeerAvailable(targetZdo.GetOwner()) ||
+            !HasModifier(sourceZdo, ModifierMask.Reflection)) return false;
+
+        Character? sourcePrefab = GetReflectionCharacterPrefab(sourceZdo);
+        Character? targetPrefab = GetReflectionCharacterPrefab(targetZdo);
+        if (sourcePrefab == null || sourcePrefab.IsPlayer() || targetPrefab == null ||
+            !CreatureLevelManager.AllowsModifierEffects(sourceZdo, sourcePrefab.IsBoss(),
+                sourceZdo.GetBool(KarmaEnforcerKey, false))) return false;
+
+        float maxHealth = sourceZdo.GetFloat(ZDOVars.s_maxHealth, sourcePrefab.m_health);
+        float targetHealth = targetZdo.GetFloat(ZDOVars.s_health,
+            targetZdo.GetFloat(ZDOVars.s_maxHealth, targetPrefab.m_health));
+        power = Mathf.Clamp01(sourceZdo.GetFloat(ReflectionPowerKey, ReflectionDefaultPower));
+        chance = ClampChance(sourceZdo.GetFloat(ReflectionChanceKey, 0f));
+        if (!IsPositiveFinite(maxHealth) || !IsPositiveFinite(power) || !IsPositiveFinite(chance) ||
+            amount > maxHealth * power + ReflectionDamageAuthorizationTolerance ||
+            !IsPositiveFinite(targetHealth) || targetZdo.GetBool(ZDOVars.s_dead, false)) return false;
+
+        Vector3 sourcePosition = sourceZdo.GetPosition(), targetPosition = targetZdo.GetPosition();
+        if (!IsFinite(sourcePosition) || !IsFinite(targetPosition) ||
+            Vector3.Distance(sourcePosition, targetPosition) > ModifierRequestValidationRange) return false;
+
+        bool sourceLoaded = TryFindCharacter(sourceId, out Character source);
+        bool targetLoaded = TryFindCharacter(targetId, out Character target);
+        if (targetLoaded && target.IsDead()) return false;
+        if (sourceLoaded && !IsServerObservedReflectionMelee(source, targetId)) return false;
+        return sourceLoaded && targetLoaded
+            ? IsHostileAttacker(source, target)
+            : CreatureFactionManager.IsHostileFromSynchronizedState(sourceZdo, sourcePrefab, targetZdo, targetPrefab);
+    }
+
+    private static bool IsReflectionPeerAvailable(long owner)
+    {
+        if (owner == 0 || ZRoutedRpc.instance == null || ZNet.instance == null) return false;
+        if (owner == ZRoutedRpc.instance.GetServerPeerID()) return true;
+        foreach (ZNetPeer peer in ZNet.instance.GetConnectedPeers())
+        {
+            if (peer != null && peer.IsReady() && peer.m_uid == owner) return true;
+        }
+        return false;
+    }
+
+    private static Character? GetReflectionCharacterPrefab(ZDO zdo)
+    {
+        GameObject? prefab = ZNetScene.instance != null ? ZNetScene.instance.GetPrefab(zdo.GetPrefab()) : null;
+        return prefab != null ? prefab.GetComponent<Character>() : null;
+    }
+
+    private static bool IsPositiveFinite(float value) => value > 0f && !float.IsInfinity(value);
 
     private static bool IsServerObservedReflectionMelee(Character source, ZDOID targetId)
     {
@@ -5214,28 +5218,65 @@ internal static class CreatureModifierManager
             return;
         }
 
-        if (!ServerReflectionRequestStates.TryGetValue(sourceId, out ServerReflectionRequestState requestState))
-        {
-            requestState = new ServerReflectionRequestState();
-            ServerReflectionRequestStates[sourceId] = requestState;
-        }
+        ObserveServerReflectionHealth(zdo, GetServerReflectionState(zdo), GetNetworkTimeSeconds());
+    }
 
-        ObserveServerReflectionHealth(zdo, requestState, GetNetworkTimeSeconds(), source.GetHealth());
+    private static ServerReflectionRequestState GetServerReflectionState(ZDO zdo)
+    {
+        if (!ServerReflectionRequestStates.TryGetValue(zdo.m_uid, out ServerReflectionRequestState state))
+        {
+            state = new ServerReflectionRequestState();
+            ServerReflectionRequestStates[zdo.m_uid] = state;
+        }
+        return state;
+    }
+
+    // Deserialize runs after owner revision handling, but before/after the new health is applied.
+    // Observe only reflecting ZDOs; never scan all world ZDOs or trust client-supplied prior HP.
+    internal static void ObserveSynchronizedReflectionHealth(ZDO zdo, bool beforeDeserialize)
+    {
+        if (ZNet.instance == null || !ZNet.instance.IsServer() || zdo == null || zdo.m_uid == ZDOID.None)
+            return;
+        if (!HasModifier(zdo, ModifierMask.Reflection))
+        {
+            if (!beforeDeserialize && ServerReflectionRequestStates.ContainsKey(zdo.m_uid))
+                RemoveServerReflectionState(zdo.m_uid);
+            return;
+        }
+        ObserveServerReflectionHealth(zdo, GetServerReflectionState(zdo), GetNetworkTimeSeconds(), beforeDeserialize);
     }
 
     private static void ObserveServerReflectionHealth(
         ZDO sourceZdo,
         ServerReflectionRequestState requestState,
         float now,
-        float fallbackHealth = float.NaN)
+        bool beforeDeserialize = false)
     {
+        long owner = sourceZdo.GetOwner();
+        if (!requestState.RequestOwnerInitialized || requestState.RequestOwner != owner)
+        {
+            bool changed = requestState.RequestOwnerInitialized;
+            ReleasePendingReflectionRequestsForSource(sourceZdo.m_uid);
+            requestState.RequestOwnerInitialized = true;
+            requestState.RequestOwner = owner;
+            requestState.LastRequestId = 0;
+            requestState.LastObservedHealth = float.NaN;
+            requestState.UnclaimedDamage = 0f;
+            requestState.UnclaimedDamageUntil = 0f;
+            // The old HP still belongs to the previous owner at this point.
+            if (changed && beforeDeserialize) return;
+        }
         if (requestState.UnclaimedDamageUntil < now)
         {
             requestState.UnclaimedDamage = 0f;
             requestState.UnclaimedDamageUntil = 0f;
         }
 
-        float health = sourceZdo.GetFloat(ZDOVars.s_health, fallbackHealth);
+        // Vanilla omits s_health for full-health creatures. An explicitly invalid HP
+        // value must still be rejected rather than mistaken for a missing value.
+        float maxHealth = sourceZdo.GetFloat(ZDOVars.s_maxHealth, float.NaN);
+        if (float.IsNaN(maxHealth)) maxHealth = GetReflectionCharacterPrefab(sourceZdo)?.m_health ?? float.NaN;
+        float health = sourceZdo.GetFloat(ZDOVars.s_health, maxHealth);
         if (float.IsNaN(health) || float.IsInfinity(health) || health < 0f)
         {
             return;
@@ -5251,16 +5292,6 @@ internal static class CreatureModifierManager
         }
 
         requestState.LastObservedHealth = health;
-    }
-
-    private static void ResetServerReflectionObservation(
-        ZDO sourceZdo,
-        ServerReflectionRequestState requestState)
-    {
-        requestState.LastObservedHealth = float.NaN;
-        requestState.UnclaimedDamage = 0f;
-        requestState.UnclaimedDamageUntil = 0f;
-        ObserveServerReflectionHealth(sourceZdo, requestState, GetNetworkTimeSeconds());
     }
 
     private static void RemoveServerReflectionState(ZDOID characterId)
@@ -5291,9 +5322,10 @@ internal static class CreatureModifierManager
         }
     }
 
-    private static void ReleasePendingReflectionRequest(ReflectionPendingRequestKey request)
+    private static void ReleasePendingReflectionRequest(ReflectionPendingRequestKey request, long expectedSender = 0)
     {
         if (!ServerPendingReflectionRequests.TryGetValue(request, out long sender) ||
+            expectedSender != 0 && sender != expectedSender ||
             !ServerPendingReflectionRequests.Remove(request))
         {
             return;
@@ -6472,12 +6504,15 @@ internal static class CreatureModifierManager
             requestId = NextReflectionRequestId = 1;
         }
 
-        source.m_nview.InvokeRPC(
+        ZPackage package = new();
+        package.Write(source.GetZDOID());
+        package.Write(requestId);
+        package.Write(targetId);
+        package.Write(amount);
+        ZRoutedRpc.instance.InvokeRoutedRPC(
             ZRoutedRpc.instance.GetServerPeerID(),
             ReflectionDamageRequestRpc,
-            requestId,
-            targetId,
-            amount);
+            package);
     }
 
     private static void TryArmKnockback(

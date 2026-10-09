@@ -147,7 +147,7 @@ internal static class ManagedContracts
             int consumeIndex = instructions.FindIndex(i => Equals(i.operand, consume));
             int procIndex = instructions.FindIndex(i => i.operand is MethodInfo m && m.DeclaringType == typeof(UnityEngine.Random) && m.Name == "Range");
             int capIndex = instructions.FindIndex(i => Equals(i.operand, limit));
-            int rpcIndex = instructions.FindIndex(i => i.operand is MethodInfo m && m.DeclaringType == typeof(ZNetView) && m.Name == "InvokeRPC");
+            int rpcIndex = instructions.FindIndex(i => i.operand is MethodInfo m && m.DeclaringType == typeof(ZRoutedRpc) && m.Name == "InvokeRoutedRPC");
             Require(consumeIndex >= 0 && consumeIndex < procIndex && procIndex < capIndex && capIndex < rpcIndex,
                 "Reflection cap follows full authorization/proc and precedes approved RPC");
             foreach (string name in new[] { "CompleteDirectDamage", "SendExactReflectionDamage", "RPC_ReflectionDamageRequest", "ApplyAuthorizedReflectionDamage" })

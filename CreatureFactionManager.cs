@@ -409,6 +409,86 @@ internal static class CreatureFactionManager
         return true;
     }
 
+    // Dedicated servers need the same relationship policy without constructing Characters.
+    // Keep live BaseAI.IsEnemy calls at the caller when both instances exist (including other mods' patches).
+    internal static bool IsHostileFromSynchronizedState(ZDO a, Character prefabA, ZDO b, Character prefabB)
+    {
+        if (a.m_uid == b.m_uid) return false;
+        Character.Faction factionA = GetSynchronizedFaction(a, prefabA);
+        Character.Faction factionB = GetSynchronizedFaction(b, prefabB);
+        bool tamedA = a.GetBool(ZDOVars.s_tamed, false), tamedB = b.GetBool(ZDOVars.s_tamed, false);
+        if (tamedA && tamedB) return false;
+        if (prefabA.m_group.Length > 0 && prefabA.m_group == prefabB.m_group) return false;
+        BaseAI? aiA = prefabA.GetComponent<BaseAI>(), aiB = prefabB.GetComponent<BaseAI>();
+        FactionData? dataA, dataB;
+
+        lock (Sync)
+        {
+            ActiveSnapshot.FactionDataByFaction.TryGetValue(factionA, out dataA);
+            ActiveSnapshot.FactionDataByFaction.TryGetValue(factionB, out dataB);
+            if (dataA != null && dataB != null)
+            {
+                // Tamed sources and players facing aggravatable creatures defer to the other side.
+                bool EnemyA() => IsSynchronizedFactionEnemy(a, dataA, tamedB ? Character.Faction.Players : factionB, aiA != null);
+                bool EnemyB() => IsSynchronizedFactionEnemy(b, dataB, tamedA ? Character.Faction.Players : factionA, aiB != null);
+                if (tamedA || prefabA.IsPlayer() && !tamedB && aiB != null && dataB.AggravatedFriendly != null) return EnemyB();
+                if (tamedB || prefabB.IsPlayer() && !tamedA && aiA != null && dataA.AggravatedFriendly != null) return EnemyA();
+                return EnemyA() || EnemyB();
+            }
+        }
+
+        // Same fallback as BaseAI.IsEnemy when either faction is outside CM's configured map.
+        bool aggravatedA = aiA != null && (dataA != null ? dataA.AggravatedFriendly != null : aiA.m_aggravatable) &&
+            a.GetBool(ZDOVars.s_aggravated, false);
+        bool aggravatedB = aiB != null && (dataB != null ? dataB.AggravatedFriendly != null : aiB.m_aggravatable) &&
+            b.GetBool(ZDOVars.s_aggravated, false);
+        if (tamedA || tamedB)
+            return !(tamedA && factionB == Character.Faction.Players || tamedB && factionA == Character.Faction.Players ||
+                     tamedA && factionB == Character.Faction.Dverger && !aggravatedB ||
+                     tamedB && factionA == Character.Faction.Dverger && !aggravatedA);
+        if (aggravatedA && factionB == Character.Faction.Players || aggravatedB && factionA == Character.Faction.Players)
+            return true;
+        return IsVanillaFactionEnemy(factionA, factionB) || IsVanillaFactionEnemy(factionB, factionA);
+    }
+
+    private static Character.Faction GetSynchronizedFaction(ZDO zdo, Character prefab)
+    {
+        string name = zdo.GetString(FactionHash, "");
+        if (!string.IsNullOrWhiteSpace(name) && TryGetFaction(name, out Character.Faction faction)) return faction;
+        int stored = zdo.GetInt(FactionHash, 0);
+        return stored != 0 ? (Character.Faction)stored : prefab.m_faction;
+    }
+
+    private static bool IsSynchronizedFactionEnemy(ZDO zdo, FactionData data, Character.Faction target, bool hasAi)
+    {
+        HashSet<Character.Faction> friendly = hasAi && data.AlertedFriendly != null && zdo.GetBool(ZDOVars.s_alert, false)
+            ? data.AlertedFriendly
+            : hasAi && data.AggravatedFriendly != null && zdo.GetBool(ZDOVars.s_aggravated, false)
+                ? data.AggravatedFriendly : data.Friendly;
+        return !friendly.Contains(target);
+    }
+
+    private static bool IsVanillaFactionEnemy(Character.Faction source, Character.Faction target)
+    {
+        if (source == target) return false;
+        return source switch
+        {
+            Character.Faction.AnimalsVeg or Character.Faction.PlayerSpawned => true,
+            Character.Faction.Players => target != Character.Faction.Dverger,
+            Character.Faction.ForestMonsters or Character.Faction.MistlandsMonsters or Character.Faction.DeepNorth =>
+                target != Character.Faction.AnimalsVeg && target != Character.Faction.Boss,
+            Character.Faction.Undead => target != Character.Faction.Demon && target != Character.Faction.Boss,
+            Character.Faction.Demon => target != Character.Faction.Undead && target != Character.Faction.Boss,
+            Character.Faction.MountainMonsters or Character.Faction.SeaMonsters or Character.Faction.PlainsMonsters =>
+                target != Character.Faction.Boss,
+            Character.Faction.Dverger => target != Character.Faction.AnimalsVeg && target != Character.Faction.Boss &&
+                target != Character.Faction.Players,
+            Character.Faction.Boss => target is Character.Faction.Players or Character.Faction.PlayerSpawned,
+            Character.Faction.TrainingDummy => target == Character.Faction.Players,
+            _ => false
+        };
+    }
+
     internal static string BuildDefaultOverrideYaml()
     {
         StringBuilder builder = new();

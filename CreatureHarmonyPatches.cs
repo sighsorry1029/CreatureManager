@@ -524,6 +524,16 @@ internal static class CreatureManagerBaseAiAwakePatch
     }
 }
 
+[HarmonyPatch(typeof(ZDO), nameof(ZDO.Deserialize), new[] { typeof(ZPackage) })]
+internal static class CreatureManagerReflectionZdoHealthPatch
+{
+    private static void Prefix(ZDO __instance) =>
+        CreatureModifierManager.ObserveSynchronizedReflectionHealth(__instance, beforeDeserialize: true);
+
+    private static void Postfix(ZDO __instance) =>
+        CreatureModifierManager.ObserveSynchronizedReflectionHealth(__instance, beforeDeserialize: false);
+}
+
 [HarmonyPatch]
 internal static class CreatureManagerCreatedBlockerZdoPatch
 {
