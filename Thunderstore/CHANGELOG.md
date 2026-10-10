@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+- Add optional, server-synchronized player target switching under `7 - AI`, independently of levels and modifiers. `Player Target Switching` defaults to **Off**, with a **10-second** attempt interval and **25%** chance when enabled. Untamed MonsterAI creatures, including bosses and Enforcers, can switch to another sensed, hostile player instead of always following the nearest target.
+- Choose alternative players randomly and check a path to the selected player. A single player can be selected when an animal or summon is currently tanking. Tamed creatures and FrozenKing phase 2 are excluded; this does not identify ranged attackers or override abilities that choose their own targets, such as independently targeted meteors.
+- Add `Player Target Hold Duration (s)`, defaulting to **5 seconds** with a **0-30** range. Zero disables holding without disabling switching attempts. Holds expire on the next normal target-search tick and take precedence over new attempts; invalid targets or normal pursuit abandonment can end them early. Changing any AI option clears holds and restarts the attempt interval.
+- Integrate with vanilla target-search ticks without interrupting ongoing attacks. Keep decisions on the creature's network owner, reset local state on ownership changes, and clean up on destruction or world/plugin shutdown. No separate per-frame search or targeting RPC is added; sensing and path checks still add work when the option is enabled.
+- Update the server and all clients together. Add 101 isolated AI targeting checks and document the new settings; actual boss fights, dedicated-server gameplay and performance remain to be verified in game.
+
 ## 1.2.9
 
 - Fix missing Vortex hit effects on dedicated servers when projectile damage is ignored but the server has no loaded creature instance. Send effect requests through a global RPC, validate the synchronized creature data, and broadcast the effects to clients.

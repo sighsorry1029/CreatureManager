@@ -179,6 +179,7 @@ Existing creatures can be modified or cloned. For advanced examples, install [Mo
 - Clone and tune monster attack prefabs, including damage, animation, projectile, AI range, and attack status effects.
 - Clone projectile prefabs and override `Projectile.m_spawnOnHit`, weighted random on-hit spawns, or `SpawnAbility.m_spawnPrefab` without duplicating their remaining component state.
 - Build reusable `BaseAI` and `MonsterAI` presets, or borrow AI directly from another creature prefab.
+- Optionally diversify combat targets for monsters, bosses and Enforcers with synchronized AI settings.
 - Add and edit factions without mirroring unrelated game systems.
 - Define weighted levels for global, boss, biome, group, and individual prefab rules.
 - Scale health, damage, modifier chance, and visuals by level or world distance.
@@ -243,6 +244,19 @@ References refresh automatically after Valheim's prefab databases are ready and 
 Creature definitions can modify an existing prefab or clone one with `clonedFrom`. An AI definition named after a loaded `MonsterAI` or `AnimalAI` creature applies directly to that prefab; a unique AI name remains a reusable preset and can use `copyFrom` for its baseline. A creature-level `ai:` assignment is only needed to select a reusable preset or borrow another creature prefab's AI, and takes priority over same-name direct application. Clones can also use cloned attacks, custom factions, humanoid equipment, and local texture overrides.
 
 The supported surface is intentionally narrower than a full prefab database dump. It concentrates on fields useful for monsters and customizable NPCs while leaving drop-table editing, spawn tables, player prefabs, and large effect graphs to other domains or mods.
+
+The synchronized `7 - AI` settings add optional combat target switching, independently of levels and modifiers:
+
+| Setting | Default |
+| --- | --- |
+| `Player Target Switching` | `Off` |
+| `Player Target Switch Interval (s)` | `10` |
+| `Player Target Switch Chance (%)` | `25` |
+| `Player Target Hold Duration (s)` | `5` (range `0`–`30`) |
+
+When enabled, an alerted, untamed MonsterAI creature (including bosses and Enforcers) can choose a sensed, hostile player other than its current target, with a path check before switching. One player is sufficient when an animal is currently tanking. Attempts wait the configured interval and use normal target-search ticks. Valid selections are retained for the configured hold duration, released on the next search tick; attacks are not interrupted and normal pursuit abandonment remains active. Death, lost sensing or a blocked path can end a hold early. A hold duration of `0` disables holding; switching attempts still follow the configured interval. An active hold takes precedence over the switch interval, so it is not interrupted by another switching attempt. Failed rolls, missing candidates and unreachable selections consume the interval. Changing any of these settings clears pending attempts and holds and restarts the attempt interval; Off returns to normal selection on the next search.
+
+Tamed creatures and FrozenKing phase 2 are excluded. This feature does not identify ranged attackers or override ability-specific targeting (such as independently targeted meteors). Decisions run only on the creature's network owner, including in dedicated-server games.
 
 ### Levels and Progression
 

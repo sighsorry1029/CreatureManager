@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.2.9";
+    internal const string ModVersion = "1.3.0";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -148,7 +148,15 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             LootSystem = config("6 - Loot", "Character Loot System", CharacterLootSystem.CalculateChance, Ordered("CalculateChance keeps the base drop chance and scales successful amounts linearly by stars for non-trophy items with levelMultiplier enabled. Vanilla preserves existing scaling. One-per-player rewards and explicit Enforcer bonus loot are unchanged. Independent of Enable Level System. Automatically inactive while DropNSpawn is loaded. Can work with Drop That; entries with ScaleByLevel=false are excluded.", 100));
             AdditionalLootChancePerStarCreature = config("6 - Loot", "Chance For Additional Loot Per Star For Creatures", 50, Ordered("Additional amount percentage per star in CalculateChance mode for non-boss creatures. Expected amount = base amount * (1 + stars * percent / 100); the fractional remainder is rounded up with that probability. Zero removes star scaling for eligible drops. Inactive while DropNSpawn is loaded.", 90, new AcceptableValueRange<int>(0, 100)));
             AdditionalLootChancePerStarBoss = config("6 - Loot", "Chance For Additional Loot Per Star For Bosses", 50, Ordered("Additional amount percentage per star in CalculateChance mode for characters identified as bosses by the game. Uses the same fractional rounding as creatures. Does not scale one-per-player rewards, trophies, or explicit Enforcer bonus loot. Inactive while DropNSpawn is loaded.", 80, new AcceptableValueRange<int>(0, 100)));
+            PlayerTargetSwitching = config("7 - AI", "Player Target Switching", Toggle.Off, Ordered("Occasionally switch an alerted, untamed MonsterAI creature (including bosses and Enforcers) to another sensed, hostile player. One player is sufficient when the current target is an animal. Uses existing target-search ticks, never interrupts an attack, and retains valid selections according to Player Target Hold Duration (s). Normal pursuit abandonment still applies. Does not identify ranged attackers or change abilities that select their own targets. FrozenKing phase 2 is excluded. Independent of level and modifier settings; runs on the creature's network owner. Changes reset pending attempts; Off returns to normal selection on the next search.", 100));
+            PlayerTargetSwitchInterval = config("7 - AI", "Player Target Switch Interval (s)", 10f, Ordered("Minimum time between extra player-target attempts during combat. The first attempt waits this long; attempts run on the next normal target-search tick. Failed rolls, missing candidates and unreachable selections also consume the interval. Changing this value resets pending attempts.", 90, new AcceptableValueRange<float>(1f, 120f)));
+            PlayerTargetSwitchChance = config("7 - AI", "Player Target Switch Chance (%)", 25, Ordered("Chance per extra target-selection attempt. A successful roll chooses randomly among other living, hostile players the creature can sense, then checks a path to that selection. 0 disables extra selection. Changing this value resets pending attempts.", 80, new AcceptableValueRange<int>(0, 100)));
+            PlayerTargetHoldDuration = config("7 - AI", "Player Target Hold Duration (s)", 5f, Ordered("Seconds to retain a valid player chosen by Player Target Switching. Expiry is processed on the next normal target-search tick; ongoing attacks are not interrupted. 0 disables holding; switching attempts still follow the configured interval. Death, lost sensing, a blocked path or normal pursuit abandonment can end a hold early. No new switching attempt occurs during an active hold, even if the switch interval has elapsed. Changing this value clears active holds and restarts the attempt interval.", 70, new AcceptableValueRange<float>(0f, 30f)));
             _configHandlersSubscribed = true;
+            PlayerTargetSwitching.SettingChanged += ResetTargetingConfiguration;
+            PlayerTargetSwitchInterval.SettingChanged += ResetTargetingConfiguration;
+            PlayerTargetSwitchChance.SettingChanged += ResetTargetingConfiguration;
+            PlayerTargetHoldDuration.SettingChanged += ResetTargetingConfiguration;
             EnableLevelSystem.SettingChanged += ReloadLevelConfiguration;
             BiomeLevelPreset.SettingChanged += ReloadLevelConfiguration;
             NormalCreatureNameplateRange.SettingChanged += ApplyRuntimeConfigValues;
@@ -186,6 +194,11 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     private static void ApplyRuntimeConfigValues(object sender, EventArgs args)
     {
         CreatureGameSettings.ApplyAll();
+    }
+
+    private static void ResetTargetingConfiguration(object sender, EventArgs args)
+    {
+        CreatureTargeting.ResetRuntimeState();
     }
 
     private static void ReloadLevelConfiguration(object sender, EventArgs args)
@@ -260,6 +273,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             TryCleanup("restore EpicMMO level label positions", CreatureEpicMmoHud.Reset);
             TryCleanup("reset spawn lifecycle state", CreatureManagerSpawnLifecycle.ResetRuntimeState);
             TryCleanup("reset spawn blocker candidates", CreatureSpawnBlocker.ResetRuntimeState);
+            TryCleanup("reset AI target switching", CreatureTargeting.ResetRuntimeState);
             TryCleanup("reset Karma runtime state", CreatureKarmaManager.ResetRuntimeState);
             TryCleanup("reset modifier runtime state", CreatureModifierManager.ResetRuntimeState);
             TryCleanup("reset level runtime state", CreatureLevelManager.ResetRuntimeState);
@@ -281,6 +295,10 @@ public class CreatureManagerPlugin : BaseUnityPlugin
 
     private static void UnsubscribeConfigHandlers()
     {
+        if (PlayerTargetSwitching != null) PlayerTargetSwitching.SettingChanged -= ResetTargetingConfiguration;
+        if (PlayerTargetSwitchInterval != null) PlayerTargetSwitchInterval.SettingChanged -= ResetTargetingConfiguration;
+        if (PlayerTargetSwitchChance != null) PlayerTargetSwitchChance.SettingChanged -= ResetTargetingConfiguration;
+        if (PlayerTargetHoldDuration != null) PlayerTargetHoldDuration.SettingChanged -= ResetTargetingConfiguration;
         if (EnableLevelSystem != null) EnableLevelSystem.SettingChanged -= ReloadLevelConfiguration;
         if (BiomeLevelPreset != null) BiomeLevelPreset.SettingChanged -= ReloadLevelConfiguration;
         if (NormalCreatureNameplateRange != null) NormalCreatureNameplateRange.SettingChanged -= ApplyRuntimeConfigValues;
@@ -467,6 +485,10 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     internal static ConfigEntry<CharacterLootSystem> LootSystem = null!;
     internal static ConfigEntry<int> AdditionalLootChancePerStarCreature = null!;
     internal static ConfigEntry<int> AdditionalLootChancePerStarBoss = null!;
+    internal static ConfigEntry<Toggle> PlayerTargetSwitching = null!;
+    internal static ConfigEntry<float> PlayerTargetSwitchInterval = null!;
+    internal static ConfigEntry<int> PlayerTargetSwitchChance = null!;
+    internal static ConfigEntry<float> PlayerTargetHoldDuration = null!;
 
     private sealed class AcceptableLevelSystemModes : AcceptableValueBase
     {

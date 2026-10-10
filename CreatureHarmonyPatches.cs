@@ -74,6 +74,42 @@ internal static class CreatureHarmonyTargetResolver
     }
 }
 
+[HarmonyPatch]
+internal static class CreatureManagerMonsterAITargetPatch
+{
+    private static IEnumerable<MethodBase> TargetMethods()
+    {
+        MethodInfo? method = CreatureHarmonyTargetResolver.FindDeclared(typeof(MonsterAI), "UpdateTarget",
+            "player target switching", new[] { typeof(Humanoid), typeof(float), typeof(bool).MakeByRefType(), typeof(bool).MakeByRefType() });
+        if (method != null) yield return method;
+    }
+
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        List<CodeInstruction> codes = instructions.ToList();
+        MethodInfo findEnemy = AccessTools.DeclaredMethod(typeof(BaseAI), "FindEnemy", Type.EmptyTypes);
+        FieldInfo character = AccessTools.DeclaredField(typeof(BaseAI), "m_character");
+        FieldInfo view = AccessTools.DeclaredField(typeof(BaseAI), "m_nview");
+        if (findEnemy == null || character == null || view == null || codes.Count(code => code.Calls(findEnemy)) != 1)
+        {
+            CreatureManagerPlugin.Log.LogWarning("Could not locate the unique MonsterAI.UpdateTarget enemy search; player target switching is inactive.");
+            return codes;
+        }
+
+        int index = codes.FindIndex(code => code.Calls(findEnemy));
+        codes.InsertRange(index + 1, new[]
+        {
+            new CodeInstruction(OpCodes.Ldarg_0),
+            new CodeInstruction(OpCodes.Ldarg_0),
+            new CodeInstruction(OpCodes.Ldfld, character),
+            new CodeInstruction(OpCodes.Ldarg_0),
+            new CodeInstruction(OpCodes.Ldfld, view),
+            new CodeInstruction(OpCodes.Call, AccessTools.DeclaredMethod(typeof(CreatureTargeting), nameof(CreatureTargeting.SelectTarget)))
+        });
+        return codes;
+    }
+}
+
 [HarmonyPatch(typeof(FejdStartup), nameof(FejdStartup.Awake))]
 internal static class CreatureManagerFejdStartupAwakePatch
 {
@@ -1048,6 +1084,7 @@ internal static class CreatureManagerCharacterOnDestroyPatch
 {
     private static void Prefix(Character __instance)
     {
+        CreatureTargeting.ForgetCharacter(__instance);
         CreatureSpawnBlocker.ForgetCharacter(__instance);
         CreatureManagerSpawnLifecycle.ForgetCharacter(__instance);
         CreatureLevelManager.ForgetCharacter(__instance);
@@ -1066,6 +1103,7 @@ internal static class CreatureManagerZNetSceneOnDestroyPatch
         CreatureEpicMmoHud.Reset();
         CreatureManagerSpawnLifecycle.ResetRuntimeState();
         CreatureSpawnBlocker.ResetRuntimeState();
+        CreatureTargeting.ResetRuntimeState();
         CreatureKarmaManager.ResetRuntimeState();
         CreatureModifierManager.ResetRuntimeState();
         CreatureLevelManager.ResetRuntimeState();

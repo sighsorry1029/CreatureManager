@@ -76,6 +76,7 @@ internal static class Program
         SpawnBlockerContracts.Run(plugin);
         DungeonBlinkContracts.Run(plugin);
         EpicMmoHudContracts.Run(plugin);
+        TargetingContracts.Run(plugin);
     }
 
     private static void CheckReferences(string pluginPath)
