@@ -316,6 +316,12 @@ Enforcer behavior can be used together with Karma levels or independently throug
 
 DropNSpawn's optional periodic dungeon spawner can consult `CreatureManager.CreatureManagerSpawnApi.CanSpawn(GameObject prefab, Vector3 position)` to honor the existing boss/Enforcer ordinary-spawn blocking settings. Call this API on Unity's main thread immediately before creation using the registered prefab and final world position. It evaluates current settings/state; it does not reserve a spawn or apply Enforcer/Karma summon behavior. Use the updated builds of both mods for this integration.
 
+Dungeon Enforcer location matching covers the registered interior zone, including rooms outside the entrance's location radius. Placement stays in that same zone. Loaded-scene placement accounts for the prefab capsule's bottom when positioning it on the floor; navigation still targets the floor, and a warned reservation keeps its selected position. These rules do not add support for relocated or multi-zone custom interiors.
+
+For troubleshooting, enable **3 - Karma → Dungeon Enforcer Diagnostics** on the server or host (default **Off**, local and not synchronized). `[DungeonEnforcerDiag]` reports counts by reason every 30 seconds, with at most three short prefab/location and coordinate samples per reason. Counts describe candidate checks and outcomes, not spawn probabilities. Toggle changes, world reset and a successful `karma.yml` reload clear the observations. No report is emitted for an empty window.
+
+`UnloadedAnchorFallback` means the server used an existing spawner ZDO because dungeon geometry was not loaded locally; it does **not** confirm free space around that point. `FloorMissing`, `CapsuleBlocked`, `PathAndLineBlocked`, `InvalidDungeonZone`, `MinionPositionMissing` and `ReservationCanceled` help distinguish placement failures. Dedicated-server client-assisted geometry validation is not implemented by this change: the existing anchor fallback, server authority, encounter costs and minion policy remain unchanged.
+
 ## Common Workflows
 
 **Tune an existing creature**

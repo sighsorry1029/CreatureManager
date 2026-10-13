@@ -73,6 +73,7 @@ internal static class Program
         BossBlockerContracts.Run(plugin);
         ModifierLimitContracts.Run(plugin);
         EnforcerDelayContracts.Run(plugin);
+        DungeonPlacementContracts.Run(plugin);
         SpawnBlockerContracts.Run(plugin);
         DungeonBlinkContracts.Run(plugin);
         EpicMmoHudContracts.Run(plugin);

@@ -370,6 +370,7 @@ internal static class CreatureKarmaManager
 
     internal static void ResetRuntimeState()
     {
+        DungeonDiagnostics.Reset();
         unchecked
         {
             CreatureDeathEpoch++;
@@ -1346,6 +1347,7 @@ DeepNorth:
 
     internal static void UpdateSummons()
     {
+        DungeonDiagnostics.Update(Time.unscaledTime);
         bool isServer = ZNet.instance != null && ZNet.instance.IsServer();
         if (isServer)
         {
@@ -2770,6 +2772,9 @@ DeepNorth:
         string dungeonLocation = dungeonSummon && TryGetDungeonLocationPrefabName(playerPosition, out string resolvedDungeonLocation)
             ? resolvedDungeonLocation
             : "";
+        if (dungeonSummon)
+            DungeonDiagnostics.Record(dungeonLocation.Length > 0 ? DungeonSpawnReason.LocationFound : DungeonSpawnReason.LocationMissing,
+                playerPosition, detail: dungeonLocation);
         List<EnforcerCandidateDefinition> candidates = biomeDefinition.GetCandidates(dungeonSummon, dungeonLocation);
         if (!biomeDefinition.Enabled)
         {
@@ -2869,6 +2874,7 @@ DeepNorth:
         if (delay > 0)
         {
             PendingEnforcerSummons.Add(plan);
+            DungeonDiagnostics.Record(DungeonSpawnReason.Reserved, spawnPosition, bossPrefab);
             BroadcastRegionalCenterMessage(EnforcerWarningMessage, playerPosition,
                 new HashSet<string>(StringComparer.Ordinal) { GetSectorKey(playerPosition) }, delay);
             CreatureManagerPlugin.Log.LogInfo($"Karma Enforcer reserved: {summon.Boss} zone={sectorKey} delay={delay}s position={spawnPosition}");
@@ -2910,6 +2916,7 @@ DeepNorth:
             failure = EnforcerSummonFailure.SpawnFailed;
             return false;
         }
+        if (plan.Dungeon) DungeonDiagnostics.Record(DungeonSpawnReason.Spawned, spawnPosition, bossPrefab);
 
         foreach (EnforcerMinionDefinition minion in summon.Minions)
         {
@@ -2931,6 +2938,7 @@ DeepNorth:
                             out minionPosition))
                     {
                         skippedMinions++;
+                        DungeonDiagnostics.Record(DungeonSpawnReason.MinionPositionMissing, spawnPosition, minionPrefab);
                         continue;
                     }
                 }
@@ -3009,6 +3017,9 @@ DeepNorth:
                 }
             }
 
+            if (DungeonDiagnostics.Enabled)
+                DungeonDiagnostics.Record(DungeonSpawnReason.ReservationCanceled, plan.SpawnPosition,
+                    detail: plan.Candidate.Summon.Boss + ":" + failure);
             CreatureManagerPlugin.Log.LogDebug($"Karma Enforcer reservation canceled: {plan.Candidate.Summon.Boss} zone={plan.SectorKey} reason={failure}");
         }
     }
@@ -3082,7 +3093,7 @@ DeepNorth:
 
     private static bool IsReservedDungeonPositionValid(GameObject prefab, Vector3 position, Vector3 target)
     {
-        if (!IsFinite(position) || !IsLikelyDungeonPosition(position))
+        if (!IsSameDungeonZone(target, position))
         {
             return false;
         }
@@ -3097,9 +3108,12 @@ DeepNorth:
 
         // Unlike the initial path search, this only validates: do not snap to the floor/navmesh
         // or move the reserved position toward the player's new location.
-        return ZoneSystem.instance.GetSolidHeight(position, out float floorHeight, 1) &&
-               Mathf.Abs(floorHeight - position.y) <= 1.25f &&
-               HasDungeonSpawnClearance(prefab, position, GetSpawnRotation(position, target));
+        Quaternion rotation = GetSpawnRotation(position, target);
+        float lift = GetDungeonSpawnFloorOffset(prefab, rotation);
+        Vector3 floorPoint = position - Vector3.up * lift;
+        return ZoneSystem.instance.GetSolidHeight(floorPoint, out float floorHeight, 1) &&
+               Mathf.Abs(floorHeight + lift - position.y) <= 1.25f &&
+               HasDungeonSpawnClearance(prefab, position, rotation);
     }
 
     private static Vector2 GetRandomHorizontalOffset(float minRadius, float maxRadius)
@@ -3524,11 +3538,14 @@ DeepNorth:
         {
             if (ZoneSystem.instance == null || !ZoneSystem.instance.IsZoneLoaded(playerPosition))
             {
+                DungeonDiagnostics.Record(DungeonSpawnReason.UnloadedAnchorFallback, playerPosition, prefab);
                 return TryFindDungeonZdoAnchorPosition(
                     playerPosition,
                     Settings.Enforcer.DungeonSpawnerSearchRadius,
                     out position);
             }
+
+            DungeonDiagnostics.Record(DungeonSpawnReason.LoadedGeometry, playerPosition, prefab);
 
             if (TryFindValidDungeonComponentPosition<CreatureSpawner>(
                     prefab,
@@ -3619,8 +3636,7 @@ DeepNorth:
                 float deltaX = candidate.x - origin.x;
                 float deltaZ = candidate.z - origin.z;
                 float distanceSquared = deltaX * deltaX + deltaZ * deltaZ;
-                if (!IsFinite(candidate) ||
-                    !IsLikelyDungeonPosition(candidate) ||
+                if (!IsSameDungeonZone(origin, candidate) ||
                     Mathf.Abs(candidate.y - origin.y) > DungeonComponentVerticalTolerance ||
                     distanceSquared > searchRadiusSquared ||
                     distanceSquared >= bestDistanceSquared)
@@ -3641,6 +3657,7 @@ DeepNorth:
                 found = true;
             }
 
+            DungeonDiagnostics.Record(found ? DungeonSpawnReason.AnchorFound : DungeonSpawnReason.AnchorMissing, position);
             return found;
         }
         catch (Exception exception)
@@ -3716,6 +3733,11 @@ DeepNorth:
         return other.x == zone.x && other.y == zone.y;
     }
 
+    private static bool IsSameDungeonZone(Vector3 origin, Vector3 position)
+        => IsFinite(origin) && IsFinite(position) &&
+           IsLikelyDungeonPosition(origin) && IsLikelyDungeonPosition(position) &&
+           IsSameZone(position, ZoneSystem.GetZone(origin).ToVector2i());
+
     private static bool TryFindDungeonMinionPosition(
         GameObject prefab,
         Character boss,
@@ -3753,21 +3775,21 @@ DeepNorth:
         out Vector3 position)
     {
         position = candidate;
-        if (ZoneSystem.instance == null ||
-            !IsFinite(pathOrigin) ||
-            !IsFinite(candidate) ||
-            !IsLikelyDungeonPosition(candidate) ||
-            !ZoneSystem.instance.GetSolidHeight(candidate, out float floorHeight, 1) ||
-            Mathf.Abs(floorHeight - pathOrigin.y) > DungeonSpawnFloorTolerance)
-        {
-            return false;
-        }
+        if (!IsSameDungeonZone(pathOrigin, candidate))
+            return DungeonDiagnostics.Reject(DungeonSpawnReason.InvalidDungeonZone, candidate, prefab);
+        if (ZoneSystem.instance == null || !ZoneSystem.instance.GetSolidHeight(candidate, out float floorHeight, 1))
+            return DungeonDiagnostics.Reject(DungeonSpawnReason.FloorMissing, candidate, prefab);
+        if (Mathf.Abs(floorHeight - pathOrigin.y) > DungeonSpawnFloorTolerance)
+            return DungeonDiagnostics.Reject(DungeonSpawnReason.FloorHeight, candidate, prefab);
 
         candidate.y = floorHeight;
+        if (!IsSameDungeonZone(pathOrigin, candidate))
+            return DungeonDiagnostics.Reject(DungeonSpawnReason.InvalidDungeonZone, candidate, prefab);
         Quaternion candidateRotation = GetSpawnRotation(candidate, facingTarget);
-        if (!HasDungeonSpawnClearance(prefab, candidate, candidateRotation))
+        Vector3 initialPivot = candidate + Vector3.up * GetDungeonSpawnFloorOffset(prefab, candidateRotation);
+        if (!IsFinite(initialPivot) || !HasDungeonSpawnClearance(prefab, initialPivot, candidateRotation))
         {
-            return false;
+            return DungeonDiagnostics.Reject(DungeonSpawnReason.CapsuleBlocked, initialPivot, prefab);
         }
 
         BaseAI? baseAI = prefab.GetComponent<BaseAI>();
@@ -3796,7 +3818,7 @@ DeepNorth:
                 hasFullPath =
                     Vector3.Distance(pathStart, pathOrigin) <= 2f &&
                     Vector3.Distance(pathEnd, candidate) <= 1.25f &&
-                    IsLikelyDungeonPosition(pathEnd) &&
+                    IsSameDungeonZone(pathOrigin, pathEnd) &&
                     Mathf.Abs(pathEnd.y - pathOrigin.y) <= DungeonSpawnFloorTolerance + 1.25f;
                 if (hasFullPath)
                 {
@@ -3811,20 +3833,26 @@ DeepNorth:
                     DungeonSpawnStaticMask,
                     QueryTriggerInteraction.Ignore))
             {
-                return false;
+                return DungeonDiagnostics.Reject(DungeonSpawnReason.PathAndLineBlocked, candidate, prefab);
             }
+            if (!hasFullPath) DungeonDiagnostics.Record(DungeonSpawnReason.DirectRouteAccepted, candidate, prefab);
 
             Quaternion rotation = GetSpawnRotation(resolvedPosition, facingTarget);
+            // Navigation targets the supporting floor. Only the actual spawn pivot is raised;
+            // repeat after a corrected path endpoint, using the same shape as the clearance check.
+            resolvedPosition.y += GetDungeonSpawnFloorOffset(prefab, rotation);
+            if (!IsSameDungeonZone(pathOrigin, resolvedPosition))
+                return DungeonDiagnostics.Reject(DungeonSpawnReason.InvalidDungeonZone, resolvedPosition, prefab);
             if (!HasDungeonSpawnClearance(prefab, resolvedPosition, rotation))
-            {
-                return false;
-            }
+                return DungeonDiagnostics.Reject(DungeonSpawnReason.CapsuleBlocked, resolvedPosition, prefab);
 
             position = resolvedPosition;
+            DungeonDiagnostics.Record(DungeonSpawnReason.PositionFound, position, prefab);
             return true;
         }
         catch (Exception exception)
         {
+            DungeonDiagnostics.Record(DungeonSpawnReason.PlacementException, candidate, prefab);
             CreatureManagerPlugin.Log.LogDebug(
                 $"Dungeon summon position validation failed for '{prefab.name}': {exception.Message}");
             return false;
@@ -3840,8 +3868,8 @@ DeepNorth:
         Vector3 position,
         Quaternion rotation)
     {
-        CapsuleCollider? capsule = prefab.GetComponent<CapsuleCollider>();
-        if (capsule == null)
+        if (!GetDungeonSpawnCapsule(prefab, rotation, out Vector3 centerOffset, out Vector3 worldAxis,
+                out float worldRadius, out float worldHeight))
         {
             Vector3 bottom = position + Vector3.up * 0.45f;
             Vector3 top = position + Vector3.up * 1.35f;
@@ -3853,29 +3881,10 @@ DeepNorth:
                 QueryTriggerInteraction.Ignore);
         }
 
-        Vector3 scale = prefab.transform.lossyScale;
-        int direction = Mathf.Clamp(capsule.direction, 0, 2);
-        float axisScale = Mathf.Abs(GetVectorAxis(scale, direction));
-        int radiusAxisA = direction == 0 ? 1 : 0;
-        int radiusAxisB = direction == 2 ? 1 : 2;
-        float radiusScale = Mathf.Max(
-            Mathf.Abs(GetVectorAxis(scale, radiusAxisA)),
-            Mathf.Abs(GetVectorAxis(scale, radiusAxisB)));
-        float worldRadius = Mathf.Max(0.05f, capsule.radius * radiusScale);
-        float worldHeight = Mathf.Max(capsule.height * axisScale, worldRadius * 2f);
         float checkRadius = Mathf.Max(0.05f, worldRadius - DungeonSpawnClearanceInset);
         float checkHeight = Mathf.Max(checkRadius * 2f, worldHeight - DungeonSpawnClearanceInset * 2f);
         float segmentHalf = Mathf.Max(0f, checkHeight * 0.5f - checkRadius);
-        Vector3 localAxis = direction switch
-        {
-            0 => Vector3.right,
-            2 => Vector3.forward,
-            _ => Vector3.up
-        };
-        Vector3 worldAxis = rotation * localAxis;
-        Vector3 center = position +
-                         rotation * Vector3.Scale(capsule.center, scale) +
-                         Vector3.up * DungeonSpawnClearanceInset;
+        Vector3 center = position + centerOffset + Vector3.up * DungeonSpawnClearanceInset;
         Vector3 point0 = center - worldAxis * segmentHalf;
         Vector3 point1 = center + worldAxis * segmentHalf;
         return !Physics.CheckCapsule(
@@ -3884,6 +3893,110 @@ DeepNorth:
             checkRadius,
             DungeonSpawnCollisionMask,
             QueryTriggerInteraction.Ignore);
+    }
+
+    private static float GetDungeonSpawnFloorOffset(GameObject prefab, Quaternion rotation)
+    {
+        if (!GetDungeonSpawnCapsule(prefab, rotation, out Vector3 center, out Vector3 axis,
+                out float radius, out float height)) return 0f;
+        // Use the full collider, not the slightly inset clearance capsule. Preserve already-clear
+        // pivots and the existing fallback for prefabs without a root capsule.
+        return Mathf.Max(0f, Mathf.Abs(axis.y) * (height * 0.5f - radius) + radius - center.y);
+    }
+
+    internal enum DungeonSpawnReason
+    {
+        LocationFound, LocationMissing, LoadedGeometry, UnloadedAnchorFallback, AnchorFound, AnchorMissing,
+        InvalidDungeonZone, FloorMissing, FloorHeight, CapsuleBlocked, PathAndLineBlocked, DirectRouteAccepted,
+        PositionFound, PlacementException, Reserved, ReservationCanceled, Spawned, MinionPositionMissing
+    }
+
+    // Local, bounded observations only. No Unity objects, physics queries, RPCs or gameplay
+    // decisions are retained here; Off does not look up prefab names or format samples.
+    internal static class DungeonDiagnostics
+    {
+        private sealed class Entry
+        {
+            internal int Count;
+            internal readonly List<string> Samples = new(3);
+        }
+        private static readonly Dictionary<DungeonSpawnReason, Entry> Entries = new();
+        private static float NextReport;
+        internal static bool Enabled => CreatureManagerPlugin.DungeonEnforcerDiagnostics?.Value == CreatureManagerPlugin.Toggle.On;
+
+        internal static void Reset()
+        {
+            Entries.Clear();
+            NextReport = 0f;
+        }
+
+        internal static bool Reject(DungeonSpawnReason reason, Vector3 position, GameObject prefab)
+        {
+            Record(reason, position, prefab);
+            return false;
+        }
+
+        internal static void Record(DungeonSpawnReason reason, Vector3 position, GameObject? prefab = null, string detail = "")
+        {
+            if (!Enabled) return;
+            try
+            {
+                // One bucket per fixed reason, regardless of the number of players/prefabs.
+                if ((uint)reason > (uint)DungeonSpawnReason.MinionPositionMissing) return;
+                if (!Entries.TryGetValue(reason, out Entry entry)) Entries[reason] = entry = new();
+                if (entry.Count < int.MaxValue) entry.Count++;
+                if (entry.Samples.Count >= 3) return;
+                string name = prefab != null ? prefab.name : detail;
+                name = name.Length > 96 ? name.Substring(0, 96) : name;
+                name = new string(name.Select(c => char.IsControl(c) || c == '|' ? '_' : c).ToArray());
+                entry.Samples.Add(string.Format(CultureInfo.InvariantCulture, "{0} xyz=({1:0.##},{2:0.##},{3:0.##})",
+                    name, position.x, position.y, position.z));
+            }
+            catch { /* Diagnostics must never interrupt a summon or its cost/cleanup. */ }
+        }
+
+        internal static void Update(float now)
+        {
+            if (!Enabled) { Reset(); return; }
+            if (NextReport == 0f) NextReport = now + 30f;
+            if (now < NextReport) return;
+            NextReport = now + 30f;
+            try
+            {
+                foreach (var pair in Entries)
+                    CreatureManagerPlugin.Log.LogInfo($"[DungeonEnforcerDiag] {pair.Key}={pair.Value.Count} | {string.Join(" | ", pair.Value.Samples)}");
+            }
+            catch { /* A failing log listener is not a gameplay failure. */ }
+            finally { Entries.Clear(); }
+        }
+    }
+
+    private static bool GetDungeonSpawnCapsule(GameObject prefab, Quaternion rotation,
+        out Vector3 center, out Vector3 axis, out float radius, out float height)
+    {
+        center = axis = default;
+        radius = height = 0f;
+        CapsuleCollider? capsule = prefab.GetComponent<CapsuleCollider>();
+        if (capsule == null) return false;
+        Vector3 scale = prefab.transform.lossyScale;
+        int direction = Mathf.Clamp(capsule.direction, 0, 2);
+        float axisScale = Mathf.Abs(GetVectorAxis(scale, direction));
+        int radiusAxisA = direction == 0 ? 1 : 0;
+        int radiusAxisB = direction == 2 ? 1 : 2;
+        float radiusScale = Mathf.Max(
+            Mathf.Abs(GetVectorAxis(scale, radiusAxisA)),
+            Mathf.Abs(GetVectorAxis(scale, radiusAxisB)));
+        radius = Mathf.Max(0.05f, capsule.radius * radiusScale);
+        height = Mathf.Max(capsule.height * axisScale, radius * 2f);
+        Vector3 localAxis = direction switch
+        {
+            0 => Vector3.right,
+            2 => Vector3.forward,
+            _ => Vector3.up
+        };
+        axis = rotation * localAxis;
+        center = rotation * Vector3.Scale(capsule.center, scale);
+        return true;
     }
 
     private static float GetPrefabCapsuleRadius(GameObject prefab)
@@ -4340,7 +4453,7 @@ DeepNorth:
     private static bool TryGetZoneLocationPrefabName(Vector3 position, out string prefabName)
     {
         prefabName = "";
-        if (ZoneSystem.instance == null)
+        if (!IsFinite(position) || ZoneSystem.instance == null)
         {
             return false;
         }
@@ -4352,7 +4465,9 @@ DeepNorth:
         }
 
         float radius = Mathf.Max(locationInstance.m_location.m_exteriorRadius, locationInstance.m_location.m_interiorRadius);
-        if (radius > 0f && Utils.DistanceXZ(locationInstance.m_position, position) > radius)
+        // Interior rooms belong to the registered zone, not the entrance/exterior radius.
+        // Keep the existing radius policy for outdoor location lookups.
+        if (!IsLikelyDungeonPosition(position) && radius > 0f && Utils.DistanceXZ(locationInstance.m_position, position) > radius)
         {
             return false;
         }
@@ -5941,6 +6056,7 @@ DeepNorth:
             Settings = _settings;
             PendingEnforcerSummons.Clear();
             ResetEnforcerBootstrapScan();
+            DungeonDiagnostics.Reset();
         }
     }
 

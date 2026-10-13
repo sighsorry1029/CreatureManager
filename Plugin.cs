@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.3.0";
+    internal const string ModVersion = "1.3.1";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -134,6 +134,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             KarmaMode = config("3 - Karma", "Karma System Mode", KarmaSystemMode.KarmaLevelAndEnforcer, Ordered("Off disables Karma runtime processing without deleting stored values. KarmaLevelAndEnforcer enables both features, KarmaLevelOnly disables Enforcer summons, and EnforcerOnly tracks Karma for summons without adding Karma levels to normal spawns.", 100));
             MaximumEnforcersPerSector = config("3 - Karma", "Maximum Enforcers Per Sector", 1, Ordered("Maximum active Enforcers allowed in the same fixed 3x3 Karma neighborhood.", 90, new AcceptableValueRange<int>(1, 20)));
             DungeonEnforcerSpawnDelay = config("3 - Karma", "Dungeon Enforcer Spawn Delay (s)", 5, Ordered("Seconds between the dungeon warning and spawning an Enforcer at its reserved position. Applies to periodic and Omen summons, including their minions; outdoor summons are unchanged. 0 spawns immediately. Reservations count toward the Enforcer limit. Existing reservations keep their deadline; they are canceled if the encounter becomes invalid, Enforcers are disabled, or karma.yml is successfully reloaded. Karma cost and cooldown start only after a successful spawn.", 88, new AcceptableValueRange<int>(0, 30)));
+            DungeonEnforcerDiagnostics = config("3 - Karma", "Dungeon Enforcer Diagnostics", Toggle.Off, Ordered("Local diagnostic logging for dungeon Enforcer placement. Enable on the server/host to report location, geometry/anchor fallback, placement and reservation outcomes every 30 seconds. Counts are grouped by reason with at most three bounded samples each. Does not change spawn rules or send diagnostics over the network.", 87), synchronizedSetting: false);
             EnforcerAbandonedDespawnSeconds = config("3 - Karma", "Enforcer Abandonment Despawn Time (s)", 120, Ordered("Seconds without a living player in the fixed 64 m encounter range before the Enforcer is removed without death drops. Summoned minions remain in the world. Dungeon checks require the same interior anchor zone; distance is measured on the XZ plane. Returning players or changing this value reset active timers. Enter an integer from 0 to 1500; 0 disables the feature.", 85, new AcceptableIntegerRangeWithoutSlider(0, 1500)));
             BlockEnforcerWhileBossActive = config("3 - Karma", "Block Enforcer While Boss Is Active", Toggle.On, Ordered("If on, Enforcer summons are blocked while a non-Enforcer boss is active in the same fixed 3x3 Karma neighborhood.", 80));
             BlockKarmaGainWhileBossActive = config("3 - Karma", "Block Karma Gain While Boss Is Active", Toggle.On, Ordered("If on, creature kills do not add Karma while a non-Enforcer boss is alive in the same fixed 3x3 Karma neighborhood. Killing the last active boss can still award Karma.", 75));
@@ -154,6 +155,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             PlayerTargetHoldDuration = config("7 - AI", "Player Target Hold Duration (s)", 5f, Ordered("Seconds to retain a valid player chosen by Player Target Switching. Expiry is processed on the next normal target-search tick; ongoing attacks are not interrupted. 0 disables holding; switching attempts still follow the configured interval. Death, lost sensing, a blocked path or normal pursuit abandonment can end a hold early. No new switching attempt occurs during an active hold, even if the switch interval has elapsed. Changing this value clears active holds and restarts the attempt interval.", 70, new AcceptableValueRange<float>(0f, 30f)));
             _configHandlersSubscribed = true;
             PlayerTargetSwitching.SettingChanged += ResetTargetingConfiguration;
+            DungeonEnforcerDiagnostics.SettingChanged += ResetDungeonDiagnostics;
             PlayerTargetSwitchInterval.SettingChanged += ResetTargetingConfiguration;
             PlayerTargetSwitchChance.SettingChanged += ResetTargetingConfiguration;
             PlayerTargetHoldDuration.SettingChanged += ResetTargetingConfiguration;
@@ -200,6 +202,9 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     {
         CreatureTargeting.ResetRuntimeState();
     }
+
+    private static void ResetDungeonDiagnostics(object sender, EventArgs args)
+        => CreatureKarmaManager.DungeonDiagnostics.Reset();
 
     private static void ReloadLevelConfiguration(object sender, EventArgs args)
     {
@@ -296,6 +301,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     private static void UnsubscribeConfigHandlers()
     {
         if (PlayerTargetSwitching != null) PlayerTargetSwitching.SettingChanged -= ResetTargetingConfiguration;
+        if (DungeonEnforcerDiagnostics != null) DungeonEnforcerDiagnostics.SettingChanged -= ResetDungeonDiagnostics;
         if (PlayerTargetSwitchInterval != null) PlayerTargetSwitchInterval.SettingChanged -= ResetTargetingConfiguration;
         if (PlayerTargetSwitchChance != null) PlayerTargetSwitchChance.SettingChanged -= ResetTargetingConfiguration;
         if (PlayerTargetHoldDuration != null) PlayerTargetHoldDuration.SettingChanged -= ResetTargetingConfiguration;
@@ -469,6 +475,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
     internal static ConfigEntry<KarmaSystemMode> KarmaMode = null!;
     internal static ConfigEntry<int> MaximumEnforcersPerSector = null!;
     internal static ConfigEntry<int> DungeonEnforcerSpawnDelay = null!;
+    internal static ConfigEntry<Toggle> DungeonEnforcerDiagnostics = null!;
     internal static ConfigEntry<int> EnforcerAbandonedDespawnSeconds = null!;
     internal static ConfigEntry<Toggle> BlockEnforcerWhileBossActive = null!;
     internal static ConfigEntry<Toggle> BlockKarmaGainWhileBossActive = null!;

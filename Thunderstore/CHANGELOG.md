@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.1
+
+- Fix dungeon-specific Enforcer selection in outer rooms beyond the entrance's location radius. Interior lookups use the registered location for the current zone; outdoor location-radius checks are unchanged.
+- Align dungeon spawn pivots with the full capsule's lower edge, including scaled and horizontal capsules, while keeping navigation targeted at the floor. Reapply the correction after path-endpoint adjustment and validate warned positions without moving them or canceling valid large offsets.
+- Keep dungeon candidates, spawner ZDO anchors and accepted path endpoints in the original dungeon zone. Preserve encounter selection, warning delay, shared active/reserved limits, minion policy, and Karma cost/cooldown timing.
+- Add `3 - Karma` → `Dungeon Enforcer Diagnostics`, default **Off** and local to each process. Enable it on the server/host for 30-second summaries of location matching, loaded geometry versus unloaded-anchor fallback, placement failures and reservation outcomes. Limit each reason to three short samples and isolate diagnostic failures from gameplay.
+- Preserve the dedicated server's existing unloaded-anchor fallback; client-assisted geometry validation is not part of this release. Add 111 isolated placement/diagnostic checks alongside the existing reservation checks. Actual Unity physics and multiplayer encounters remain in-game verification steps. Update the server and all clients to 1.3.1 together and restart.
+
 ## 1.3.0
 
 - Add optional, server-synchronized player target switching under `7 - AI`, independently of levels and modifiers. `Player Target Switching` defaults to **Off**, with a **10-second** attempt interval and **25%** chance when enabled. Untamed MonsterAI creatures, including bosses and Enforcers, can switch to another sensed, hostile player instead of always following the nearest target.

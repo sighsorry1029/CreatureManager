@@ -309,6 +309,7 @@ internal static class EnforcerDelayContracts
                 "BroadcastRegionalCenterQuote" => nameof(SpawnMessage), "GetPrefabName" => nameof(PrefabName),
                 "TryFindDungeonMinionPosition" => nameof(MinionPosition), "TryFindDungeonZdoAnchorPosition" => nameof(FindAnchor),
                 "HasDungeonSpawnClearance" => nameof(CheckClearance), "GetSpawnRotation" => nameof(Rotation),
+                "GetDungeonSpawnFloorOffset" => nameof(FloorOffset),
                 "ShowLocalCenterQuote" => nameof(ReceiveMessage), _ => null
             } : method.DeclaringType.Name == "ResolvedEnforcerSettings" && method.Name == "FromGlobal" ? nameof(FromGlobal)
                 : type == "UnityEngine.Random" && method.Name == "Range" ? nameof(RandomRange)
@@ -393,6 +394,8 @@ internal static class EnforcerDelayContracts
     private static bool CheckClearance(GameObject prefab, Vector3 position, Quaternion rotation)
     { GeometryChecks++; LastGeometry = position; return Clearance; }
     private static Quaternion Rotation(Vector3 position, Vector3 target) => Quaternion.identity;
+    // Shape math is exercised separately by DungeonPlacementContracts; these tests isolate reservations.
+    private static float FloorOffset(GameObject prefab, Quaternion rotation) => 0f;
     private static ZRoutedRpc GetRoutedRpc() => RoutedRpc;
     private static long ServerPeer(ZRoutedRpc rpc) => 42L;
     private static void ReceiveMessage(string message, int seconds) { Messages++; Events.Add(message + ":" + seconds); }
