@@ -135,12 +135,14 @@ internal static class LootContracts
         Require(scaling(drop, character, out _, out percent) && percent == 75, "boss percentage");
         Boss = false;
         foreach (Action change in new Action[] { () => drop.m_levelMultiplier = false, () => drop.m_onePerPlayer = true,
+                     () => drop.m_levelMultiplierNotAmount = true,
                      () => Player = true, () => Owner = false, () => Valid = false, () => Level = 1,
                      () => Item.m_itemData.m_shared.m_itemType = ItemDrop.ItemData.ItemType.Trophy })
         {
             change();
             Require(!scaling(drop, character, out _, out _), "excluded reward or non-authoritative instance");
             drop.m_levelMultiplier = true;
+            drop.m_levelMultiplierNotAmount = false;
             drop.m_onePerPlayer = Player = false;
             Owner = Valid = true;
             Level = 4;
@@ -165,6 +167,12 @@ internal static class LootContracts
         FieldInfo onePerPlayer = typeof(CharacterDrop.Drop).GetField(nameof(CharacterDrop.Drop.m_onePerPlayer))!;
         Require(rewritten.FindIndex(c => c.Calls(loot.GetMethod("ScaleAmount", Static)!)) < rewritten.FindIndex(c => c.LoadsField(onePerPlayer)), "scale before vanilla player override and cap");
         Require(original.Where(c => c.operand is MethodInfo).All(c => rewritten.Any(r => r.opcode == c.opcode && Equals(r.operand, c.operand))), "vanilla resource/pseudo-drop calls retained");
+        FieldInfo chanceOnly = typeof(CharacterDrop.Drop).GetField(nameof(CharacterDrop.Drop.m_levelMultiplierNotAmount))!;
+        Require(chanceOnly.IsPublic && rewritten.Count(c => c.LoadsField(chanceOnly)) == 1, "original public chance-only field and guard retained");
+        int guard = rewritten.FindIndex(c => c.LoadsField(chanceOnly));
+        Require(rewritten[guard + 1].opcode == OpCodes.Brtrue || rewritten[guard + 1].opcode == OpCodes.Brtrue_S, "chance-only drops skip the amount helper");
+        Require(rewritten.Any(c => c.labels.Contains((Label)rewritten[guard + 1].operand) &&
+                                   c.labels.Contains((Label)rewritten[guard - 2].operand)), "amount guards retain the same skip target");
 
         // An altered game body must preserve both original sites, rather than applying half a patch.
         PropertyInfo logger = entry.GetProperty("Log", Static)!;
@@ -180,6 +188,18 @@ internal static class LootContracts
             broken[field + 5] = new CodeInstruction(OpCodes.Nop); // Remove the chance multiply.
             var result = ((IEnumerable<CodeInstruction>)transpiler.Invoke(null, new object[] { broken })!).ToList();
             Require(result.SequenceEqual(broken) && warnings == 1, "unrecognized IL leaves complete original calculation");
+            var brokenAmount = PatchProcessor.GetOriginalInstructions(target);
+            int amountGuard = brokenAmount.FindIndex(c => c.LoadsField(chanceOnly));
+            brokenAmount[amountGuard + 1] = new CodeInstruction(OpCodes.Brfalse, brokenAmount[amountGuard + 1].operand);
+            result = ((IEnumerable<CodeInstruction>)transpiler.Invoke(null, new object[] { brokenAmount })!).ToList();
+            Require(result.SequenceEqual(brokenAmount) && warnings == 1, "invalid amount guard preserves whole calculation without repeating the warning");
+            var wrongTarget = PatchProcessor.GetOriginalInstructions(target);
+            int targetGuard = wrongTarget.FindIndex(c => c.LoadsField(chanceOnly));
+            int chanceGuard = wrongTarget.FindIndex(c => c.LoadsField(typeof(CharacterDrop.Drop).GetField(nameof(CharacterDrop.Drop.m_levelMultiplier))!));
+            wrongTarget[targetGuard + 1] = new CodeInstruction(wrongTarget[targetGuard + 1].opcode,
+                wrongTarget[chanceGuard + 1].operand);
+            result = ((IEnumerable<CodeInstruction>)transpiler.Invoke(null, new object[] { wrongTarget })!).ToList();
+            Require(result.SequenceEqual(wrongTarget) && warnings == 1, "amount guards with different destinations reject both rewrites without repeating the warning");
         }
         finally { logger.SetValue(null, priorLog); }
     }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.2
+
+- Restore CalculateChance loot scaling on Valheim 1.0.20 by recognizing the updated CharacterDrop amount guard. Validate both multiplier sites before applying either change; preserve the existing calculation if the method is unsupported.
+- Preserve vanilla chance-only star-scaled drops and their unscaled quantities. Keep DropNSpawn priority and existing trophy, one-per-player, ownership and item eligibility rules.
+- Limit an unsupported drop-calculation warning to once per process, including repeated Harmony patch rebuilds.
+- Add regression coverage for chance-only drops and malformed amount guards and branch targets. Original Valheim 1.0.20 client and dedicated-server managed checks pass; actual loot spawning and multiplayer gameplay remain in-game verification steps. Update the server and all clients to 1.3.2 together and restart.
+
 ## 1.3.1
 
 - Fix dungeon-specific Enforcer selection in outer rooms beyond the entrance's location radius. Interior lookups use the registered location for the current zone; outdoor location-radius checks are unchanged.

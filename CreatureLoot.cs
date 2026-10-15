@@ -45,7 +45,7 @@ internal static class CreatureLoot
     {
         level = 1;
         percent = 0;
-        if (!IsEnabled() || !drop.m_levelMultiplier || drop.m_onePerPlayer ||
+        if (!IsEnabled() || !drop.m_levelMultiplier || drop.m_levelMultiplierNotAmount || drop.m_onePerPlayer ||
             character == null || character.IsPlayer() ||
             !character.TryGetComponent(out ZNetView nview) || !nview.IsValid() || !nview.IsOwner() ||
             drop.m_prefab == null || !drop.m_prefab.TryGetComponent(out ItemDrop item))
@@ -103,6 +103,8 @@ internal static class CreatureLoot
 [HarmonyPatch(typeof(CharacterDrop), nameof(CharacterDrop.GenerateDropList))]
 internal static class CreatureManagerCharacterLootPatch
 {
+    private static bool _mismatchWarningLogged;
+
     private static void Prefix()
     {
         // Report the compatibility guard even if another mod disables every levelMultiplier
@@ -116,6 +118,7 @@ internal static class CreatureManagerCharacterLootPatch
     {
         List<CodeInstruction> codes = instructions.ToList();
         FieldInfo levelMultiplier = AccessTools.Field(typeof(CharacterDrop.Drop), nameof(CharacterDrop.Drop.m_levelMultiplier));
+        FieldInfo chanceOnly = AccessTools.Field(typeof(CharacterDrop.Drop), nameof(CharacterDrop.Drop.m_levelMultiplierNotAmount));
         FieldInfo character = AccessTools.Field(typeof(CharacterDrop), "m_character");
         MethodInfo chance = AccessTools.Method(typeof(CreatureLoot), nameof(CreatureLoot.ScaleChance));
         MethodInfo amount = AccessTools.Method(typeof(CreatureLoot), nameof(CreatureLoot.ScaleAmount));
@@ -128,28 +131,44 @@ internal static class CreatureManagerCharacterLootPatch
             // Match the two guarded multiplications, not other chance/resource/pseudo-drop
             // arithmetic. Discover locals instead of depending on their compiler-assigned slots.
             if (LoadLocalIndex(codes[i - 1]) < 0 ||
-                (codes[i + 1].opcode != OpCodes.Brfalse && codes[i + 1].opcode != OpCodes.Brfalse_S) ||
-                LoadLocalIndex(codes[i + 2]) < 0 || LoadLocalIndex(codes[i + 3]) < 0)
+                (codes[i + 1].opcode != OpCodes.Brfalse && codes[i + 1].opcode != OpCodes.Brfalse_S))
             {
                 continue;
             }
 
-            bool isChance = codes[i + 4].opcode == OpCodes.Conv_R4;
-            int multiply = i + (isChance ? 5 : 4);
+            // 1.0.20 only multiplies amounts when !m_levelMultiplierNotAmount.
+            // Keep that guard intact and require it to refer to the same row/skip target.
+            bool isAmount = codes[i + 3].LoadsField(chanceOnly);
+            int value = i + 2;
+            if (isAmount)
+            {
+                if (i + 8 >= codes.Count || LoadLocalIndex(codes[i + 2]) != LoadLocalIndex(codes[i - 1]) ||
+                    (codes[i + 4].opcode != OpCodes.Brtrue && codes[i + 4].opcode != OpCodes.Brtrue_S) ||
+                    !BranchesToSameTarget(codes, codes[i + 1], codes[i + 4])) continue;
+                value += 3;
+            }
+            if (LoadLocalIndex(codes[value]) < 0 || LoadLocalIndex(codes[value + 1]) < 0 ||
+                (!isAmount && codes[value + 2].opcode != OpCodes.Conv_R4)) continue;
+
+            int multiply = value + (isAmount ? 2 : 3);
             if (codes[multiply].opcode != OpCodes.Mul ||
-                StoreLocalIndex(codes[multiply + 1]) != LoadLocalIndex(codes[i + 2]))
+                StoreLocalIndex(codes[multiply + 1]) != LoadLocalIndex(codes[value]))
             {
                 continue;
             }
 
-            matches.Add((multiply, codes[i - 1], isChance ? chance : amount));
+            matches.Add((multiply, codes[i - 1], isAmount ? amount : chance));
         }
 
-        if (character == null || chance == null || amount == null || multiplierReads != 2 ||
+        if (character == null || chanceOnly == null || chance == null || amount == null || multiplierReads != 2 ||
             matches.Count != 2 || matches.Count(match => match.Method == chance) != 1 ||
             matches.Count(match => match.Method == amount) != 1)
         {
-            CreatureManagerPlugin.Log.LogWarning("Could not locate both CharacterDrop star multipliers; CreatureManager loot scaling is disabled and the existing drop calculation is preserved.");
+            if (!_mismatchWarningLogged)
+            {
+                _mismatchWarningLogged = true;
+                CreatureManagerPlugin.Log.LogWarning("Could not locate both CharacterDrop star multipliers; CreatureManager loot scaling is disabled and the existing drop calculation is preserved.");
+            }
             return codes;
         }
 
@@ -172,6 +191,13 @@ internal static class CreatureManagerCharacterLootPatch
         }
 
         return codes;
+    }
+
+    private static bool BranchesToSameTarget(List<CodeInstruction> codes, CodeInstruction first, CodeInstruction second)
+    {
+        // Harmony can allocate different labels for branches to the same original instruction.
+        return first.operand is Label a && second.operand is Label b &&
+               codes.Any(code => code.labels.Contains(a) && code.labels.Contains(b));
     }
 
     private static int LoadLocalIndex(CodeInstruction code)

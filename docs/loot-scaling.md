@@ -10,6 +10,23 @@
 - Explicit Enforcer bonus loot calls `CharacterDrop.DropItems` directly, outside this patch. No additional spawn, RPC, ZDO field, event subscription or per-frame work is introduced. Existing ragdoll loot is not recalculated.
 - Drop That tables which already define complete rewards per level can opt out per entry with `ScaleByLevel=false`, or globally with CM's `Vanilla` setting.
 
+## Valheim 1.0.20
+
+The amount multiplier now has an additional `!m_levelMultiplierNotAmount` guard.
+CM validates and preserves this guard, including its row and branch destination.
+Rows with this flag retain vanilla star-scaled chances and unscaled amounts;
+they are excluded from CalculateChance. Both multiplier sites must still match
+before either is rewritten. A mismatch warning is emitted at most once per process
+even if Harmony rebuilds the method repeatedly.
+
+2026-10-15 validation: the final Debug build succeeded with zero warnings/errors.
+Original Windows x64 1.0.20 client (25909357) and dedicated-server (25909431) Mono
+checks passed: 7,926 game/Unity IL references, 107 Harmony targets, eight transpiler
+applications and managed contracts, zero failures. New checks cover chance-only
+exclusion and malformed guards/branch destinations. The deployed Steam plugin DLL
+matches the merged build. No Unity scene, world or network session was executed;
+the earlier optional Drop That binary was unavailable for this run.
+
 ## Automated checks
 
 The test executable uses original game DLLs and the game's Mono in a separate process. It does not launch Unity, load a world, install native detours, or modify the supplied DLLs. Config fixtures use a temporary directory.
