@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.3
+
+- Add `None` to the server-synchronized `Biome Level Preset` option. In `Full` mode, it removes only built-in biome level weights; explicit YAML level rules and Karma/Enforcer level bonuses remain active. Keep `Off`, `ExceptLevel`, and `Full`, the default `Full + Easy` behavior, and existing saved preset values.
+- Use `Full + None` for selected YAML level overrides. Keeping `Global.level: [80, 20]` still supplies that base distribution to matching regular creatures and Enforcers; omit unwanted broad level weights to preserve assigned levels where no rule or bonus applies. Weights are not final star caps. `Bosses Follow Biome Level Preset` has no fallback effect with `None`, while explicit Boss/group/prefab level rules remain available.
+- Clarify config help, the README, and newly generated `levels.yml` headers. Preserve existing YAML files and completed creature state; `None` does not disable stat, scale, or modifier rules or restore vanilla scaling.
+- Add isolated checks for preset save/reload, existing numeric choices, level preservation without weights or bonuses, bonus handling, and generated YAML defaults. Original Valheim 1.0.20 client and dedicated-server managed checks pass; actual gameplay and multiplayer remain in-game verification steps. Update the server and all clients to 1.3.3 together and restart.
+
 ## 1.3.2
 
 - Restore CalculateChance loot scaling on Valheim 1.0.20 by recognizing the updated CharacterDrop amount guard. Validate both multiplier sites before applying either change; preserve the existing calculation if the method is unsupported.

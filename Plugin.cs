@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.3.2";
+    internal const string ModVersion = "1.3.3";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -83,7 +83,8 @@ public class CreatureManagerPlugin : BaseUnityPlugin
         Easy = 0,
         Normal = 1,
         Hard = 2,
-        VeryHard = 3
+        VeryHard = 3,
+        None = 4
     }
 
     public enum KarmaSystemMode
@@ -125,8 +126,8 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             BlockNearbySpawnsWhileBossActive = config("1 - General", "Block Nearby Spawns While Boss Is Active", Toggle.On, Ordered("Block new ordinary creatures from SpawnSystem, SpawnArea, and CreatureSpawner while a living non-Enforcer boss is in the surrounding near-loaded sectors (using the game's synchronized simulation distance). Checked around the candidate point for SpawnSystem and the spawner position for SpawnArea/CreatureSpawner. Interiors only match the same interior anchor zone. Existing creatures, raid spawns, boss prefabs, direct ability/altar summons, and Enforcer encounters are unchanged. Independent of Karma and level settings; applies on the next spawn attempt.", 50));
             BlockNearbySpawnsWhileEnforcerActive = config("1 - General", "Block Nearby Spawns While Enforcer Is Active", Toggle.On, Ordered("Block new ordinary creatures from SpawnSystem, SpawnArea, and CreatureSpawner while a living Enforcer is in the surrounding near-loaded sectors. Uses the same scope and exclusions as the Boss option. Pending Enforcer reservations do not block. Independent of Karma and level settings; applies on the next spawn attempt.", 49));
             EnableLevelSystem = config("2 - Levels", "Enable Level System", LevelSystemMode.Full, Ordered("Off disables CreatureManager level rules, level damage/health scaling, distance scaling, modifiers, and level visuals. ExceptLevel keeps the levels assigned by the game or other mods, skips CreatureManager level rolls and Karma/Enforcer level bonuses, and applies stat, distance, scale, and modifier rules using the actual level. Full also enables CreatureManager level assignment. In a new default levels.yml, change Global.damagePerLevel from 0.25 to 0.5 to match vanilla per-star damage growth for regular creatures; ExceptLevel already preserves the default vanilla health growth and prefab level sizes. Other matching rules and modifiers still apply. With no matching scalePerLevel rule, ExceptLevel uses the prefab's original level sizes; explicit 0 disables star growth. Karma tracking, Enforcer summons, and loot settings remain independent. Explicit spawn-command levels remain available. Changing this setting does not reroll existing creatures.", 100, new AcceptableLevelSystemModes()));
-            BiomeLevelPreset = config("2 - Levels", "Biome Level Preset", LevelBiomePreset.Easy, Ordered("Built-in level weights for vanilla biome names when Enable Level System is Full. Explicit biome, group, and prefab level rules in levels.yml override the preset; Global remains the fallback for non-boss creatures and Enforcers.", 90));
-            BossesFollowBiomeLevelPreset = config("2 - Levels", "Bosses Follow Biome Level Preset", Toggle.On, Ordered("If on and Enable Level System is Full, regular bosses can use the built-in Biome Level Preset as a level fallback when no Boss, group, or prefab level rule applies. Other omitted boss fields never fall back to Global.", 85));
+            BiomeLevelPreset = config("2 - Levels", "Biome Level Preset", LevelBiomePreset.Easy, Ordered("Used only when Enable Level System is Full. Easy, Normal, Hard, and VeryHard supply built-in level weights for vanilla biome names. None removes only these built-in weights; YAML level rules and Karma/Enforcer level bonuses still apply. Explicit biome, group, and prefab level rules in levels.yml override the preset; Global remains the fallback for non-boss creatures and Enforcers. With None, Global.level: [80, 20] still applies where no more specific YAML level rule matches. To keep game/other-mod levels except selected YAML targets, use Full + None and omit unwanted broad level rules such as Global.level; unmatched creatures keep their assigned level only when no Karma/Enforcer bonus applies. None does not change stat, scale, or modifier rules. ExceptLevel ignores both the preset and all YAML level weights.", 90));
+            BossesFollowBiomeLevelPreset = config("2 - Levels", "Bosses Follow Biome Level Preset", Toggle.On, Ordered("If on and Enable Level System is Full, regular bosses can use the built-in Biome Level Preset as a level fallback when no Boss, group, or prefab level rule applies. Has no effect with Biome Level Preset = None; explicit Boss, group, and prefab level rules still apply in Full. Other omitted boss fields never fall back to Global.", 85));
             ApplyLevelScaleToSaddleableCreatures = config("2 - Levels", "Apply Level Scale To Saddle-able Creatures", Toggle.On, Ordered("If off, levels.yml scalePerLevel is not applied to creatures that can use a saddle.", 70));
             EnableGlobalModifiers = config("2 - Levels", "Global Modifiers", ModifierLimit.Max4, ModifierLimitDescription("Controls non-boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 69));
             EnableBossModifiers = config("2 - Levels", "Boss Modifiers", ModifierLimit.Max4, ModifierLimitDescription("Controls regular boss creatures. Karma Enforcers are controlled separately by Enforcer Modifiers.", 68));

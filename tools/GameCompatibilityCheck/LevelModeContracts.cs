@@ -34,6 +34,8 @@ internal static class LevelModeContracts
     private static bool ExercisePostfixes, CmPostfixFirst;
     private static Action<Character, int>? ExternalPostfix;
     private static int RolledLevel = 4, VisualUpdates, ModifierRequests;
+    private static int KarmaLevelBonus = 2;
+    private static bool HasLevelWeights = true;
 
     internal static void Run(Assembly plugin)
     {
@@ -151,7 +153,9 @@ internal static class LevelModeContracts
             }
             Source = 0;
             CheckScaleModes(plugin, mode, character);
+            CheckBiomePresets(plugin, entry, bind, config, mode);
             CheckDefaultTemplate(plugin);
+            character = NewCharacter(1);
             typeof(ZDO).GetField("m_prefab", Instance)!.SetValue(CurrentZdo, "FrozenKing_p2".GetStableHashCode());
             Require(!(bool)Call("TryApplyLevelState", character)! && !(bool)Call("AllowsModifierEffects", character)!, "FrozenKing phase two stays protected in ExceptLevel");
         }
@@ -163,7 +167,7 @@ internal static class LevelModeContracts
             Dungeon = Saddle = false;
             File.Delete(configPath);
         }
-        System.Console.WriteLine("Level mode contracts passed: three config choices, legacy On/Vanilla/numeric/boxed values, canonical save/reload, weighted Full, disabled Off, ExceptLevel levels 1/3, sync/owner gates, health/damage/distance/scale/modifier eligibility, later level increases/decreases, missing-health preservation, no reroll, spawn policies, FrozenKing guard, native prefab sizes vs explicit overrides, default YAML. Rule inputs and native/world boundaries substituted.");
+        System.Console.WriteLine("Level mode contracts passed: three config choices, legacy On/Vanilla/numeric/boxed values, canonical save/reload, biome preset None and existing numeric values, no-weight/no-bonus level preservation, weighted Full, disabled Off, ExceptLevel levels 1/3, sync/owner gates, health/damage/distance/scale/modifier eligibility, later level increases/decreases, missing-health preservation, no reroll, spawn policies, FrozenKing guard, native prefab sizes vs explicit overrides, default YAML. Rule inputs and native/world boundaries substituted.");
     }
 
     private static void CheckReentrantLevels(ConfigEntryBase mode)
@@ -337,6 +341,58 @@ internal static class LevelModeContracts
         scaleRule.SetValue(Rule, 0.1f);
     }
 
+    private static void CheckBiomePresets(Assembly plugin, Type entry, MethodInfo bind, ConfigFile config, ConfigEntryBase mode)
+    {
+        FieldInfo field = entry.GetField("BiomeLevelPreset", Static)!;
+        object? saved = field.GetValue(null);
+        Type presetType = field.FieldType.GetGenericArguments()[0];
+        var preset = (ConfigEntryBase)bind.MakeGenericMethod(presetType).Invoke(config,
+            new[] { "2 - Levels", "Biome Level Preset", Enum.Parse(presetType, "Easy"), (object)new ConfigDescription("") })!;
+        Type domain = plugin.GetType("CreatureManager.CreatureDomainManager", true)!;
+        MethodInfo load = Copy(domain.GetMethod("LoadLevelPresetDefinitions", Static)!);
+        field.SetValue(null, preset);
+        try
+        {
+            Require(preset.GetSerializedValue() == "Easy", "preset default remains Easy");
+            string[] names = { "Easy", "Normal", "Hard", "VeryHard", "None" };
+            for (int i = 0; i < names.Length; i++)
+            {
+                preset.SetSerializedValue(i.ToString());
+                Require(preset.GetSerializedValue() == names[i], "stable preset numeric config: " + names[i]);
+                var definitions = ((IEnumerable)load.Invoke(null, Array.Empty<object>())!).Cast<object>().ToArray();
+                Require(definitions.Length == (names[i] == "None" ? 0 : 9), "loaded biome definitions: " + names[i]);
+                Require(definitions.All(d => (bool)d.GetType().GetProperty("IsPreset")!.GetValue(d)!), "built-in definitions retain preset identity");
+            }
+            config.Save();
+            preset.SetSerializedValue("Easy");
+            config.Reload();
+            Require(preset.GetSerializedValue() == "None" && !((IEnumerable)load.Invoke(null, Array.Empty<object>())!).Cast<object>().Any(),
+                "None survives save and live reload without restoring Easy weights");
+
+            mode.SetSerializedValue("Full");
+            HasLevelWeights = false;
+            KarmaLevelBonus = 0;
+            Character character = NewCharacter(3);
+            Require((bool)Call("TryApplyLevelState", character)! && GetLevel(character) == 3 && LevelWrites == 0 &&
+                    MaxHealth > 300f, "Full without weights or bonus retains game level while applying stats");
+            KarmaLevelBonus = 2;
+            character = NewCharacter(5);
+            Require((bool)Call("TryApplyLevelState", character)! && GetLevel(character) == 3 && LevelWrites == 1,
+                "None does not disable existing base-one plus Karma fallback policy");
+            HasLevelWeights = true;
+            character = NewCharacter(1);
+            Require((bool)Call("TryApplyLevelState", character)! && GetLevel(character) == RolledLevel + 2,
+                "Full with None still consumes supplied level weights and bonuses");
+        }
+        finally
+        {
+            field.SetValue(null, saved);
+            HasLevelWeights = true;
+            KarmaLevelBonus = 2;
+            mode.SetSerializedValue("ExceptLevel");
+        }
+    }
+
     private static void CheckDefaultTemplate(Assembly plugin)
     {
         Type domain = plugin.GetType("CreatureManager.CreatureDomainManager", true)!;
@@ -347,6 +403,8 @@ internal static class LevelModeContracts
         object[] rules = ((IEnumerable)args[2]!).Cast<object>().ToArray();
         object global = rules.Single(r => (string)r.GetType().GetProperty("Target")!.GetValue(r)! == "Global");
         object boss = rules.Single(r => (string)r.GetType().GetProperty("Target")!.GetValue(r)! == "Boss");
+        Require(((IEnumerable<float>)global.GetType().GetProperty("Level")!.GetValue(global)!).SequenceEqual(new[] { 80f, 20f }) &&
+                boss.GetType().GetProperty("Level")!.GetValue(boss) == null, "header changes preserve Global weights and omitted Boss weights");
         Require(global.GetType().GetProperty("ScalePerLevel")!.GetValue(global) == null &&
                 (float)global.GetType().GetProperty("DamagePerLevel")!.GetValue(global)! == 0.25f, "Global omits scale and keeps 0.25 damage growth");
         Require((float)boss.GetType().GetProperty("ScalePerLevel")!.GetValue(boss)! == 0.1f &&
@@ -436,8 +494,14 @@ internal static class LevelModeContracts
                 } : null;
             MethodInfo? replacement = boundary == null ? null : typeof(LevelModeContracts).GetMethod(boundary, Static);
             if (replacement == null && (type == Levels.FullName ||
-                type == "CreatureManager.CreatureDomainManager" && method.Name.StartsWith("Append", StringComparison.Ordinal)))
-                replacement = Copy((MethodInfo)method.ResolveReflection());
+                type == "CreatureManager.CreatureDomainManager" && (method.Name.StartsWith("Append", StringComparison.Ordinal) ||
+                    method.Name is "GetLevelPresetWeights" or "BuildLevelPresetDefinitions" or "LevelPreset")))
+            {
+                // Preset selection recurses only for invalid enum values. These fixtures
+                // use valid saved choices; leave that fallback call intact while copying.
+                MethodInfo called = (MethodInfo)method.ResolveReflection();
+                if (called != source) replacement = Copy(called);
+            }
             if (replacement == null) continue;
             instruction.OpCode = Mono.Cecil.Cil.OpCodes.Call;
             instruction.Operand = copy.Module.ImportReference(replacement);
@@ -496,8 +560,8 @@ internal static class LevelModeContracts
         return result != null;
     }
     private static bool SelectDistance(Character character, int index, out float multiplier, int scope) { multiplier = index == 1 ? 1.5f : 1.25f; return true; }
-    private static bool KarmaBonus(Character character, ZDO zdo, out int bonus) { KarmaQueries++; bonus = 2; return true; }
-    private static bool LevelWeights(Character character, out List<float> weights) { WeightQueries++; weights = Enumerable.Repeat(0f, RolledLevel - 1).Concat(new[] { 1f }).ToList(); return true; }
+    private static bool KarmaBonus(Character character, ZDO zdo, out int bonus) { KarmaQueries++; bonus = KarmaLevelBonus; return true; }
+    private static bool LevelWeights(Character character, out List<float> weights) { WeightQueries++; weights = Enumerable.Repeat(0f, RolledLevel - 1).Concat(new[] { 1f }).ToList(); return HasLevelWeights; }
     private static float RandomRange(float min, float max) => (min + max) / 2f;
     private static void Require(bool condition, string label)
     {

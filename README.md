@@ -270,6 +270,17 @@ The synchronized `[2 - Levels]` option `Enable Level System` accepts:
 | `ExceptLevel` | Keep the level assigned by the game or another mod | Enabled, using that actual level |
 | `Full` (default) | CreatureManager level weights, biome presets, and Karma/Enforcer level bonuses | Enabled |
 
+`Biome Level Preset` is used only in `Full` mode:
+
+| Preset | Level weights supplied by the preset |
+| --- | --- |
+| `Easy` (default), `Normal`, `Hard`, `VeryHard` | Built-in biome distributions; explicit YAML biome/group/prefab weights take priority. |
+| `None` | No built-in distribution. Matching YAML `level` weights and Karma/Enforcer level bonuses still apply. |
+
+`Full + None` lets YAML choose which creatures receive CM level rolls. If `Global.level: [80, 20]` remains in `levels.yml`, normal creatures and Enforcers without a more specific matching YAML level rule still roll 80% zero-star / 20% one-star in every biome. To keep game/other-mod levels except selected targets, remove or comment out `Global.level` and other unwanted broad `level` rules, then add weights to the desired prefab/group/biome. Leave other fields in place to retain their independent stat and modifier rules. A creature with no matching weights keeps its assigned level **only if no Karma/Enforcer level bonus applies**. Weights specify the base roll, not a final star cap; even `level: [100]` can receive bonus levels. Disable Karma level bonuses separately when a strict normal-spawn distribution is wanted.
+
+With `None`, `Bosses Follow Biome Level Preset` has no built-in distribution to use. Regular bosses still accept explicit Boss/group/prefab level rules in `Full`, and never inherit Global. `None` does not restore vanilla stat or size behavior: `Full` retains its existing scaling rules described below. The default remains `Full + Easy`, and existing YAML files are not rewritten.
+
 Existing `Off` config values remain valid. The former `On` selection (including numeric `1`) is read as `Full`, and `Vanilla` (including numeric `2`) is read as `ExceptLevel`; both are saved under their new names. With `ExceptLevel`, `Biome Level Preset`, `Bosses Follow Biome Level Preset`, and YAML `level` weights do not assign levels. Biome/group/prefab health, damage, per-level and distance multipliers, visual scale, and modifiers still follow the normal rule and spawn-source restrictions; the three modifier switches remain independent. Karma tracking and Enforcer encounters follow `Karma System Mode`, but their level bonuses are skipped. Loot settings remain independent. Explicit command levels (including `cm:spawn`) still work. Switching modes does not reroll or reset completed level/stat/modifier state on existing creatures; test automatic level assignment with new spawns.
 
 `ExceptLevel` only excludes CreatureManager's automatic level assignment. In a new default `levels.yml`, change `Global.damagePerLevel` from **0.25** to **0.5** to match vanilla per-star damage growth for regular creatures. Default health growth already matches vanilla, and omitted Global `scalePerLevel` preserves the prefab's original level sizes in this mode. Other matching rules and modifiers still apply; Karma, Enforcer encounters, and loot remain independently configured. Boss rules are separate and still apply if another mod or an explicit command gives a boss extra levels.

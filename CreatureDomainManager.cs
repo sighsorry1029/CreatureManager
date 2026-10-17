@@ -4973,6 +4973,7 @@ internal static class CreatureDomainManager
     {
         return preset switch
         {
+            CreatureManagerPlugin.LevelBiomePreset.None => Array.Empty<KeyValuePair<string, float[]>>(),
             CreatureManagerPlugin.LevelBiomePreset.Easy => new[]
             {
                 LevelPreset("Meadows", 100f),
@@ -5146,6 +5147,21 @@ internal static class CreatureDomainManager
     private static string BuildDefaultLevelOverrideYaml()
     {
         StringBuilder builder = new();
+        AppendTemplateComment(builder, "Config relationship: [2 - Levels] in sighsorry.CreatureManager.cfg (defaults: Full + Easy).");
+        AppendTemplateComment(builder, "Enable Level System:");
+        AppendTemplateComment(builder, "  Off = no CM automatic level assignment, level stat/distance/scale rules, or modifiers.");
+        AppendTemplateComment(builder, "  ExceptLevel = keep game/other-mod levels; ignore ALL YAML level weights, biome presets, and Karma/Enforcer level bonuses.");
+        AppendTemplateComment(builder, "                Stat, distance, scale, and modifier rules still apply using the actual level.");
+        AppendTemplateComment(builder, "  Full = also enable CM level assignment from matching weights and Karma/Enforcer level bonuses.");
+        AppendTemplateComment(builder, "Biome Level Preset (Full only): Easy / Normal / Hard / VeryHard supply built-in biome level weights.");
+        AppendTemplateComment(builder, "  None removes ONLY built-in weights; YAML level rules, stat/scale/modifier rules, and level bonuses remain active.");
+        AppendTemplateComment(builder, "  Full + None with Global.level: [80, 20] still rolls 80% zero-star / 20% one-star where no more specific YAML level rule applies.");
+        AppendTemplateComment(builder, "  For game/other-mod levels except selected YAML targets, use Full + None and omit unwanted broad level rules (including Global.level).");
+        AppendTemplateComment(builder, "  With no matching weights AND no Karma/Enforcer bonus, the assigned level is kept. Weights are base rolls, not final level caps.");
+        AppendTemplateComment(builder, "Bosses Follow Biome Level Preset only enables a regular-boss fallback in Full with a preset other than None.");
+        AppendTemplateComment(builder, "  Explicit Boss/group/prefab level rules still work in Full + None; regular bosses never inherit Global.");
+        AppendTemplateComment(builder, "Karma tracking, Enforcer summons, and loot have separate settings. Setting changes do not reroll completed creatures.");
+        AppendTemplateBlankLine(builder);
         AppendTemplateComment(builder, "Targets: Global, Boss, biome, group, or prefab; omitted fields inherit independently.");
         AppendTemplateComment(builder, "Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss.");
         AppendTemplateComment(builder, "Nested biome blocks override their parent target in that biome.");
