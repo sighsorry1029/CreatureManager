@@ -1,6 +1,6 @@
 # Default YAML reference
 
-**Version scope: CreatureManager 1.3.4 defaults.** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. In particular, the default Global level weights differ from 1.3.3 as described below.
+**Version scope: CreatureManager 1.3.5 defaults.** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. The scale guidance reflects the Full-mode behavior introduced in 1.3.5.
 
 | File | Contents |
 | --- | --- |
@@ -19,6 +19,7 @@ Additional inactive examples are maintained in [creatures.sample.yml](../../defa
 - Existing files under `BepInEx/config/CreatureManager/` are preserved by the mod. Compare and merge the entries you need; do not replace a customized file wholesale.
 - The new `levels.yml` leaves `Global.level` commented out. Published 1.3.3 generated an active `Global.level: [80, 20]`; that existing rule stays active until you remove/comment it yourself.
 - `Full + None` keeps game/other-mod levels only where no YAML level weights and no Karma/Enforcer bonus apply. Health, damage, scale, and modifier rules remain independent. This is not a switch to fully vanilla combat balance.
+- With no matching `scalePerLevel` value, both `Full` and `ExceptLevel` now use native prefab level sizes, including in dungeons. Published 1.3.4 supported this fallback only in `ExceptLevel`. Explicit `0` disables star growth; positive values retain CM's dungeon/saddle restrictions. Level one, missing prefab size entries, and stored modifier sizes are not migrated or reset.
 - Preset distribution tables at the bottom of `levels.yml` are comments, not active rules. Copy only the biome blocks you want and merge duplicate keys. Explicit biome YAML does not assign regular-boss levels; use Boss/group/prefab rules for them.
 - A `main` URL follows current source and can include unreleased changes. For an archived version, use GitHub's commit-specific file URL. Release notes should pin a reference to the corresponding documentation commit or release tag rather than silently changing an older release's defaults.
 

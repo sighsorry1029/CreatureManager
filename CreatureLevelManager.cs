@@ -1414,7 +1414,7 @@ internal static class CreatureLevelManager
 
     private static void ApplyLevelEffectsScale(LevelEffects levelEffects, CreatureLevelEffectsState state, Character character, int level)
     {
-        if (KeepsAssignedLevels() && !TrySelectScalePerLevel(character, out _))
+        if (!TrySelectScalePerLevel(character, out _))
         {
             // Match LevelEffects: prefab sizes are absolute, not multipliers of the
             // captured transform. Level one and unsupported levels leave size alone.
@@ -1434,7 +1434,7 @@ internal static class CreatureLevelManager
 
     private static void ApplyCharacterScaleFallback(Character character, int level)
     {
-        if (KeepsAssignedLevels() && !TrySelectScalePerLevel(character, out _))
+        if (!TrySelectScalePerLevel(character, out _))
         {
             // A prefab without LevelEffects has no vanilla star-size adjustment.
             return;

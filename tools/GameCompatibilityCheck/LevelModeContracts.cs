@@ -278,66 +278,65 @@ internal static class LevelModeContracts
     private static void CheckScaleModes(Assembly plugin, ConfigEntryBase mode, Character character)
     {
         LevelEffects effects = Uninitialized<LevelEffects>();
-        effects.m_levelSetups = new List<LevelEffects.LevelSetup>
-        {
-            new() { m_scale = 1.23f }, new() { m_scale = 1.7f }
-        };
         Type stateType = plugin.GetType("CreatureManager.CreatureLevelEffectsState", true)!;
         object state = FormatterServices.GetUninitializedObject(stateType);
         Vector3 original = new(2f, 3f, 4f);
         stateType.GetProperty("OriginalLocalScale", Instance)!.SetValue(state, original);
         PropertyInfo scaleRule = Rule.GetType().GetProperty("ScalePerLevel")!;
-        scaleRule.SetValue(Rule, null);
-        mode.SetSerializedValue("ExceptLevel");
-
-        foreach (bool restricted in new[] { false, true })
+        foreach (string modeName in new[] { "ExceptLevel", "Full" })
         {
-            // Native sizes bypass CM's dungeon and saddle-size restrictions.
-            Dungeon = Saddle = restricted;
+            mode.SetSerializedValue(modeName);
+            effects.m_levelSetups = new List<LevelEffects.LevelSetup>
+            {
+                new() { m_scale = 1.23f }, new() { m_scale = 1.7f }
+            };
+            scaleRule.SetValue(Rule, null);
+            foreach (bool restricted in new[] { false, true })
+            {
+                // Native sizes bypass CM's dungeon and saddle-size restrictions in both modes.
+                Dungeon = Saddle = restricted;
+                LocalScale = original;
+                ScaleWrites = 0;
+                Call("ApplyLevelEffectsScale", effects, state, character, 1);
+                Require(ScaleWrites == 0 && LocalScale == original, modeName + ": native level one is untouched");
+                Call("ApplyLevelEffectsScale", effects, state, character, 2);
+                Require(LocalScale == Vector3.one * 1.23f, modeName + ": native setup uses absolute scale, not original-scale multiplication");
+                Call("ApplyLevelEffectsScale", effects, state, character, 3);
+                Call("ApplyLevelEffectsScale", effects, state, character, 3);
+                Require(LocalScale == Vector3.one * 1.7f, modeName + ": native size follows each setup and never compounds");
+                int writes = ScaleWrites;
+                Call("ApplyLevelEffectsScale", effects, state, character, 4);
+                Call("ApplyLevelEffectsScale", effects, state, character, 1);
+                Require(ScaleWrites == writes && LocalScale == Vector3.one * 1.7f, modeName + ": native unsupported/level-one calls leave current size alone");
+            }
+
+            Dungeon = Saddle = false;
+            scaleRule.SetValue(Rule, 0f);
+            Call("ApplyLevelEffectsScale", effects, state, character, 3);
+            Require(LocalScale == original, modeName + ": explicit zero is not a native-size fallback");
+            scaleRule.SetValue(Rule, 0.1f);
+            Call("ApplyLevelEffectsScale", effects, state, character, 3);
+            Require(LocalScale == original * 1.2f, modeName + ": explicit scale uses captured base after native-size application");
+            Dungeon = true;
+            Call("ApplyLevelEffectsScale", effects, state, character, 3);
+            Require(LocalScale == original, modeName + ": explicit scale retains dungeon restriction");
+            Dungeon = false;
+            Saddle = true; // The unset saddle config acts as Off, matching production's existing gate.
+            Call("ApplyLevelEffectsScale", effects, state, character, 3);
+            Require(LocalScale == original, modeName + ": explicit scale retains saddle restriction");
+            Saddle = false;
+
+            scaleRule.SetValue(Rule, null);
+            Call("ApplyLevelEffectsScale", effects, state, character, 3);
+            Require(LocalScale == Vector3.one * 1.7f, modeName + ": removing an explicit rule restores the native supported-level size");
             LocalScale = original;
             ScaleWrites = 0;
-            Call("ApplyLevelEffectsScale", effects, state, character, 1);
-            Require(ScaleWrites == 0 && LocalScale == original, "native level one is untouched");
-            Call("ApplyLevelEffectsScale", effects, state, character, 2);
-            Require(LocalScale == Vector3.one * 1.23f, "native setup uses absolute scale, not original-scale multiplication");
+            effects.m_levelSetups.Clear();
             Call("ApplyLevelEffectsScale", effects, state, character, 3);
-            Call("ApplyLevelEffectsScale", effects, state, character, 3);
-            Require(LocalScale == Vector3.one * 1.7f, "native size follows each setup and never compounds");
-            int writes = ScaleWrites;
-            Call("ApplyLevelEffectsScale", effects, state, character, 4);
-            Call("ApplyLevelEffectsScale", effects, state, character, 1);
-            Require(ScaleWrites == writes && LocalScale == Vector3.one * 1.7f, "native unsupported/level-one calls leave current size alone");
+            Call("ApplyCharacterScaleFallback", character, 3);
+            Require(ScaleWrites == 0 && LocalScale == original, modeName + ": missing prefab setups leave size alone without creating a root scale component");
         }
-
-        Dungeon = Saddle = false;
-        scaleRule.SetValue(Rule, 0f);
-        Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Require(LocalScale == original, "explicit zero is not a native-size fallback");
-        scaleRule.SetValue(Rule, 0.1f);
-        Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Require(LocalScale == original * 1.2f, "explicit scale uses captured base after native-size application");
-        Dungeon = true;
-        Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Require(LocalScale == original, "explicit scale retains dungeon restriction");
-        Dungeon = false;
-        Saddle = true; // The unset saddle config acts as Off, matching production's existing gate.
-        Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Require(LocalScale == original, "explicit scale retains saddle restriction");
-        Saddle = false;
-
-        mode.SetSerializedValue("Full");
-        Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Require(LocalScale == original * 1.2f, "Full retains explicit size formula");
-        scaleRule.SetValue(Rule, null);
-        Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Require(LocalScale == original, "Full retains no-growth meaning for omitted scale");
         mode.SetSerializedValue("ExceptLevel");
-        LocalScale = original;
-        ScaleWrites = 0;
-        effects.m_levelSetups.Clear();
-        Call("ApplyLevelEffectsScale", effects, state, character, 3);
-        Call("ApplyCharacterScaleFallback", character, 3);
-        Require(ScaleWrites == 0 && LocalScale == original, "missing prefab setups leave size alone without creating a root scale component");
         scaleRule.SetValue(Rule, 0.1f);
     }
 

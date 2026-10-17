@@ -5171,7 +5171,7 @@ internal static class CreatureDomainManager
 
         builder.AppendLine("Global:");
         AppendTemplateLine(builder, 1, "level: [80, 20]                       # Optional fallback weights: zero-star, one-star, ...");
-        AppendTemplateLine(builder, 1, "scalePerLevel: 0.1                    # Optional CM star growth; 0 = none. Omit for prefab sizes in ExceptLevel mode; CM growth is skipped in dungeons.");
+        AppendTemplateLine(builder, 1, "scalePerLevel: 0.1                    # Optional CM star growth; 0 = none. Omit for prefab sizes in Full/ExceptLevel; CM growth is skipped in dungeons.");
         AppendIndented(builder, 1, "damage: 1                            # Level-1 damage multiplier.");
         AppendIndented(builder, 1, "damagePerLevel: 0.25                 # Vanilla: 0.5. Replaces vanilla growth: damage * (1 + (level - 1) * value).");
         AppendIndented(builder, 1, "health: 1                            # Level-1 max-health multiplier.");

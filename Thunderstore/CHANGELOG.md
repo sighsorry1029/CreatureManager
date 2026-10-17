@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.5
+
+- Use native prefab level sizes in `Full` as well as `ExceptLevel` when no applicable `scalePerLevel` rule supplies a value. Preserve native sizes in dungeons and on saddle-able creatures; explicit zero still disables star growth, while positive CM growth retains its dungeon/saddle restrictions. Rule inheritance and level assignment are unchanged.
+- Clarify config help, README, and default YAML guidance. Keep existing YAML and stored modifier sizes; level one, unsupported prefab levels, and creatures without level-size setups receive no new fallback size write. This changes omitted-scale behavior in `Full` compared with 1.3.4; use an explicit `0` where the previous no-growth behavior is wanted.
+- Extend isolated scale checks to both modes, including native sizes, repeated application, explicit overrides, and dungeon/saddle restrictions. Original Valheim 1.0.20 client and dedicated-server managed checks pass; actual Unity visuals, Reaping size combinations, and multiplayer remain in-game verification steps. Update the server and all clients to 1.3.5 together and restart.
+
 ## 1.3.4
 
 - Leave `Global.level: [80, 20]` commented out in newly generated `levels.yml`. With `Full + None`, unmatched creatures retain their game/other-mod levels when no Karma/Enforcer bonus applies. The default `Full + Easy` built-in biome distributions remain unchanged; unmatched biomes no longer receive an implicit Global roll. Existing user YAML is preserved.
