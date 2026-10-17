@@ -78,6 +78,7 @@ internal static class Program
         DungeonBlinkContracts.Run(plugin);
         EpicMmoHudContracts.Run(plugin);
         TargetingContracts.Run(plugin);
+        if (Failures == 0) DefaultYamlDocs.Run(plugin);
     }
 
     private static void CheckReferences(string pluginPath)

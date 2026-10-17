@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Leave `Global.level: [80, 20]` commented out in newly generated `levels.yml`. With `Full + None`, unmatched creatures retain their game/other-mod levels when no Karma/Enforcer bonus applies. The default `Full + Easy` built-in biome distributions remain unchanged; unmatched biomes no longer receive an implicit Global roll. Existing user YAML is preserved.
+- Restore commented biome distributions for Easy, Normal, Hard, and VeryHard, generated from the runtime preset data. Clarify None, fallback priority, bonus levels, and how to copy individual biome overrides without duplicate keys.
+- Publish the [default YAML reference](https://github.com/sighsorry1029/CreatureManager/tree/main/docs/defaults), including [levels.yml](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/levels.yml) and [karma.yml](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/karma.yml). These links follow current source; this section describes changes after the published 1.3.3 defaults.
+
 ## 1.3.3
 
 - Add `None` to the server-synchronized `Biome Level Preset` option. In `Full` mode, it removes only built-in biome level weights; explicit YAML level rules and Karma/Enforcer level bonuses remain active. Keep `Off`, `ExceptLevel`, and `Full`, the default `Full + Easy` behavior, and existing saved preset values.

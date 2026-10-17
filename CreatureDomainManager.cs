@@ -5155,8 +5155,9 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "  Full = also enable CM level assignment from matching weights and Karma/Enforcer level bonuses.");
         AppendTemplateComment(builder, "Biome Level Preset (Full only): Easy / Normal / Hard / VeryHard supply built-in biome level weights.");
         AppendTemplateComment(builder, "  None removes ONLY built-in weights; YAML level rules, stat/scale/modifier rules, and level bonuses remain active.");
-        AppendTemplateComment(builder, "  Full + None with Global.level: [80, 20] still rolls 80% zero-star / 20% one-star where no more specific YAML level rule applies.");
-        AppendTemplateComment(builder, "  For game/other-mod levels except selected YAML targets, use Full + None and omit unwanted broad level rules (including Global.level).");
+        AppendTemplateComment(builder, "Global.level is commented out by default. In Full it is the last fallback for non-boss creatures and Enforcers.");
+        AppendTemplateComment(builder, "  Easy/Normal/Hard/VeryHard supply biome weights before Global.level, which only fills unmatched cases (such as unsupported biomes).");
+        AppendTemplateComment(builder, "  Full + None supplies no built-in weights. Uncomment Global.level to supply fallback weights; more specific YAML level rules still win.");
         AppendTemplateComment(builder, "  With no matching weights AND no Karma/Enforcer bonus, the assigned level is kept. Weights are base rolls, not final level caps.");
         AppendTemplateComment(builder, "Bosses Follow Biome Level Preset only enables a regular-boss fallback in Full with a preset other than None.");
         AppendTemplateComment(builder, "  Explicit Boss/group/prefab level rules still work in Full + None; regular bosses never inherit Global.");
@@ -5169,7 +5170,7 @@ internal static class CreatureDomainManager
         AppendTemplateBlankLine(builder);
 
         builder.AppendLine("Global:");
-        AppendIndented(builder, 1, "level: [80, 20]                       # Weights by level: level 1 = 80, level 2 = 20.");
+        AppendTemplateLine(builder, 1, "level: [80, 20]                       # Optional fallback weights: zero-star, one-star, ...");
         AppendTemplateLine(builder, 1, "scalePerLevel: 0.1                    # Optional CM star growth; 0 = none. Omit for prefab sizes in ExceptLevel mode; CM growth is skipped in dungeons.");
         AppendIndented(builder, 1, "damage: 1                            # Level-1 damage multiplier.");
         AppendIndented(builder, 1, "damagePerLevel: 0.25                 # Vanilla: 0.5. Replaces vanilla growth: damage * (1 + (level - 1) * value).");
@@ -5209,7 +5210,35 @@ internal static class CreatureDomainManager
         AppendTemplateLine(builder, 0, "Troll:");
         AppendTemplateLine(builder, 1, "BlackForest:");
         AppendTemplateLine(builder, 2, "damage: 1.2");
+        AppendTemplateBlankLine(builder);
+        AppendLevelPresetTemplateComments(builder);
         return builder.ToString();
+    }
+
+    private static void AppendLevelPresetTemplateComments(StringBuilder builder)
+    {
+        AppendTemplateComment(builder, "Built-in distributions for Biome Level Preset (reference only; level weights apply in Full mode).");
+        AppendTemplateComment(builder, "Copy or uncomment only the biome blocks you want to override. Edit existing biome blocks instead of adding duplicate keys.");
+        AppendTemplateComment(builder, "Other biomes keep the selected preset's defaults; explicit YAML rules retain their normal priority.");
+        AppendTemplateComment(builder, "Weights are ordered from level 1 (zero stars), level 2 (one star), and so on, before Karma/Enforcer bonuses; they are not final star caps.");
+        AppendTemplateComment(builder, "None preset: no built-in distribution. Explicit YAML level rules (including Global.level) and Karma/Enforcer bonuses still apply in Full.");
+        AppendTemplateComment(builder, "Copied biome rules do not affect regular bosses; use Boss/group/prefab level rules for them.");
+        foreach (CreatureManagerPlugin.LevelBiomePreset preset in new[]
+                 {
+                     CreatureManagerPlugin.LevelBiomePreset.Easy,
+                     CreatureManagerPlugin.LevelBiomePreset.Normal,
+                     CreatureManagerPlugin.LevelBiomePreset.Hard,
+                     CreatureManagerPlugin.LevelBiomePreset.VeryHard
+                 })
+        {
+            AppendTemplateBlankLine(builder);
+            AppendTemplateComment(builder, $"{preset} preset:");
+            foreach (KeyValuePair<string, float[]> entry in GetLevelPresetWeights(preset))
+            {
+                AppendTemplateLine(builder, 0, $"{entry.Key}:");
+                AppendTemplateLine(builder, 1, $"level: [{string.Join(", ", entry.Value.Select(weight => weight.ToString(CultureInfo.InvariantCulture)))}]");
+            }
+        }
     }
 
     private static void AppendDefaultLevelModifiers(StringBuilder builder, bool bossDefaults)

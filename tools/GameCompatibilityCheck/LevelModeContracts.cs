@@ -403,12 +403,17 @@ internal static class LevelModeContracts
         object[] rules = ((IEnumerable)args[2]!).Cast<object>().ToArray();
         object global = rules.Single(r => (string)r.GetType().GetProperty("Target")!.GetValue(r)! == "Global");
         object boss = rules.Single(r => (string)r.GetType().GetProperty("Target")!.GetValue(r)! == "Boss");
-        Require(((IEnumerable<float>)global.GetType().GetProperty("Level")!.GetValue(global)!).SequenceEqual(new[] { 80f, 20f }) &&
-                boss.GetType().GetProperty("Level")!.GetValue(boss) == null, "header changes preserve Global weights and omitted Boss weights");
+        Require(global.GetType().GetProperty("Level")!.GetValue(global) == null &&
+                boss.GetType().GetProperty("Level")!.GetValue(boss) == null, "new defaults omit Global and Boss level weights");
         Require(global.GetType().GetProperty("ScalePerLevel")!.GetValue(global) == null &&
                 (float)global.GetType().GetProperty("DamagePerLevel")!.GetValue(global)! == 0.25f, "Global omits scale and keeps 0.25 damage growth");
         Require((float)boss.GetType().GetProperty("ScalePerLevel")!.GetValue(boss)! == 0.1f &&
                 (float)boss.GetType().GetProperty("DamagePerLevel")!.GetValue(boss)! == 0.1f, "Boss defaults stay unchanged");
+        args = new object?[] { "Global:\n  level: [80, 20]\n", "existing explicit Global weights", null };
+        Require((bool)parser.GetMethod("TryReadLevelDefinitions", Static)!.Invoke(null, args)!, "existing explicit Global weights remain valid");
+        object explicitGlobal = ((IEnumerable)args[2]!).Cast<object>().Single();
+        Require(((IEnumerable<float>)explicitGlobal.GetType().GetProperty("Level")!.GetValue(explicitGlobal)!).SequenceEqual(new[] { 80f, 20f }),
+            "explicit Global weights are preserved independently of the new default");
     }
 
     private static void CheckStats(Character character, int level)
