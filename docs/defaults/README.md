@@ -1,6 +1,6 @@
 # Default YAML reference
 
-**Version scope: current source, Unreleased changes after 1.3.3.** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration and are not the unchanged defaults shipped in 1.3.3.
+**Version scope: CreatureManager 1.3.4 defaults.** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. In particular, the default Global level weights differ from 1.3.3 as described below.
 
 | File | Contents |
 | --- | --- |

@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.3.4
 
 - Leave `Global.level: [80, 20]` commented out in newly generated `levels.yml`. With `Full + None`, unmatched creatures retain their game/other-mod levels when no Karma/Enforcer bonus applies. The default `Full + Easy` built-in biome distributions remain unchanged; unmatched biomes no longer receive an implicit Global roll. Existing user YAML is preserved.
 - Restore commented biome distributions for Easy, Normal, Hard, and VeryHard, generated from the runtime preset data. Clarify None, fallback priority, bonus levels, and how to copy individual biome overrides without duplicate keys.
-- Publish the [default YAML reference](https://github.com/sighsorry1029/CreatureManager/tree/main/docs/defaults), including [levels.yml](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/levels.yml) and [karma.yml](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/karma.yml). These links follow current source; this section describes changes after the published 1.3.3 defaults.
+- Publish all seven files in the [default YAML reference](https://github.com/sighsorry1029/CreatureManager/tree/main/docs/defaults), with fixed snapshots of [levels.yml](https://github.com/sighsorry1029/CreatureManager/blob/c24a23d85727d345d5abcc8028951ad85b782529/docs/defaults/levels.yml) and [karma.yml](https://github.com/sighsorry1029/CreatureManager/blob/c24a23d85727d345d5abcc8028951ad85b782529/docs/defaults/karma.yml) matching this release. The reference index follows current source; compare its version notice before copying settings.
+- Check the published YAML against the compiled first-launch generators and preserve explicit Global weights in existing files. Original Valheim 1.0.20 client and dedicated-server managed checks pass; actual gameplay and multiplayer remain in-game verification steps. Update the server and all clients to 1.3.4 together and restart.
 
 ## 1.3.3
 
