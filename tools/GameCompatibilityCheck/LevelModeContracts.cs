@@ -497,7 +497,7 @@ internal static class LevelModeContracts
                     "ApplyRuntimeVisuals" => nameof(UpdateVisuals), _ => null
                 } : null;
             MethodInfo? replacement = boundary == null ? null : typeof(LevelModeContracts).GetMethod(boundary, Static);
-            if (replacement == null && (type == Levels.FullName ||
+            if (replacement == null && (type == Levels.FullName || type == "CreatureManager.CreaturePovCompatibility" ||
                 type == "CreatureManager.CreatureDomainManager" && (method.Name.StartsWith("Append", StringComparison.Ordinal) ||
                     method.Name is "GetLevelPresetWeights" or "BuildLevelPresetDefinitions" or "LevelPreset")))
             {

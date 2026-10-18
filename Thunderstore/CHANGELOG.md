@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.6
+
+- Add focused compatibility with Path of Valheiman **5.0.7**. Prevent PoV difficulty from multiplying Reaping's already-scaled maximum HP again, while preserving Reaping's gain, healing and cap settings.
+- Preserve final current HP during CM level changes, stat/deficit restoration, Reaping healing and Deathward recovery/rollback. Keep PoV's difficulty multiplier on ordinary raw maximum-HP calculations, without reinterpreting CM's final HP as another raw value.
+- Make PoV's level-provider detection follow CM's live `Full`, `ExceptLevel` and `Off` settings, including synchronized changes. Preserve other level-provider detection without repeatedly scanning plugins during combat.
+- Let CM `CalculateChance` or an installed DropNSpawn own star-drop scaling instead of PoV's vanilla-table replacement. Preserve PoV's separate rarity rewards and additional loot. CM `Vanilla` without DropNSpawn retains PoV's existing policy; no settings, YAML defaults or saved-state formats change.
+- Validate PoV's optional integration contracts and limit this bridge to 5.0.7. Document [compatibility scope and remaining checks](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-5.0.7-compatibility.md). This is not a confirmed fix for the reported infinite boss HP; Warded shield allocation and FrozenKing policy remain outside this patch. The [default YAML contents](https://github.com/sighsorry1029/CreatureManager/tree/fd734455889e2f7e060ff11707681a01e1bd5d49/docs/defaults) are unchanged from 1.3.5.
+- Add isolated checks using the original PoV DLL for late Harmony installation, live mode changes, loot precedence and cleanup, wounded-health restoration, Reaping caps and exception handling. Original Valheim 1.0.20 client and dedicated-server managed checks pass; actual gameplay, reconnects and network ownership transfer still require in-game verification. Update the server and all clients to 1.3.6 together and restart.
+
 ## 1.3.5
 
 - Use native prefab level sizes in `Full` as well as `ExceptLevel` when no applicable `scalePerLevel` rule supplies a value. Preserve native sizes in dungeons and on saddle-able creatures; explicit zero still disables star growth, while positive CM growth retains its dungeon/saddle restrictions. Rule inheritance and level assignment are unchanged.

@@ -948,13 +948,13 @@ internal static class CreatureLevelManager
 
         RestoreStoredHealthMultiplier(character, zdo);
         float maxHealth = character.GetMaxHealth();
-        if (maxHealth <= 0f)
+        if (maxHealth <= 0f || float.IsNaN(maxHealth) || float.IsInfinity(maxHealth))
         {
             return;
         }
 
         float minimumHealth = Mathf.Min(1f, maxHealth);
-        character.SetHealth(Mathf.Clamp(maxHealth - missingHealth, minimumHealth, maxHealth));
+        CreaturePovCompatibility.SetFinalHealth(character, Mathf.Clamp(maxHealth - missingHealth, minimumHealth, maxHealth));
     }
 
     private static bool TryGetOwnedZdo(Character character, out ZDO zdo)
@@ -1305,7 +1305,7 @@ internal static class CreatureLevelManager
         float updatedMaxHealth = character.GetMaxHealth();
         if (previousHealth > 0f && previousMaxHealth > 0f && updatedMaxHealth > 0f && character.GetHealth() > 0f)
         {
-            character.SetHealth(Mathf.Clamp(updatedMaxHealth - missingHealth, Mathf.Min(1f, updatedMaxHealth), updatedMaxHealth));
+            CreaturePovCompatibility.SetFinalHealth(character, Mathf.Clamp(updatedMaxHealth - missingHealth, Mathf.Min(1f, updatedMaxHealth), updatedMaxHealth));
         }
     }
 
@@ -2340,10 +2340,14 @@ internal static class CreatureLevelManager
         float currentHealth = character.GetHealth();
         float missingHealth = Mathf.Max(0f, currentMaxHealth - currentHealth);
         character.SetMaxHealth(targetMaxHealth);
+        // This is a raw max-health write: PoV must still apply difficulty once.
+        // Restore the deficit against its resulting max, without its raw-HP conversion.
+        if (CreaturePovCompatibility.HasHealthBridge) targetMaxHealth = character.GetMaxHealth();
         if (currentMaxHealth > 0f && currentHealth > 0f)
         {
+            if (targetMaxHealth <= 0f || float.IsNaN(targetMaxHealth) || float.IsInfinity(targetMaxHealth)) return;
             float minimumHealth = Mathf.Min(1f, targetMaxHealth);
-            character.SetHealth(Mathf.Clamp(targetMaxHealth - missingHealth, minimumHealth, targetMaxHealth));
+            CreaturePovCompatibility.SetFinalHealth(character, Mathf.Clamp(targetMaxHealth - missingHealth, minimumHealth, targetMaxHealth));
         }
     }
 

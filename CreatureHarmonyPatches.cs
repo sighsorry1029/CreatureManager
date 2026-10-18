@@ -115,6 +115,7 @@ internal static class CreatureManagerFejdStartupAwakePatch
 {
     private static void Postfix(FejdStartup __instance)
     {
+        CreaturePovCompatibility.Initialize();
         CreaturePrefabRegistry.CacheFejdStartup(__instance);
     }
 }
@@ -124,6 +125,7 @@ internal static class CreatureManagerZNetSceneAwakePatch
 {
     private static void Prefix(ZNetScene __instance)
     {
+        CreaturePovCompatibility.Initialize();
         CreaturePrefabRegistry.RegisterPendingPrefabs(__instance);
     }
 

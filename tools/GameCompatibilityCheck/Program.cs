@@ -79,6 +79,8 @@ internal static class Program
         EpicMmoHudContracts.Run(plugin);
         TargetingContracts.Run(plugin);
         if (Failures == 0) DefaultYamlDocs.Run(plugin);
+        string? povPath = Environment.GetEnvironmentVariable("CREATUREMANAGER_POV_DLL");
+        if (Failures == 0 && !string.IsNullOrWhiteSpace(povPath)) PovCompatibilityContracts.Run(plugin, Assembly.LoadFrom(povPath));
     }
 
     private static void CheckReferences(string pluginPath)

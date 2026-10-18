@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.3.5";
+    internal const string ModVersion = "1.3.6";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -277,6 +277,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             _runtimeCleanupPending = false;
             TryCleanup("remove the Karma minimap HUD", CreatureKarmaMinimapHud.Clear);
             TryCleanup("restore EpicMMO level label positions", CreatureEpicMmoHud.Reset);
+            TryCleanup("remove Path of Valheiman compatibility", CreaturePovCompatibility.Reset);
             TryCleanup("reset spawn lifecycle state", CreatureManagerSpawnLifecycle.ResetRuntimeState);
             TryCleanup("reset spawn blocker candidates", CreatureSpawnBlocker.ResetRuntimeState);
             TryCleanup("reset AI target switching", CreatureTargeting.ResetRuntimeState);

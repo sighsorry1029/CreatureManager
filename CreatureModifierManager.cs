@@ -7747,7 +7747,7 @@ internal static class CreatureModifierManager
             zdo.Set(DeathwardNextReadyTimeKey, GetNetworkTimeSeconds() + cooldown);
             InvalidateModifierHudState(target);
             hit.m_damage.Modify(0f);
-            target.SetHealth(Mathf.Max(1f, maxHealth * healthRatio));
+            CreaturePovCompatibility.SetFinalHealth(target, Mathf.Max(1f, maxHealth * healthRatio));
             FinalDeathwardConsumedHits.Add(hit);
             PlayDeathwardTriggerEffects(target.GetCenterPoint());
             return 0f;
@@ -7794,7 +7794,7 @@ internal static class CreatureModifierManager
         {
             if (!float.IsNaN(originalHealth) && !float.IsInfinity(originalHealth))
             {
-                target.SetHealth(originalHealth);
+                CreaturePovCompatibility.SetFinalHealth(target, originalHealth);
             }
         }
         catch
@@ -9535,7 +9535,7 @@ internal static class CreatureModifierManager
         float targetMaxHealth = baseMaxHealth + Mathf.Min(currentHealthBonus, maxHealthBonus);
         if (!Mathf.Approximately(character.GetMaxHealth(), targetMaxHealth))
         {
-            character.SetMaxHealth(targetMaxHealth);
+            CreaturePovCompatibility.SetFinalMaxHealth(character, targetMaxHealth);
         }
 
         float requestedHeal = healRemaining ? baseMaxHealth * settings.HealPerKill : 0f;
@@ -9544,7 +9544,7 @@ internal static class CreatureModifierManager
         {
             healActivationCount++;
             zdo.Set(ReapingHealActivationCountKey, healActivationCount);
-            character.SetHealth(healthBefore + actualHeal);
+            CreaturePovCompatibility.SetFinalHealth(character, healthBefore + actualHeal);
             ShowReapingHealText(character, actualHeal);
         }
 
@@ -9593,7 +9593,7 @@ internal static class CreatureModifierManager
         float targetMaxHealth = baseMaxHealth + Mathf.Min(bonusHealth, baseMaxHealth * maxHealthCap);
         if (!Mathf.Approximately(character.GetMaxHealth(), targetMaxHealth))
         {
-            character.SetMaxHealth(targetMaxHealth);
+            CreaturePovCompatibility.SetFinalMaxHealth(character, targetMaxHealth);
         }
     }
 
