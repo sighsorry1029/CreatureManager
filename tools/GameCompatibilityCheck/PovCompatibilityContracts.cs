@@ -34,6 +34,10 @@ internal static class PovCompatibilityContracts
     private static int BossGrants, BossGrantCount;
     private static ZNetView View = null!;
     private static bool ThrowBossFill, PreserveRolls;
+    private static float HudTime;
+    private static bool Interior = true;
+    private static float GroupRoll = .5f;
+    private static int GroupDraws;
     private static ConfigEntry<bool> BossEnabled = null!, BossFirstKill = null!;
     private static ConfigEntry<int> BossMods = null!;
 
@@ -89,6 +93,7 @@ internal static class PovCompatibilityContracts
             harness.Patch(pov.GetType("Valheiman.Api.Creatures", true)!.GetMethod("IsLeftAlone", All)!, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(LeftAloneBody)));
             harness.Patch(pov.GetType("PassiveTree.CreatureRarity", true)!.GetProperty("Working")!.GetGetMethod()!, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(RarityBody)));
             harness.Patch(pov.GetType("PassiveTree.RarityMods", true)!.GetMethod("Fill", All)!, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(BossFillBody)));
+            harness.Patch(pov.GetType("PassiveTree.RarityMods", true)!.GetMethod("On", All)!, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(PovBoundaries)));
             foreach (MethodInfo method in new[] {
                 Difficulty.GetMethod("SetScaledMaxHealth", All)!, Difficulty.GetMethod("WriteHealth", All)!,
                 Difficulty.GetNestedType("MaxHealth", BindingFlags.NonPublic)!.GetMethod("Prefix", All)!,
@@ -157,20 +162,22 @@ internal static class PovCompatibilityContracts
 
             CheckHealth();
             CheckHud(pov, levelMode);
+            CheckModifierExclusions(pov, levelMode);
             CheckBossModifiers(bossType, levelMode);
             Bridge.GetMethod("Reset", All)!.Invoke(null, null);
             Require(registeredLootPatches.SequenceEqual(LootPatchRegistrations()), "cleanup preserves other owners' loot patch registrations");
             Require(Roll().All(row => row.Value == 4), "cleanup restores PoV loot without removing its patches");
             Require(!ForeignLevels(), "cleanup restores PoV original cached getter");
             Require(!(bool)Bridge.GetProperty("HasHealthBridge", All)!.GetValue(null)!, "cleanup releases health delegates");
-            Require(!(bool)Bridge.GetProperty("UsesPovStarDisplay", All)!.GetValue(null)!, "HUD cleanup restores CM preference");
+            Require(Bridge.GetField("_activeModifiers", All)!.GetValue(null) == null, "cleanup releases active modifier reader");
+            Require(!(bool)cm.GetType("CreatureManager.CreaturePovHud", true)!.GetProperty("Enabled", All)!.GetValue(null)!, "HUD cleanup restores CM preference");
             Chainloader.PluginInfos.Add("fixture.other.levels", new PluginInfo());
             typeof(PluginInfo).GetProperty("Metadata")!.SetValue(Chainloader.PluginInfos["fixture.other.levels"],
                 new BepInPlugin("fixture", "Creature Level and Loot", "1.0.0"));
             Bridge.GetMethod("Install", All)!.Invoke(null, new object[] { pov });
             levelMode.SetSerializedValue("Off");
             Require(ForeignLevels(), "other provider detection remains authoritative");
-            Require(!(bool)Bridge.GetProperty("UsesPovStarDisplay", All)!.GetValue(null)!, "other level provider prevents HUD takeover");
+            Require(!(bool)cm.GetType("CreatureManager.CreaturePovHud", true)!.GetProperty("Enabled", All)!.GetValue(null)!, "other level provider prevents HUD takeover");
             System.Console.WriteLine("PoV contracts passed: version-independent startup, rejected incompatible loot contracts, real managed Harmony callers before/after late install, cached/live level ownership, CM/DNS/PoV loot priority and exception cleanup, raw vs final HP, Reaping cap/restore/heal, per-character pending state and shutdown. Unity/world/FX boundaries substituted; no game session.");
         }
         finally
@@ -184,7 +191,123 @@ internal static class PovCompatibilityContracts
             for (int i = 0; i < bossConfigFields.Length; i++) bossConfigFields[i].SetValue(null, savedBossConfig[i]);
             Owner = ConfigReady = Boss = WasKilled = RarityWorking = true;
             LevelReady = FrozenPhase = LeftAlone = PreserveRolls = false;
+            Interior = true; GroupRoll = .5f; GroupDraws = 0;
             Rows.Clear(); Copies.Clear();
+        }
+    }
+
+    private static void CheckModifierExclusions(Assembly pov, ConfigEntryBase mode)
+    {
+        Type foreignMods = pov.GetType("PassiveTree.RarityMods", true)!;
+        Type foreignMask = foreignMods.GetNestedType("Mod")!;
+        Type cmMask = Modifiers.GetNestedType("ModifierMask", All)!;
+        int PovBit(string name) => Convert.ToInt32(Enum.Parse(foreignMask, name));
+        long CmBit(string name) => Convert.ToInt64(Enum.Parse(cmMask, name));
+        MethodInfo get = Copy(Bridge.GetMethod("GetExcludedModifiers", All)!);
+        long Excluded() => Convert.ToInt64(get.Invoke(null, new object[] { Actor }));
+        var expected = new[]
+        {
+            ("Swift", "Swift"), ("Furious", "AttackSpeed"), ("Armored", "Armored"),
+            ("Hardy", "Regenerating"), ("Greedy", "Vampiric"), ("Steadfast", "Unflinching"),
+            ("Piercing", "ArmorPiercing"), ("Burning", "Fire"), ("Chilling", "Frost"),
+            ("Shocking", "Lightning"), ("Blink", "Blink"), ("Mirror", "Reflection"), ("Rotten", "ToxicDeath")
+        };
+        var config = new ConfigFile(Path.Combine(Path.GetTempPath(), "CM-overlap-" + Guid.NewGuid() + ".cfg"), false) { SaveOnConfigSet = false };
+        FieldInfo ordinaryOff = pov.GetType("PassiveTree.CreatureRarity", true)!.GetField("ModsOff")!;
+        FieldInfo bossOff = pov.GetType("PassiveTree.BossStars", true)!.GetField("ModsOff")!;
+        object? savedOrdinary = ordinaryOff.GetValue(null), savedBoss = bossOff.GetValue(null);
+        var ordinary = config.Bind("overlap", "ordinary off", "");
+        var bosses = config.Bind("overlap", "boss off", "");
+        ordinaryOff.SetValue(null, ordinary); bossOff.SetValue(null, bosses);
+        FieldInfo reader = Bridge.GetField("_activeModifiers", All)!;
+        var realReader = (Func<Character, int>)reader.GetValue(null)!;
+        try
+        {
+            Boss = Interior = false; RarityWorking = true;
+            foreach (string name in Enum.GetNames(foreignMask))
+            {
+                SetInt(Data, "pt.crmod", PovBit(name));
+                var match = expected.SingleOrDefault(pair => pair.Item1 == name);
+                Require(Excluded() == (match.Item2 == null ? 0 : CmBit(match.Item2)), "exact policy for active PoV " + name);
+            }
+            int all = expected.Aggregate(0, (mask, pair) => mask | PovBit(pair.Item1));
+            long allCm = expected.Aggregate(0L, (mask, pair) => mask | CmBit(pair.Item2));
+            SetInt(Data, "pt.crmod", all);
+            Require(Excluded() == allCm, "combined active flags compose without excluding unrelated modifiers");
+            Interior = true;
+            Require(Excluded() == (allCm & ~CmBit("Blink")), "dungeon retains CM Blink and only Blink");
+            Interior = false;
+            ordinary.Value = "mirror, rotten";
+            Require(Excluded() == (allCm & ~CmBit("Reflection") & ~CmBit("ToxicDeath")), "ordinary live PoV exclusions are respected");
+            Boss = true; bosses.Value = "blink, armored";
+            Require(Excluded() == (allCm & ~CmBit("Blink") & ~CmBit("Armored")), "boss exclusions override ordinary exclusions");
+            RarityWorking = false;
+            Require(Excluded() == 0, "disabled PoV rarity does not suppress CM modifiers");
+            RarityWorking = true; Boss = false; ordinary.Value = "";
+            reader.SetValue(null, null);
+            Require(Excluded() == 0, "absent or unsupported PoV retains CM candidates");
+            int reads = 0;
+            reader.SetValue(null, (Func<Character, int>)(c => { reads++; return realReader(c); }));
+            Require(Excluded() == allCm && reads == 1, "one active mask read per selection");
+
+            // Execute the production weighted group selector with only RNG and
+            // Unity-dependent prefab applicability substituted.
+            MethodInfo select = Copy(Modifiers.GetMethod("RollConfiguredMask", All)!);
+            Type chanceType = select.GetParameters()[1].ParameterType;
+            object Chances(params (string Key, float Chance)[] entries)
+            {
+                object result = Activator.CreateInstance(chanceType, true)!;
+                foreach (var entry in entries) chanceType.GetMethod("Set", All)!.Invoke(result, new object[] { entry.Key, entry.Chance });
+                return result;
+            }
+            long Roll(object chances, long excluded, float at)
+            {
+                GroupRoll = at; GroupDraws = 0;
+                return Convert.ToInt64(select.Invoke(null, new[] { Actor, chances, Enum.ToObject(cmMask, excluded) }));
+            }
+            object mixed = Chances(("fire", 100f), ("spirit", 20f), ("reflection", 100f), ("deathward", 100f), ("toxicDeath", 100f), ("swift", 100f));
+            Require(Roll(mixed, allCm, .1f) == (CmBit("Spirit") | CmBit("Deathward")), "eligible effects still roll across their original groups");
+            Require(GroupDraws == 2, "fully excluded groups consume no RNG");
+            Require(Roll(mixed, allCm, .5f) == CmBit("Deathward"), "remaining 20 percent is not promoted to a guaranteed success");
+            Require(Roll(Chances(("fire", 100f)), allCm, 0f) == 0 && GroupDraws == 0, "even YAML 100 percent cannot select an excluded automatic effect");
+            object weighted = Chances(("fire", 100f), ("spirit", 100f), ("armorPiercing", 100f));
+            Require(Roll(weighted, CmBit("Fire"), .25f) == CmBit("Spirit") &&
+                    Roll(weighted, CmBit("Fire"), .75f) == CmBit("ArmorPiercing"), "excluded weights are removed before normalization");
+            Require(Roll(weighted, CmBit("Fire"), 1f) == CmBit("ArmorPiercing"), "upper RNG bound retains only an eligible final candidate");
+            Require(Roll(Chances(("blink", 100f)), allCm, 0f) == 0 &&
+                    Roll(Chances(("blink", 100f)), allCm & ~CmBit("Blink"), 0f) == CmBit("Blink"), "dungeon exception reaches actual group selection");
+
+            // Existing saves and non-authoritative callers must not even query PoV.
+            MethodInfo attempt = Copy(Modifiers.GetMethod("TryRollModifiers", All)!);
+            string applied = Key("AppliedKey");
+            mode.SetSerializedValue("Full"); LevelReady = ConfigReady = Owner = true;
+            SetBool(Data, applied, true); reads = 0;
+            attempt.Invoke(null, new object[] { Actor });
+            Require(reads == 0 && Data.GetBool(applied), "existing modifier rolls remain unchanged");
+            SetBool(Data, applied, false); Owner = false;
+            attempt.Invoke(null, new object[] { Actor });
+            Owner = true; ConfigReady = false;
+            attempt.Invoke(null, new object[] { Actor });
+            ConfigReady = true; mode.SetSerializedValue("Off");
+            attempt.Invoke(null, new object[] { Actor });
+            Require(reads == 0 && !Data.GetBool(applied), "non-owner, unsynchronized and Off paths neither query nor write modifiers");
+
+            var codes = PatchProcessor.GetOriginalInstructions(Modifiers.GetMethod("TryRollModifiers", All)!);
+            int complete = codes.FindIndex(code => code.operand is MethodInfo m && m.Name == "TryCompleteBossModifiers");
+            int filter = codes.FindIndex(code => code.operand is MethodInfo m && m.Name == "GetExcludedModifiers");
+            int roll = codes.FindIndex(code => code.operand is MethodInfo m && m.Name == "RollConfiguredMask");
+            Require(complete >= 0 && complete < filter && filter < roll, "all automatic entries complete pending boss grants before reading active effects");
+            Require(!PatchProcessor.GetOriginalInstructions(Modifiers.GetMethod("TryApplyForcedModifiers", All)!).Any(code =>
+                code.operand is MethodInfo m && (m.Name == "GetExcludedModifiers" || m.Name == "RollConfiguredMask")), "explicit forced modifiers retain priority");
+            Rejected("InstallModifierExclusions", typeof(object).Assembly);
+            System.Console.WriteLine("PoV overlap contracts passed: all 26 named effects, 13 exclusions, live ordinary/boss disable lists, dungeon Blink, weighted rolls and empty groups, existing/forced rolls, owner/config/Off gates, pending boss order and absent-provider fallback. No game session.");
+        }
+        finally
+        {
+            reader.SetValue(null, realReader); ordinaryOff.SetValue(null, savedOrdinary); bossOff.SetValue(null, savedBoss);
+            SetInt(Data, "pt.crmod", 0); SetBool(Data, Key("AppliedKey"), false);
+            Interior = true; Boss = RarityWorking = Owner = ConfigReady = true; LevelReady = false;
+            GroupRoll = .5f; mode.SetSerializedValue("Full");
         }
     }
 
@@ -311,30 +434,88 @@ internal static class PovCompatibilityContracts
 
     private static void CheckHud(Assembly pov, ConfigEntryBase mode)
     {
-        Type hud = pov.GetType("PassiveTree.RarityHud", true)!;
-        MethodInfo icons = hud.GetMethod("Icons", All)!;
-        MethodInfo scan = hud.GetMethod("ForeignStars", All)!;
-        MethodInfo foreign = pov.GetType("PassiveTree.CreatureStars", true)!.GetProperty("ForeignLevels")!.GetGetMethod()!;
-        var original = PatchProcessor.GetOriginalInstructions(icons);
-        var changed = ((IEnumerable<CodeInstruction>)Bridge.GetMethod("HudTranspiler", All)!.Invoke(null, new object[] { original.Select(c => new CodeInstruction(c)).ToList(), icons })!).ToList();
-        Require(!changed.Any(c => c.Calls(foreign) || c.Calls(scan)) && changed.Count == original.Count, "HUD patch replaces exactly its two guards without new branch/control flow");
-        var broken = original.Where(c => !c.Calls(scan)).ToList();
-        Rejected("ValidateHudCalls", broken, foreign, scan);
-        MethodInfo localLevels = Bridge.GetMethod("HudForeignLevels", All)!, localScan = Bridge.GetMethod("HudForeignStars", All)!;
+        Type hud = Bridge.Assembly.GetType("CreatureManager.CreaturePovHud", true)!;
+        MethodInfo draw = pov.GetType("PassiveTree.UI.AilmentHudBridge", true)!.GetMethod("Draw", All)!;
+        var original = PatchProcessor.GetOriginalInstructions(draw);
+        var registrations = Harmony.GetPatchInfo(draw);
+        Require(registrations.Postfixes.Any(p => p.PatchMethod.DeclaringType == hud), "status placement runs after PoV has drawn its live statuses");
+        Require(!registrations.Transpilers.Any(p => p.PatchMethod.DeclaringType == hud), "original status drawing/health body is unchanged");
+        MethodInfo apply = pov.GetType("PathOfValheiman.AilmentHud.AilmentHudView", true)!.GetMethod("Apply", All)!;
+        bool rejected = false;
+        try { hud.GetMethod("RequireCall", All)!.Invoke(null, new object[] { typeof(PovCompatibilityContracts).GetMethod(nameof(HudClock), All)!, apply }); }
+        catch (TargetInvocationException ex) when (ex.InnerException is NotSupportedException) { rejected = true; }
+        Require(rejected, "unknown status lifecycle contract rejected");
+        MethodInfo rowCount = hud.GetMethod("RowCount", All)!, height = hud.GetMethod("Height", All)!, position = hud.GetMethod("IconPosition", All)!;
+        foreach (int count in new[] { 0, 1, 3, 4, 5, 7, 8, 9, 12, 26, 30 })
+        {
+            int rows = (int)rowCount.Invoke(null, new object[] { count })!;
+            Require(rows == (count == 0 ? 0 : (count - 1) / 4 + 1), "no blank or truncated rows for count " + count);
+            float h = (float)height.Invoke(null, new object[] { count, false })!;
+            Require(count != 0 || h == 0f, "empty combined HUD has no reserved height");
+            var occupied = new HashSet<string>();
+            for (int i = 0; i < count; i++)
+            {
+                Vector2 xy = (Vector2)position.Invoke(null, new object[] { i, count })!;
+                Require(xy.x <= 0 && xy.x >= -54 && xy.y <= 0 && -xy.y + 17 <= h, "icon within four-column bounds");
+                Require(occupied.Add(xy.x + ":" + xy.y), "unique icon slot");
+                if (i == count - 1 || (i + 1) % 4 == 0) Require(xy.x == 0, "each row independently right-aligned");
+            }
+        }
+        Require((float)height.Invoke(null, new object[] { 0, true })! == 20f, "star-only badge reserves just its height");
+        // Run the production snapshot reader with only native clock/sprites and
+        // the active-effect source substituted; PoV's real display config is live.
+        FieldInfo source = hud.GetField("_modifiers", All)!, tile = hud.GetField("_tile", All)!;
+        object savedSource = source.GetValue(null)!, savedTile = tile.GetValue(null)!;
+        Type foreignHud = pov.GetType("PassiveTree.RarityHud", true)!;
+        FieldInfo display = foreignHud.GetField("Mode", All)!;
+        object? savedDisplay = display.GetValue(null);
+        var config = new ConfigFile(Path.Combine(Path.GetTempPath(), "CM-Hud-" + Guid.NewGuid() + ".cfg"), false) { SaveOnConfigSet = false };
+        ConfigEntryBase choice = Bind(config, display, "Icons");
+        try
+        {
+            Type rowType = hud.GetNestedType("Row", All)!;
+            MethodInfo read = Copy(hud.GetMethod("Read", All)!);
+            Type hudData = typeof(EnemyHud).GetNestedType("HudData", All)!;
+            object newHud() { object value = FormatterServices.GetUninitializedObject(hudData); hudData.GetField("m_gui", All)!.SetValue(value, New<GameObject>()); return value; }
+            Sprite sprite = New<Sprite>();
+            int reads = 0;
+            source.SetValue(null, (Func<Character, int>)(_ => { reads++; return int.MaxValue; }));
+            tile.SetValue(null, (Func<int, Sprite>)(_ => sprite));
+            foreach (string selection in new[] { "Icons", "IconsAndNames", "Names", "ColouredStars", "VanillaStars", "Nothing", "ColouredStarsAndNames" })
+            {
+                choice.SetSerializedValue(selection);
+                hud.GetMethod("ClearRows", All)!.Invoke(null, null);
+                object data = newHud();
+                HudTime = 1;
+                object result = read.Invoke(null, new object[] { Actor, data })!;
+                Require(((System.Collections.IList)rowType.GetField("Sprites", All)!.GetValue(result)!).Count > 6,
+                    "all modifier icons preserved regardless of PoV display: " + selection);
+            }
+            hud.GetMethod("ClearRows", All)!.Invoke(null, null);
+            source.SetValue(null, (Func<Character, int>)(_ => { reads++; return 0; }));
+            object cachedHud = newHud();
+            reads = 0; HudTime = 2;
+            read.Invoke(null, new object[] { Actor, cachedHud });
+            HudTime = 2.1f; read.Invoke(null, new object[] { Actor, cachedHud });
+            Require(reads == 1, "no per-frame PoV effect query before refresh deadline");
+            HudTime = 2.26f; read.Invoke(null, new object[] { Actor, cachedHud });
+            Require(reads == 2, "active effect policy is read again after refresh deadline");
+            hudData.GetField("m_isMount", All)!.SetValue(cachedHud, true);
+            Require(read.Invoke(null, new object[] { Actor, cachedHud }) == null, "mount HUD remains outside takeover");
+        }
+        finally
+        {
+            source.SetValue(null, savedSource); tile.SetValue(null, savedTile); display.SetValue(null, savedDisplay);
+            hud.GetMethod("ClearRows", All)!.Invoke(null, null);
+        }
         foreach (string selection in new[] { "Full", "ExceptLevel", "Off", "Full" })
         {
             mode.SetSerializedValue(selection);
-            Require((bool)Bridge.GetProperty("UsesPovStarDisplay", All)!.GetValue(null)!, "automatic HUD ownership: " + selection);
-            Require(!(bool)localLevels.Invoke(null, null)! && !(bool)localScan.Invoke(null, new object?[] { null })!, "PoV HUD skips only its foreign UI guards: " + selection);
-            Require(ForeignLevels() == (selection == "Full"), "HUD takeover does not change gameplay ownership: " + selection);
+            Require((bool)hud.GetProperty("Enabled", All)!.GetValue(null)!, "combined HUD independent of level system: " + selection);
+            Require(ForeignLevels() == (selection == "Full"), "display does not alter gameplay ownership: " + selection);
         }
-        MethodInfo of = pov.GetType("PassiveTree.CreatureStars", true)!.GetMethod("Of", All)!;
-        foreach (int level in new[] { 1, 2, 3, 4, 7 })
-        {
-            CurrentLevel = level;
-            Require((int)Copy(of).Invoke(null, new object[] { Actor })! == level - 1, "PoV HUD reads actual stars at level " + level);
-        }
-        System.Console.WriteLine("PoV HUD contracts passed: automatic preference, guarded two-callsite substitution, broken contract rejection, unchanged global level ownership and actual star count. Unity layout/rendering not executed.");
+        Require((bool)hud.GetMethod("IconsPrefix", All)!.Invoke(null, new object?[] { null })!, "unmanaged HUD preserves PoV fallback");
+        System.Console.WriteLine("PoV HUD contracts passed: original DLL adapter installation, unchanged status drawing body, invalid lifecycle rejection, 0/1/4/5/8/9/12/26/30 packed slots, star-only height, all seven PoV display modes, throttled live reads, mount/fallback and unchanged level ownership. Unity rendering not executed.");
     }
 
     private static void CheckRejectedContracts(Type loot)
@@ -483,17 +664,21 @@ internal static class PovCompatibilityContracts
         string? replacement = type == "UnityEngine.Object" ? name switch { "op_Equality" => nameof(Equal), "op_Inequality" => nameof(Different), "GetInstanceID" => nameof(InstanceId), _ => null }
             : type == "UnityEngine.Component" && name == "GetComponent" && method.IsGenericMethod && method.GetGenericArguments()[0] == typeof(Character) ? nameof(ViewCharacter)
             : type == "UnityEngine.Time" && name == "get_frameCount" ? nameof(Frame)
+            : type == "UnityEngine.Time" && name == "get_unscaledTime" ? nameof(HudClock)
             : type == "UnityEngine.Random" && name == "get_value" ? nameof(RandomValue)
+            : type == "UnityEngine.Random" && name == "Range" && method.ReturnType == typeof(float) ? nameof(GroupRandom)
             : type == "PassiveTree.EnemyDifficulty" && name == "Owner" ? nameof(TrueCharacter)
             : type == "PassiveTree.CreatureStars" ? name switch { "OwnStars" => nameof(OwnStars), "Of" => nameof(TwoStars), "VanillaLootFactor" => nameof(Four), "Trophy" or "Single" => nameof(FalsePrefab), _ => null }
             : type == "ZDO" && name == "Set" && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), typeof(float) }) ? nameof(SetFloat)
             : type == "ZDO" && name == "Set" && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), typeof(int) }) ? nameof(SetInt)
             : type == "ZDO" && name == "Set" && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), typeof(bool) }) ? nameof(SetBool)
             : type == "CreatureManager.CreatureDomainManager" && name == "IsSynchronizedConfigurationReady" ? nameof(ReadyConfig)
-            : type == Levels.FullName ? name switch { "IsDungeonCreature" => nameof(TrueCharacter), "IsFrozenKingPhaseTwo" when method.GetParameters()[0].ParameterType == typeof(Character) => nameof(IsFrozen), "IsReadyForModifierApplication" => nameof(ReadyLevel),
+            : type == Levels.FullName ? name switch { "IsDungeonCreature" => nameof(IsInterior), "IsFrozenKingPhaseTwo" when method.GetParameters()[0].ParameterType == typeof(Character) => nameof(IsFrozen), "IsReadyForModifierApplication" => nameof(ReadyLevel),
+                "AllowsModifierEffects" when method.GetParameters().Length == 1 => nameof(FalseCharacter),
                 "RegisterRpcs" or "UpdateTimedOutKarmaBonusRequests" => nameof(NoOp), "SynchronizeStoredRuntimeState" => nameof(NoState),
                 "ApplyRuntimeVisuals" or "TryApplyLevel" => nameof(NoCharacter), "ShouldPreserveExistingRolls" => nameof(PreserveCharacter), _ => null }
             : type == Modifiers.FullName ? name switch { "HasModifier" => method.GetParameters()[0].ParameterType == typeof(ZDO) ? nameof(HasReaping) : null,
+                "IsModifierApplicable" => nameof(Applicable),
                 "ApplyStoredReapingScale" => nameof(NoScale), "BroadcastReapingFeedback" => nameof(NoFeedback), "ShowReapingHealText" => nameof(NoHealText), "TryRollModifiers" => nameof(NoCharacter), _ => null }
             : null;
         return replacement == null ? null : AccessTools.Method(typeof(PovCompatibilityContracts), replacement);
@@ -550,6 +735,9 @@ internal static class PovCompatibilityContracts
     private static bool Equal(UnityEngine.Object a, UnityEngine.Object b) => ReferenceEquals(a, b);
     private static bool Different(UnityEngine.Object a, UnityEngine.Object b) => !ReferenceEquals(a, b);
     private static bool TrueCharacter(Character c) => true;
+    private static bool IsInterior(Character c) => Interior;
+    private static bool Applicable(Character c, object spec) => true;
+    private static float GroupRandom(float min, float max) { GroupDraws++; return min + (max - min) * GroupRoll; }
     private static bool FalsePrefab(GameObject prefab) => false;
     private static int TwoStars(Character c) => 2;
     private static float Four(Character c) => 4f;
@@ -572,6 +760,7 @@ internal static class PovCompatibilityContracts
     private static bool FalseCharacter(Character c) => false;
     private static bool PreserveCharacter(Character c) => PreserveRolls;
     private static int InstanceId(UnityEngine.Object obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
+    private static float HudClock() => HudTime;
     private static bool OwnStars(Character c) => !ForeignLevels(); // rarity enabled, non-player fixture
     private static void SetMaxHealth(Character c, float value) { Writes++; if (ThrowWrite) throw new InvalidOperationException("write failure"); Maximum = value; if (Health > value) c.SetHealth(value); }
     private static void SetHealth(Character c, float value) => Health = value;

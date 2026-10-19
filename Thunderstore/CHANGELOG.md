@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.8
+
+- Combine compatible Path of Valheiman and CM modifier icons into right-aligned rows of four: PoV effects first, then CM effects. Use CM's star display instead of the PoV-controlled stars introduced in 1.3.7. This shared layout overrides PoV's `Modifier display` and CM's `Modifier HUD Icon Layout` without rewriting either configuration. PoV creature colours, names and gameplay effects remain unchanged.
+- Place visible PoV status/ailment icons in separate rows of four below the modifier block, using the same icon size and right alignment. Preserve PoV status visibility, accumulation rings and counters; place CM resistance text below the visible status rows.
+- Avoid 13 overlapping CM effects during new automatic rolls when their PoV counterparts are active, including **Mirror -> Reflection** and **Rotten -> Toxic Death**. Keep **CM Blink eligible in dungeons**, where PoV Blink cannot land. Respect PoV's live rarity switch and ordinary/boss effect exclusions, and complete pending Full-mode boss grants before the CM roll.
+- Apply overlap filtering to ordinary creatures, bosses and Enforcers, including YAML chances of 100%. Preserve existing saved rolls and explicit admin-forced modifiers. Excluded effects do not guarantee a replacement, and later PoV changes such as Heir inheritance do not remove or backfill existing CM effects. No new settings or saved-state migration are required.
+- Cache optional integration accessors and reuse HUD icons, with live PoV modifier reads limited to once per 0.25 seconds per visible HUD. Overlap filtering adds no per-frame scan or RPC. Add managed regression coverage for layout, cleanup, active effect exclusions, weighted selection, dungeon Blink and ownership/configuration gates; actual Unity layout, multiplayer and performance still require in-game verification.
+- See the [compatibility policy and verification](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-compatibility.md). The [default YAML contents](https://github.com/sighsorry1029/CreatureManager/tree/fd734455889e2f7e060ff11707681a01e1bd5d49/docs/defaults) are unchanged from 1.3.5. Update the server and all clients to 1.3.8 together and restart.
+
 ## 1.3.7
 
 - Replace the exact Path of Valheiman version restriction with separate startup checks for health, live level ownership, star loot, boss modifiers and star display. Retain the existing final-HP and loot-priority fixes when the required contracts match; a changed contract disables the affected integration with a warning.

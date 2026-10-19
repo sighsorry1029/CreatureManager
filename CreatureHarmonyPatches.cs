@@ -2230,7 +2230,11 @@ internal static class CreatureManagerEnemyHudUpdateHudsPatch
 [HarmonyPatch(typeof(EnemyHud), "OnDestroy")]
 internal static class CreatureManagerEnemyHudDestroyPatch
 {
-    private static void Prefix() => CreatureEpicMmoHud.Reset();
+    private static void Prefix()
+    {
+        CreatureEpicMmoHud.Reset();
+        CreaturePovHud.ClearRows();
+    }
 }
 
 [HarmonyPatch(typeof(EnemyHud), "TestShow")]

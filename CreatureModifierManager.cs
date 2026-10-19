@@ -589,7 +589,7 @@ internal static class CreatureModifierManager
     }
 
     [Flags]
-    private enum ModifierMask : long
+    internal enum ModifierMask : long
     {
         None = 0,
         Armored = 1L << 0,
@@ -2300,6 +2300,7 @@ internal static class CreatureModifierManager
         NextInactivePlayerDebuffProbeTimes.Clear();
         ModifierHotPathStates.Clear();
         ModifierHudRefreshStates.Clear();
+        CreaturePovHud.ClearRows();
         RuntimeModifierReprobeTimes.Clear();
         PendingReapingHealthBonusRatios.Clear();
         DelayedDamageSourceLedgers.Clear();
@@ -2579,6 +2580,10 @@ internal static class CreatureModifierManager
             return;
         }
 
+        // All automatic entry points must observe the completed PoV boss grant.
+        // Existing rolls and explicit forced modifiers retain their own policies.
+        if (!CreaturePovCompatibility.TryCompleteBossModifiers(character)) return;
+
         bool hasEnforcerModifiers = CreatureKarmaManager.TryGetEnforcerModifierDefinitions(
             character,
             out Dictionary<string, ModifierDefinition> enforcerModifiers,
@@ -2596,7 +2601,9 @@ internal static class CreatureModifierManager
             hasChances = ApplyModifierChances(chances, enforcerModifiers) || hasChances;
         }
 
-        ModifierMask mask = hasChances ? RollConfiguredMask(character, chances) : ModifierMask.None;
+        ModifierMask mask = hasChances
+            ? RollConfiguredMask(character, chances, CreaturePovCompatibility.GetExcludedModifiers(character))
+            : ModifierMask.None;
         mask = LimitRolledModifiers(mask, CreatureLevelManager.GetMaximumRolledModifiers(character));
 
         ModifierPowerDefinition powers = new();
@@ -3647,7 +3654,7 @@ internal static class CreatureModifierManager
         return Mathf.Clamp(value ?? DeathwardDefaultPower, 0.01f, 1f);
     }
 
-    private static ModifierMask RollConfiguredMask(Character character, ModifierChanceDefinition chances)
+    private static ModifierMask RollConfiguredMask(Character character, ModifierChanceDefinition chances, ModifierMask excluded)
     {
         ModifierMask mask = ModifierMask.None;
         foreach (ModifierGroup group in ModifierGroupOrder)
@@ -3655,7 +3662,7 @@ internal static class CreatureModifierManager
             float total = 0f;
             foreach (ModifierSpec spec in ModifierSpecs)
             {
-                if (spec.Group == group && IsModifierApplicable(character, spec))
+                if (spec.Group == group && (excluded & spec.Mask) == 0 && IsModifierApplicable(character, spec))
                 {
                     total += ClampChance(spec.GetChance(chances));
                 }
@@ -3670,7 +3677,7 @@ internal static class CreatureModifierManager
             ModifierMask lastCandidate = ModifierMask.None;
             foreach (ModifierSpec spec in ModifierSpecs)
             {
-                if (spec.Group != group || !IsModifierApplicable(character, spec))
+                if (spec.Group != group || (excluded & spec.Mask) != 0 || !IsModifierApplicable(character, spec))
                 {
                     continue;
                 }
@@ -9793,6 +9800,8 @@ internal static class CreatureModifierManager
         if (isMount)
         {
             UpdateBlamerAlertIcon(hud, false);
+            CreaturePovHud.Hide(hud);
+            if (CreaturePovHud.Enabled) HideManagedHudContent(hud);
             return;
         }
 
@@ -9806,22 +9815,27 @@ internal static class CreatureModifierManager
             hud.m_name.text = displayName;
         }
 
-        UpdateResistanceHud(character, hud);
-
-        if (!CreatureLevelManager.IsLevelSystemEnabled())
+        CreaturePovHud.Row? pov = CreaturePovHud.Read(character, hud);
+        if (pov == null) UpdateResistanceHud(character, hud);
+        bool levelSystem = CreatureLevelManager.IsLevelSystemEnabled();
+        if (pov == null) CreaturePovHud.Hide(hud);
+        if (!levelSystem && pov == null)
         {
             UpdateBlamerAlertIcon(hud, false);
             HideManagedHudContent(hud);
             return;
         }
 
-        if (!TryGetHudModifierState(
+        ModifierMask visibleModifiers = ModifierMask.None;
+        float armoredReduction = 0f, enragedBonus = 0f;
+        bool blamerActive = false;
+        if (levelSystem && !TryGetHudModifierState(
                 character,
                 hud.m_gui,
-                out ModifierMask visibleModifiers,
-                out float armoredReduction,
-                out float enragedBonus,
-                out bool blamerActive,
+                out visibleModifiers,
+                out armoredReduction,
+                out enragedBonus,
+                out blamerActive,
                 out bool refreshed) &&
             refreshed &&
             character.m_nview != null &&
@@ -9843,12 +9857,7 @@ internal static class CreatureModifierManager
 
         bool hasModifiers = visibleModifiers != ModifierMask.None;
         bool isBossHud = character.IsBoss() || CreatureKarmaManager.IsBossHudOnly(character);
-        // PoV uses the actual level and its own Modifier display setting. Keep
-        // CM effects/name/resistances; yield only the star/number block. A custom
-        // HUD without PoV's required name/anchors still uses CM's fallback.
-        bool povStars = CreaturePovCompatibility.UsesPovStarDisplay && hud.m_name != null &&
-                        (isBossHud || hud.m_level2 != null || hud.m_level3 != null);
-        int stars = povStars ? 0 : Math.Max(0, character.GetLevel() - 1);
+        int stars = Math.Max(0, character.GetLevel() - 1);
         if (isBossHud)
         {
             SetLevelContentActive(hud, false);
@@ -9858,8 +9867,8 @@ internal static class CreatureModifierManager
             SetBossContentActive(hud, false);
         }
 
-        if (!povStars) HideVanillaLevelBlocks(hud);
-        if (stars <= 0 && !hasModifiers)
+        HideVanillaLevelBlocks(hud);
+        if (stars <= 0 && !hasModifiers && pov == null)
         {
             if (isBossHud)
             {
@@ -9872,9 +9881,17 @@ internal static class CreatureModifierManager
             return;
         }
 
+        float? combinedHeight = null;
+        if (pov != null)
+        {
+            int count = 0;
+            foreach (ModifierSpec spec in ModifierSpecs)
+                if (count < MaxActiveModifiers && IsModifierIconVisible(spec, visibleModifiers, armoredReduction, enragedBonus)) count++;
+            combinedHeight = CreaturePovHud.Height(pov.Sprites.Count + count, stars > 0);
+        }
         RectTransform? content = isBossHud
-            ? EnsureBossLevelContent(hud, stars > 0)
-            : EnsureLevelContent(hud, stars > 0);
+            ? EnsureBossLevelContent(hud, stars > 0, combinedHeight)
+            : EnsureLevelContent(hud, stars > 0, combinedHeight);
         if (content == null)
         {
             return;
@@ -9883,7 +9900,22 @@ internal static class CreatureModifierManager
         content.gameObject.SetActive(true);
         UpdateStarBadge(content, hud.m_level2, hud.m_level3, hud.m_name, stars, showIndividualStars: stars <= 2);
         RectTransform iconContainer = EnsureIconContainer(content);
-        UpdateModifierIcons(iconContainer, visibleModifiers, armoredReduction, enragedBonus);
+        UpdateModifierIcons(iconContainer, visibleModifiers, armoredReduction, enragedBonus, pov != null);
+        iconContainer.gameObject.SetActive(pov == null);
+        if (pov != null)
+        {
+            Image?[] cmIcons = GetHudIconState(iconContainer).Slots;
+            HorizontalLayoutGroup layout = content.GetComponent<HorizontalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperLeft;
+            if (layout.padding.left != 0) { layout.padding.left = 0; LayoutRebuilder.MarkLayoutForRebuild(content); }
+            CreaturePovHud.Render(pov, content, cmIcons);
+            // The row count is known now. Reposition text in this frame, not at the next refresh.
+            UpdateResistanceHud(character, hud);
+            RectTransform? parent = GetHudContentParent(hud);
+            if (parent != null && HudContentStates.TryGetValue(parent, out HudContentState state))
+                pov.Resistance = state.ResistanceText != null ? state.ResistanceText.rectTransform : null;
+        }
+        else ConfigureContentLayout(content);
     }
 
     private static void UpdateBlamerAlertIcon(EnemyHud.HudData hud, bool visible)
@@ -10315,7 +10347,8 @@ internal static class CreatureModifierManager
     {
         RectTransform? parent = rect.parent as RectTransform;
         float height = Mathf.Max(ResistanceLineHeight, ResistanceLineHeight * Mathf.Max(1, lineCount));
-        float contentHeight = GetActiveLevelContentHeight(parent);
+        float contentHeight = CreaturePovHud.ContentHeight(hud) ?? GetActiveLevelContentHeight(parent);
+        contentHeight += CreaturePovHud.ResistanceOffset(hud);
         RectTransform? healthRect = GetHealthRoot(hud.m_healthFast);
         if (parent != null && healthRect != null && healthRect.parent == parent)
         {
@@ -10500,7 +10533,7 @@ internal static class CreatureModifierManager
         return color.a * (brightest + brightest - darkest + yellowBias);
     }
 
-    private static RectTransform? EnsureLevelContent(EnemyHud.HudData hud, bool showStars)
+    private static RectTransform? EnsureLevelContent(EnemyHud.HudData hud, bool showStars, float? height = null)
     {
         RectTransform? parent = GetHudContentParent(hud);
         if (parent == null)
@@ -10517,7 +10550,7 @@ internal static class CreatureModifierManager
 
         if (state.LevelContent != null)
         {
-            PositionLevelContent(state.LevelContent, hud, showStars);
+            PositionLevelContent(state.LevelContent, hud, showStars, height);
             return state.LevelContent;
         }
 
@@ -10525,7 +10558,7 @@ internal static class CreatureModifierManager
         RectTransform content = (RectTransform)contentObject.transform;
         content.SetParent(parent, false);
         content.SetAsLastSibling();
-        PositionLevelContent(content, hud, showStars);
+        PositionLevelContent(content, hud, showStars, height);
         ConfigureContentLayout(content);
 
         EnsureStarGroup(content);
@@ -10535,7 +10568,7 @@ internal static class CreatureModifierManager
         return content;
     }
 
-    private static RectTransform? EnsureBossLevelContent(EnemyHud.HudData hud, bool showStars)
+    private static RectTransform? EnsureBossLevelContent(EnemyHud.HudData hud, bool showStars, float? height = null)
     {
         RectTransform? parent = GetHudContentParent(hud);
         if (parent == null)
@@ -10552,7 +10585,7 @@ internal static class CreatureModifierManager
 
         if (state.BossContent != null)
         {
-            PositionBossContent(state.BossContent, hud, showStars);
+            PositionBossContent(state.BossContent, hud, showStars, height);
             return state.BossContent;
         }
 
@@ -10560,7 +10593,7 @@ internal static class CreatureModifierManager
         RectTransform content = (RectTransform)contentObject.transform;
         content.SetParent(parent, false);
         content.SetAsLastSibling();
-        PositionBossContent(content, hud, showStars);
+        PositionBossContent(content, hud, showStars, height);
 
         ConfigureContentLayout(content);
 
@@ -10635,14 +10668,14 @@ internal static class CreatureModifierManager
         return healthBar != null ? healthBar.parent as RectTransform : null;
     }
 
-    private static void PositionLevelContent(RectTransform content, EnemyHud.HudData hud, bool showStars)
+    private static void PositionLevelContent(RectTransform content, EnemyHud.HudData hud, bool showStars, float? height = null)
     {
-        PositionHudContent(content, hud, LevelContentWidth, LevelContentBelowHealthGap, GetLevelContentHeight(showStars));
+        PositionHudContent(content, hud, LevelContentWidth, LevelContentBelowHealthGap, height ?? GetLevelContentHeight(showStars));
     }
 
-    private static void PositionBossContent(RectTransform content, EnemyHud.HudData hud, bool showStars)
+    private static void PositionBossContent(RectTransform content, EnemyHud.HudData hud, bool showStars, float? height = null)
     {
-        PositionHudContent(content, hud, BossContentWidth, BossContentBelowHealthGap, GetLevelContentHeight(showStars));
+        PositionHudContent(content, hud, BossContentWidth, BossContentBelowHealthGap, height ?? GetLevelContentHeight(showStars));
     }
 
     private static void PositionHudContent(
@@ -11643,11 +11676,11 @@ internal static class CreatureModifierManager
         state.SlotsInitialized = true;
     }
 
-    private static void UpdateModifierIcons(RectTransform row, ModifierMask visible, float armoredReduction, float enragedBonus)
+    private static void UpdateModifierIcons(RectTransform row, ModifierMask visible, float armoredReduction, float enragedBonus, bool combined = false)
     {
         int armoredKey = Mathf.RoundToInt(armoredReduction * 10000f);
         int enragedKey = Mathf.RoundToInt(enragedBonus * 10000f);
-        CreatureManagerPlugin.ModifierIconLayout layout = CreatureManagerPlugin.ModifierHudIconLayout?.Value ??
+        CreatureManagerPlugin.ModifierIconLayout layout = combined ? CreatureManagerPlugin.ModifierIconLayout.RightPacked : CreatureManagerPlugin.ModifierHudIconLayout?.Value ??
                                                           CreatureManagerPlugin.ModifierIconLayout.FixedCategorySlots;
         HudIconState state = GetHudIconState(row);
         if (state.Matches(visible, armoredKey, enragedKey, layout))

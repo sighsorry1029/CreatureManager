@@ -145,6 +145,7 @@
         <Compile Include="CreatureHarmonyPatches.cs"/>
         <Compile Include="CreatureEpicMmoHud.cs"/>
         <Compile Include="CreaturePovCompatibility.cs"/>
+        <Compile Include="CreaturePovHud.cs"/>
         <Compile Include="CreatureSpawnBlocker.cs"/>
         <Compile Include="CreatureTargeting.cs"/>
         <Compile Include="CreatureAppearanceRuntime.cs"/>

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
@@ -20,9 +21,6 @@ internal static class CreaturePovCompatibility
     private static Harmony? _levelHarmony;
     private static Harmony? _lootHarmony;
     private static Harmony? _bossHarmony;
-    private static Harmony? _hudHarmony;
-    private static Func<bool>? _hudForeignLevels;
-    private static Func<UnityEngine.GameObject, bool>? _hudForeignStars;
     private static Action<Character, float>? _setScaledMaxHealth;
     private static Func<Character, bool>? _removePendingHealth;
     private const string BossPendingKey = "CreatureManager_PovBossModifiersPending";
@@ -33,6 +31,8 @@ internal static class CreaturePovCompatibility
     private static Action<Character, int>? _fillBossModifiers;
     private static AccessTools.FieldRef<Character, ZNetView>? _characterView;
     private static bool _bossFailureReported;
+    private static Func<Character, int>? _activeModifiers;
+    private static (int Pov, CreatureModifierManager.ModifierMask Cm)[] _modifierExclusions = Array.Empty<(int, CreatureModifierManager.ModifierMask)>();
 
     internal static bool HasHealthBridge => _setScaledMaxHealth != null;
 
@@ -61,7 +61,80 @@ internal static class CreaturePovCompatibility
         Enable("live level ownership", () => InstallLevels(assembly), () => RemoveHarmony(ref _levelHarmony));
         Enable("star-loot ownership", () => InstallLoot(assembly), RemoveLoot);
         Enable("Full boss modifiers", () => InstallBosses(assembly), RemoveBosses);
-        Enable("star display", () => InstallHud(assembly), RemoveHud);
+        Enable("modifier overlap", () => InstallModifierExclusions(assembly), ClearModifierExclusions);
+        Enable("combined modifier HUD", () => CreaturePovHud.Install(assembly, !_otherLevelProvider), CreaturePovHud.Remove);
+    }
+
+    private static void InstallModifierExclusions(Assembly assembly)
+    {
+        Type mods = assembly.GetType("PassiveTree.RarityMods", true)!;
+        Type bits = mods.GetNestedType("Mod")!;
+        if (bits == null || !bits.IsEnum || Enum.GetUnderlyingType(bits) != typeof(int))
+            throw new NotSupportedException("PoV active modifier representation changed");
+        MethodInfo on = StaticMethod(mods, "On", bits, typeof(Character));
+        // Resolve named flags once; do not couple this policy to a PoV release number
+        // or to stored flags for effects disabled by PoV's live configuration.
+        var mappings = new (string Pov, CreatureModifierManager.ModifierMask Cm)[]
+        {
+            ("Swift", CreatureModifierManager.ModifierMask.Swift),
+            ("Furious", CreatureModifierManager.ModifierMask.AttackSpeed),
+            ("Armored", CreatureModifierManager.ModifierMask.Armored),
+            ("Hardy", CreatureModifierManager.ModifierMask.Regenerating),
+            ("Greedy", CreatureModifierManager.ModifierMask.Vampiric),
+            ("Steadfast", CreatureModifierManager.ModifierMask.Unflinching),
+            ("Piercing", CreatureModifierManager.ModifierMask.ArmorPiercing),
+            ("Burning", CreatureModifierManager.ModifierMask.Fire),
+            ("Chilling", CreatureModifierManager.ModifierMask.Frost),
+            ("Shocking", CreatureModifierManager.ModifierMask.Lightning),
+            ("Blink", CreatureModifierManager.ModifierMask.Blink),
+            ("Mirror", CreatureModifierManager.ModifierMask.Reflection),
+            ("Rotten", CreatureModifierManager.ModifierMask.ToxicDeath)
+        };
+        var resolved = new (int Pov, CreatureModifierManager.ModifierMask Cm)[mappings.Length];
+        int seen = 0;
+        for (int i = 0; i < mappings.Length; i++)
+        {
+            if (!Enum.IsDefined(bits, mappings[i].Pov))
+                throw new NotSupportedException("PoV modifier missing: " + mappings[i].Pov);
+            int value = Convert.ToInt32(Enum.Parse(bits, mappings[i].Pov));
+            if (value <= 0 || (value & (value - 1)) != 0 || (seen & value) != 0)
+                throw new NotSupportedException("PoV modifier flag changed: " + mappings[i].Pov);
+            resolved[i] = (value, mappings[i].Cm);
+            seen |= value;
+        }
+        var character = Expression.Parameter(typeof(Character));
+        var reader = Expression.Lambda<Func<Character, int>>(
+            Expression.Convert(Expression.Call(on, character), typeof(int)), character).Compile();
+        _modifierExclusions = resolved;
+        _activeModifiers = reader;
+    }
+
+    internal static CreatureModifierManager.ModifierMask GetExcludedModifiers(Character character)
+    {
+        var excluded = CreatureModifierManager.ModifierMask.None;
+        if (_activeModifiers == null) return excluded;
+        try
+        {
+            int active = _activeModifiers(character);
+            foreach (var rule in _modifierExclusions)
+                if ((active & rule.Pov) != 0) excluded |= rule.Cm;
+            // PoV Blink cannot land indoors. Keep CM's guarded dungeon Blink.
+            if ((excluded & CreatureModifierManager.ModifierMask.Blink) != 0 && CreatureLevelManager.IsDungeonCreature(character))
+                excluded &= ~CreatureModifierManager.ModifierMask.Blink;
+            return excluded;
+        }
+        catch (Exception ex)
+        {
+            ClearModifierExclusions();
+            CreatureManagerPlugin.Log.LogWarning($"PoV modifier overlap filtering disabled until restart; CM's normal rolls are retained: {ex.Message}");
+            return CreatureModifierManager.ModifierMask.None;
+        }
+    }
+
+    private static void ClearModifierExclusions()
+    {
+        _activeModifiers = null;
+        _modifierExclusions = Array.Empty<(int, CreatureModifierManager.ModifierMask)>();
     }
 
     private static void Enable(string feature, Action install, Action cleanup)
@@ -286,66 +359,6 @@ internal static class CreaturePovCompatibility
         }
     }
 
-    // PoV owns only presentation here. Never change ForeignLevels globally to
-    // select a HUD: that getter also controls combat, health, drops and star rolls.
-    internal static bool UsesPovStarDisplay => _hudHarmony != null && !_otherLevelProvider;
-
-    private static void InstallHud(Assembly assembly)
-    {
-        if (_levelHarmony == null) throw new NotSupportedException("live level ownership bridge is unavailable");
-        Type hud = assembly.GetType("PassiveTree.RarityHud", true)!;
-        Type stars = assembly.GetType("PassiveTree.CreatureStars", true)!;
-        MethodInfo icons = StaticMethod(hud, "Icons", typeof(void), AccessTools.Inner(typeof(EnemyHud), "HudData"), typeof(Character));
-        MethodInfo foreign = StaticMethod(stars, "get_ForeignLevels", typeof(bool));
-        MethodInfo scan = StaticMethod(hud, "ForeignStars", typeof(bool), typeof(UnityEngine.GameObject));
-        ValidateHudCalls(PatchProcessor.GetOriginalInstructions(icons), foreign, scan);
-        RequireMember(StaticMethod(hud.GetNestedType("EnemyHud_UpdateHuds_Rarity", BindingFlags.NonPublic)!, "Postfix", typeof(void), typeof(EnemyHud)), icons);
-        _hudForeignLevels = (Func<bool>)Delegate.CreateDelegate(typeof(Func<bool>), foreign);
-        _hudForeignStars = (Func<UnityEngine.GameObject, bool>)Delegate.CreateDelegate(typeof(Func<UnityEngine.GameObject, bool>), scan);
-        _hudHarmony = new Harmony("sighsorry.CreatureManager.PoV.Hud");
-        _hudHarmony.Patch(icons, transpiler: new HarmonyMethod(typeof(CreaturePovCompatibility), nameof(HudTranspiler)));
-        RebuildHudCaller(_hudHarmony);
-    }
-
-    private static void ValidateHudCalls(List<CodeInstruction> codes, MethodInfo foreign, MethodInfo scan)
-    {
-        if (codes.Count(code => code.Calls(foreign)) != 1 || codes.Count(code => code.Calls(scan)) != 1)
-            throw new NotSupportedException("PoV HUD no longer has one level-provider and one foreign-star check");
-    }
-
-    private static IEnumerable<CodeInstruction> HudTranspiler(IEnumerable<CodeInstruction> instructions, MethodBase __originalMethod)
-    {
-        List<CodeInstruction> codes = instructions.ToList();
-        Type hud = __originalMethod.DeclaringType!;
-        MethodInfo foreign = AccessTools.DeclaredPropertyGetter(hud.Assembly.GetType("PassiveTree.CreatureStars"), "ForeignLevels");
-        MethodInfo scan = AccessTools.DeclaredMethod(hud, "ForeignStars");
-        ValidateHudCalls(codes, foreign, scan);
-        foreach (CodeInstruction code in codes)
-        {
-            if (code.Calls(foreign)) code.operand = AccessTools.DeclaredMethod(typeof(CreaturePovCompatibility), nameof(HudForeignLevels));
-            else if (code.Calls(scan)) code.operand = AccessTools.DeclaredMethod(typeof(CreaturePovCompatibility), nameof(HudForeignStars));
-        }
-        return codes;
-    }
-
-    private static bool HudForeignLevels() => !UsesPovStarDisplay && _hudForeignLevels!();
-    private static bool HudForeignStars(UnityEngine.GameObject gui) => !UsesPovStarDisplay && _hudForeignStars!(gui);
-
-    private static void RebuildHudCaller(Harmony harmony) =>
-        harmony.CreateProcessor(AccessTools.DeclaredMethod(typeof(EnemyHud), "UpdateHuds")).Patch();
-
-    private static void RemoveHud()
-    {
-        if (_hudHarmony != null)
-        {
-            _hudHarmony.UnpatchSelf();
-            RebuildHudCaller(_hudHarmony);
-            _hudHarmony = null;
-        }
-        _hudForeignLevels = null;
-        _hudForeignStars = null;
-    }
-
     private static void ValidateHealthScope(List<CodeInstruction> instructions, FieldInfo scope)
     {
         List<CodeInstruction> codes = instructions.Where(code => code.opcode != OpCodes.Nop).ToList();
@@ -480,11 +493,12 @@ internal static class CreaturePovCompatibility
     {
         try
         {
+            ClearModifierExclusions();
             ClearHealth();
             try { RemoveBosses(); }
             finally
             {
-                try { RemoveHud(); }
+                try { CreaturePovHud.Remove(); }
                 finally
                 {
                     try { RemoveHarmony(ref _levelHarmony); }
