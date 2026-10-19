@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.7
+
+- Replace the exact Path of Valheiman version restriction with separate startup checks for health, live level ownership, star loot, boss modifiers and star display. Retain the existing final-HP and loot-priority fixes when the required contracts match; a changed contract disables the affected integration with a warning.
+- In `Full`, newly created boss prefabs can receive PoV modifiers from their final CM star count, including altar, CreatureSpawner, command and direct creation paths. Respect PoV's boss/rarity switches, first-kill restriction, modifier exclusions and `Boss modifiers per star` setting; its Normal preset defaults to **0**. Saved bosses, preserved creature restores and existing PoV modifiers are not rerolled. CM's own modifier settings remain independent.
+- Automatically use compatible PoV's **5. Controls -> Modifier display** setting for creature stars while keeping CM modifier icons, Enforcer names and resistance indicators. No new config option is needed. Use `ColouredStars` or `VanillaStars` for explicit stars; `Nothing` may hide higher-star and boss indicators. CM retains its display when the integration is unavailable.
+- Add managed regression checks for fresh versus restored bosses, deferred configuration/ownership, persisted pending grants, duplicate and partial-failure handling, and HUD preference/fallback. Keep settings and YAML defaults unchanged; the [default YAML contents](https://github.com/sighsorry1029/CreatureManager/tree/fd734455889e2f7e060ff11707681a01e1bd5d49/docs/defaults) remain those of 1.3.5.
+- See [compatibility scope and verification](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-compatibility.md) for the PoV 5.0.9/5.0.10 checks and remaining in-game tests. This is not a guarantee for every future PoV release or a confirmed fix for the earlier infinite boss-HP report. Update the server and all clients to 1.3.7 together and restart.
+
 ## 1.3.6
 
 - Add focused compatibility with Path of Valheiman **5.0.7**. Prevent PoV difficulty from multiplying Reaping's already-scaled maximum HP again, while preserving Reaping's gain, healing and cap settings.

@@ -1,5 +1,8 @@
 # CreatureManager / Path of Valheiman 5.0.7 compatibility
 
+This is the historical CM 1.3.6 release record. See [current interoperability](pov-compatibility.md)
+for contract-based activation and Full-mode boss modifiers added after that release.
+
 Released in CreatureManager **1.3.6**. Implemented and checked on 2026-10-18 against source based on
 `fd734455889e2f7e060ff11707681a01e1bd5d49` and Valheim 1.0.20.
 This is a focused interoperability fix, not a diagnosis of the reported infinite

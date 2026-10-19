@@ -2214,6 +2214,7 @@ internal static class CreatureManagerEnemyHudUpdateHudsPatch
     }
 
     [HarmonyAfter(CreatureEpicMmoHud.PluginGuid)]
+    [HarmonyBefore(CreaturePovCompatibility.PluginGuid)]
     private static void Postfix(EnemyHud __instance, List<Character>? __state)
     {
         CreatureModifierManager.UpdateEnemyHuds(__instance);

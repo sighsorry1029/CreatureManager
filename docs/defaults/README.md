@@ -1,6 +1,6 @@
 # Default YAML reference
 
-**Version scope: CreatureManager 1.3.6 defaults (unchanged from 1.3.5).** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. The scale guidance reflects the Full-mode behavior introduced in 1.3.5.
+**Version scope: CreatureManager 1.3.7 defaults (unchanged from 1.3.5).** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. The scale guidance reflects the Full-mode behavior introduced in 1.3.5.
 
 | File | Contents |
 | --- | --- |

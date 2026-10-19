@@ -9842,8 +9842,13 @@ internal static class CreatureModifierManager
         UpdateBlamerAlertIcon(hud, blamerActive);
 
         bool hasModifiers = visibleModifiers != ModifierMask.None;
-        int stars = Math.Max(0, character.GetLevel() - 1);
         bool isBossHud = character.IsBoss() || CreatureKarmaManager.IsBossHudOnly(character);
+        // PoV uses the actual level and its own Modifier display setting. Keep
+        // CM effects/name/resistances; yield only the star/number block. A custom
+        // HUD without PoV's required name/anchors still uses CM's fallback.
+        bool povStars = CreaturePovCompatibility.UsesPovStarDisplay && hud.m_name != null &&
+                        (isBossHud || hud.m_level2 != null || hud.m_level3 != null);
+        int stars = povStars ? 0 : Math.Max(0, character.GetLevel() - 1);
         if (isBossHud)
         {
             SetLevelContentActive(hud, false);
@@ -9853,7 +9858,7 @@ internal static class CreatureModifierManager
             SetBossContentActive(hud, false);
         }
 
-        HideVanillaLevelBlocks(hud);
+        if (!povStars) HideVanillaLevelBlocks(hud);
         if (stars <= 0 && !hasModifiers)
         {
             if (isBossHud)

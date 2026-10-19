@@ -202,7 +202,9 @@ internal static class CreatureLevelManager
         UpdateTimedOutKarmaBonusRequests();
         if (!IsLevelSystemEnabled())
         {
-            PendingLevelCharacters.Clear();
+            foreach (KeyValuePair<int, Character> pending in PendingLevelCharacters.ToArray())
+                if (CreaturePovCompatibility.TryCompleteBossModifiers(pending.Value))
+                    PendingLevelCharacters.Remove(pending.Key);
             PendingKarmaBonusRequests.Clear();
             ResolvedKarmaBonuses.Clear();
             return;
@@ -245,12 +247,13 @@ internal static class CreatureLevelManager
             {
                 SynchronizeStoredRuntimeState(character, zdo);
                 ApplyRuntimeVisuals(character);
+                bool povComplete = CreaturePovCompatibility.TryCompleteBossModifiers(character);
                 if (nview.IsOwner())
                 {
                     CreatureModifierManager.TryRollModifiers(character);
                 }
 
-                ForgetPendingLevelCharacter(character, zdo.m_uid);
+                if (povComplete) ForgetPendingLevelCharacter(character, zdo.m_uid);
                 continue;
             }
 
@@ -258,7 +261,8 @@ internal static class CreatureLevelManager
             {
                 SynchronizeStoredRuntimeState(character, zdo);
                 ApplyRuntimeVisuals(character);
-                ForgetPendingLevelCharacter(character, zdo.m_uid);
+                if (CreaturePovCompatibility.TryCompleteBossModifiers(character))
+                    ForgetPendingLevelCharacter(character, zdo.m_uid);
                 continue;
             }
 
@@ -348,7 +352,10 @@ internal static class CreatureLevelManager
             return;
         }
 
-        if (!TryApplyLevelState(character))
+        bool applied = TryApplyLevelState(character);
+        if (!CreaturePovCompatibility.TryCompleteBossModifiers(character))
+            PendingLevelCharacters[character.GetInstanceID()] = character;
+        if (!applied)
         {
             return;
         }
@@ -1602,7 +1609,7 @@ internal static class CreatureLevelManager
         return !KeepsAssignedLevels() && GetSpawnPolicy(character).RollLevel;
     }
 
-    private static bool ShouldPreserveExistingRolls(Character character)
+    internal static bool ShouldPreserveExistingRolls(Character character)
     {
         return GetSpawnPolicy(character).PreserveExistingRolls;
     }
