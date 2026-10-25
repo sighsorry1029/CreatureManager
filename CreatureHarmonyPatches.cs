@@ -133,6 +133,7 @@ internal static class CreatureManagerZNetSceneAwakePatch
     private static void Postfix(ZNetScene __instance)
     {
         CreaturePrefabRegistry.RegisterPendingPrefabs(__instance);
+        CreaturePrefabRegistry.RegisterToxicAuraEffect(__instance);
         CreatureDomainManager.NotifyGameDataAvailable();
     }
 }

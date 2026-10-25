@@ -51,12 +51,14 @@ namespace CreatureManager
 
     internal sealed class ContractLogger
     {
+        internal List<string> Warnings { get; } = new();
         internal void LogError(object value)
         {
         }
 
         internal void LogWarning(object value)
         {
+            Warnings.Add(value.ToString() ?? "");
         }
     }
 }

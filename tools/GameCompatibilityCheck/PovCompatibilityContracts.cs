@@ -210,7 +210,7 @@ internal static class PovCompatibilityContracts
             ("Swift", "Swift"), ("Furious", "AttackSpeed"), ("Armored", "Armored"),
             ("Hardy", "Regenerating"), ("Greedy", "Vampiric"), ("Steadfast", "Unflinching"),
             ("Piercing", "ArmorPiercing"), ("Burning", "Fire"), ("Chilling", "Frost"),
-            ("Shocking", "Lightning"), ("Blink", "Blink"), ("Mirror", "Reflection"), ("Rotten", "ToxicDeath")
+            ("Shocking", "Lightning"), ("Blink", "Blink"), ("Mirror", "Reflection"), ("Rotten", "ToxicAura"), ("Reeking", "ToxicAura")
         };
         var config = new ConfigFile(Path.Combine(Path.GetTempPath(), "CM-overlap-" + Guid.NewGuid() + ".cfg"), false) { SaveOnConfigSet = false };
         FieldInfo ordinaryOff = pov.GetType("PassiveTree.CreatureRarity", true)!.GetField("ModsOff")!;
@@ -238,7 +238,9 @@ internal static class PovCompatibilityContracts
             Require(Excluded() == (allCm & ~CmBit("Blink")), "dungeon retains CM Blink and only Blink");
             Interior = false;
             ordinary.Value = "mirror, rotten";
-            Require(Excluded() == (allCm & ~CmBit("Reflection") & ~CmBit("ToxicDeath")), "ordinary live PoV exclusions are respected");
+            Require(Excluded() == (allCm & ~CmBit("Reflection")), "active Reeking still excludes Toxic Aura when Rotten is disabled");
+            ordinary.Value = "mirror, rotten, reeking";
+            Require(Excluded() == (allCm & ~CmBit("Reflection") & ~CmBit("ToxicAura")), "ordinary live PoV exclusions are respected");
             Boss = true; bosses.Value = "blink, armored";
             Require(Excluded() == (allCm & ~CmBit("Blink") & ~CmBit("Armored")), "boss exclusions override ordinary exclusions");
             RarityWorking = false;
@@ -265,7 +267,7 @@ internal static class PovCompatibilityContracts
                 GroupRoll = at; GroupDraws = 0;
                 return Convert.ToInt64(select.Invoke(null, new[] { Actor, chances, Enum.ToObject(cmMask, excluded) }));
             }
-            object mixed = Chances(("fire", 100f), ("spirit", 20f), ("reflection", 100f), ("deathward", 100f), ("toxicDeath", 100f), ("swift", 100f));
+            object mixed = Chances(("fire", 100f), ("spirit", 20f), ("reflection", 100f), ("deathward", 100f), ("toxicAura", 100f), ("swift", 100f));
             Require(Roll(mixed, allCm, .1f) == (CmBit("Spirit") | CmBit("Deathward")), "eligible effects still roll across their original groups");
             Require(GroupDraws == 2, "fully excluded groups consume no RNG");
             Require(Roll(mixed, allCm, .5f) == CmBit("Deathward"), "remaining 20 percent is not promoted to a guaranteed success");

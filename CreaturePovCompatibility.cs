@@ -88,7 +88,8 @@ internal static class CreaturePovCompatibility
             ("Shocking", CreatureModifierManager.ModifierMask.Lightning),
             ("Blink", CreatureModifierManager.ModifierMask.Blink),
             ("Mirror", CreatureModifierManager.ModifierMask.Reflection),
-            ("Rotten", CreatureModifierManager.ModifierMask.ToxicDeath)
+            ("Rotten", CreatureModifierManager.ModifierMask.ToxicAura),
+            ("Reeking", CreatureModifierManager.ModifierMask.ToxicAura)
         };
         var resolved = new (int Pov, CreatureModifierManager.ModifierMask Cm)[mappings.Length];
         int seen = 0;

@@ -122,6 +122,9 @@
         <Reference Include="UnityEngine.PhysicsModule">
             <HintPath>$(CorlibPath)\UnityEngine.PhysicsModule.dll</HintPath>
         </Reference>
+        <Reference Include="UnityEngine.ParticleSystemModule">
+            <HintPath>$(CorlibPath)\UnityEngine.ParticleSystemModule.dll</HintPath>
+        </Reference>
         <Reference Include="UnityEngine.UI">
             <HintPath>$(CorlibPath)\UnityEngine.UI.dll</HintPath>
         </Reference>
@@ -154,6 +157,7 @@
         <Compile Include="CreatureLoot.cs"/>
         <Compile Include="CreatureLocalization.cs"/>
         <Compile Include="CreatureModifierManager.cs"/>
+        <Compile Include="CreatureToxicAura.cs"/>
         <Compile Include="ModifierIconSource.cs"/>
         <Compile Include="CreaturePrefabBaseline.cs"/>
         <Compile Include="CreaturePrefabRegistry.cs"/>

@@ -3,7 +3,7 @@ cm_compendium_resistance_hint: "Sneak while looking at a creature to view its we
 
 cm_group_offense: "Offense: Enraged to Undodgeable"
 cm_group_defense: "Defense: Armored to Chameleon"
-cm_group_affliction: "Affliction: Exposed to Toxic Death"
+cm_group_affliction: "Affliction: Exposed to Toxic Aura"
 cm_group_special: "Special: Swift to Blamer"
 cm_unit_seconds: "{value}s"
 
@@ -57,8 +57,8 @@ cm_modifier_adrenaline_drain_name: "Adrenaline Drain"
 cm_modifier_adrenaline_drain_description: "On damaging a player, has a {chance} chance to remove {power} of current adrenaline and reduce adrenaline gained by {gain} for {duration}."
 cm_modifier_corrosive_name: "Corrosive"
 cm_modifier_corrosive_description: "On damaging a player, has a {chance} chance to increase durability loss for equipped helmet, chest, legs, cape, weapons, and shield by {power} for {duration}."
-cm_modifier_toxic_death_name: "Toxic Death"
-cm_modifier_toxic_death_description: "On death, poisons players within {radius} for {power} of each player's max health."
+cm_modifier_toxic_aura_name: "Toxic Aura"
+cm_modifier_toxic_aura_description: "While alive and untamed, applies poison every second to nearby hostile players within its body radius + 3m. Each application is {power} of the player's max health before resistance, not immediate damage per second. Walls and floors block the aura."
 
 cm_modifier_swift_name: "Swift"
 cm_modifier_swift_description: "Increases movement speed, acceleration, and turning speed by {power}."

@@ -8,6 +8,9 @@ namespace CreatureManager;
 
 internal static class CreaturePrefabRegistry
 {
+    internal const string ToxicAuraEffectName = "cm_toxicaura_vfx";
+    private static GameObject? ToxicAuraEffect;
+
     private sealed class CloneRecord
     {
         internal readonly GameObject Prefab;
@@ -332,6 +335,7 @@ internal static class CreaturePrefabRegistry
 
     internal static void ResetOwnedClones()
     {
+        RemoveToxicAuraEffect();
         CloneApplyInProgress = false;
         ClonesPresentAtApplyStart.Clear();
 
@@ -369,6 +373,77 @@ internal static class CreaturePrefabRegistry
         return registered;
     }
 
+    internal static void RegisterToxicAuraEffect(ZNetScene scene)
+    {
+        if (ToxicAuraEffect != null || (ZNet.instance != null && ZNet.instance.IsDedicated())) return;
+        try
+        {
+            GameObject source = scene.GetPrefab("blob_aoe");
+            Transform? particles = source != null ? source.transform.Find("particles") : null;
+            if (particles == null || particles.GetComponentsInChildren<Component>(true).Any(component =>
+                    component is not Transform and not ParticleSystem and not ParticleSystemRenderer))
+            {
+                CreatureManagerPlugin.Log.LogWarning("Toxic Aura visual unavailable: blob_aoe's particle subtree is missing or has unsupported components. Poison damage remains enabled.");
+                return;
+            }
+
+            // Pure visual template under an inactive root: no Aoe, ZNetView or timer,
+            // and no network prefab registration. Reuse only the sustained particles.
+            ToxicAuraEffect = new GameObject(ToxicAuraEffectName);
+            ToxicAuraEffect.transform.SetParent(GetRootTransform(), false);
+            foreach (ParticleSystem sourceParticle in particles.GetComponentsInChildren<ParticleSystem>(true))
+            {
+                if (!sourceParticle.main.loop) continue;
+                GameObject child = Object.Instantiate(sourceParticle.gameObject, ToxicAuraEffect.transform, false);
+                child.transform.localPosition = Vector3.zero;
+                child.transform.localRotation = Quaternion.identity;
+                child.transform.localScale = Vector3.one;
+                ParticleSystem particle = child.GetComponent<ParticleSystem>();
+                var main = particle.main;
+                main.loop = true;
+                main.playOnAwake = true;
+                main.stopAction = ParticleSystemStopAction.None;
+                main.simulationSpace = ParticleSystemSimulationSpace.Local;
+                main.scalingMode = ParticleSystemScalingMode.Shape;
+                main.startSpeed = 0.1f;
+                main.gravityModifier = 0f;
+                main.startLifetime = 2f;
+                main.maxParticles = 24;
+                var shape = particle.shape;
+                shape.enabled = true;
+                shape.shapeType = ParticleSystemShapeType.Sphere;
+                shape.radius = 1f;
+                var velocity = particle.velocityOverLifetime;
+                velocity.enabled = false;
+                var force = particle.forceOverLifetime;
+                force.enabled = false;
+                var emission = particle.emission;
+                emission.enabled = true;
+                emission.SetBursts(new ParticleSystem.Burst[0]);
+                emission.rateOverTime = 6f;
+                emission.rateOverDistance = 0f;
+            }
+            if (ToxicAuraEffect.transform.childCount == 0)
+            {
+                RemoveToxicAuraEffect();
+                CreatureManagerPlugin.Log.LogWarning("Toxic Aura visual unavailable: blob_aoe has no sustained particles. Poison damage remains enabled.");
+            }
+        }
+        catch (Exception exception)
+        {
+            RemoveToxicAuraEffect();
+            CreatureManagerPlugin.Log.LogWarning($"Toxic Aura visual creation failed; poison damage remains enabled: {exception.Message}");
+        }
+    }
+
+    internal static GameObject? CreateToxicAuraVisual() =>
+        ToxicAuraEffect != null ? Object.Instantiate(ToxicAuraEffect) : null;
+
+    private static void RemoveToxicAuraEffect()
+    {
+        if (ToxicAuraEffect != null) Object.Destroy(ToxicAuraEffect);
+        ToxicAuraEffect = null;
+    }
     internal static void RegisterPendingPrefabs(ZNetScene scene)
     {
         PrefabsToRegister.RemoveAll(prefab => prefab == null);

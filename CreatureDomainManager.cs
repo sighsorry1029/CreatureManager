@@ -5148,6 +5148,8 @@ internal static class CreatureDomainManager
     {
         StringBuilder builder = new();
         AppendTemplateComment(builder, "Config relationship: [2 - Levels] in sighsorry.CreatureManager.cfg (defaults: Full + Easy).");
+        AppendTemplateComment(builder, "toxicDeath is accepted as toxicAura with chance/power preserved; old radius/effect values are ignored. Within one modifier block, toxicAura wins.");
+        AppendTemplateComment(builder, "Blink always uses fx_Adrenaline1; an old fourth tuple value is accepted but ignored (including none).");
         AppendTemplateComment(builder, "Enable Level System:");
         AppendTemplateComment(builder, "  Off = no CM automatic level assignment, level stat/distance/scale rules, or modifiers.");
         AppendTemplateComment(builder, "  ExceptLevel = keep game/other-mod levels; ignore ALL YAML level weights, biome presets, and Karma/Enforcer level bonuses.");
@@ -5267,7 +5269,7 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 2, $"adaptive: {chance}, 0.5                # chance%, rememberedTypeDamageReduction");
         AppendIndented(builder, 2, $"unflinching: {chance}                    # chance%");
         AppendIndented(builder, 2, $"chameleon: {chance}, 10                  # chance%, immunitySwitchSeconds");
-        AppendIndented(builder, 2, "# Affliction: Exposed to ToxicDeath");
+        AppendIndented(builder, 2, "# Affliction: Exposed to ToxicAura");
         AppendIndented(builder, 2, $"exposed: {chance}, 0.2, 0.5, 5          # chance%, damageTaken, proc, duration");
         AppendIndented(builder, 2, $"weakened: {chance}, 0.2, 0.5, 5         # chance%, outgoingDamageReduction, proc, duration");
         AppendIndented(builder, 2, $"withered: {chance}, 0.5, 0.5, 5         # chance%, healingReduction, proc, duration");
@@ -5275,13 +5277,13 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 2, $"disruptive: {chance}, 0.5, 0.5, 0.5, 5  # chance%, staminaRegenReduction, eitrRegenReduction, proc, duration");
         AppendIndented(builder, 2, $"adrenalineDrain: {chance}, 0.5, 0.5, 0.5, 5 # chance%, currentAdrenalineRemoved, adrenalineGainReduction, procChance, duration");
         AppendIndented(builder, 2, $"corrosive: {chance}, 0.5, 0.5, 5          # chance%, durabilityLossBonus, procChance, duration");
-        AppendIndented(builder, 2, "toxicDeath: 10, 0.3, 4, blob_aoe   # chance%, maxHealthDamage, radius, triggerEffect");
+        AppendIndented(builder, 2, "toxicAura: 10, 0.1             # chance%, maxHealthPoison per application; every 1s, body radius + 3m");
         AppendIndented(builder, 2, "# Special: Swift to Blamer");
         AppendIndented(builder, 2, $"swift: {chance}, 0.4                  # chance%, movementSpeedBonus");
         AppendIndented(builder, 2, $"attackSpeed: {chance}, 0.3            # chance%, attackSpeedBonus");
         AppendIndented(builder, 2, $"vampiric: {chance}, 0.3               # chance%, actualDirectDamageHealing");
         AppendIndented(builder, 2, $"reaping: {chance}, 0.05, 20, 0.1, 2, 0.01, 0.2, 0.05, 0.5 # chance%, heal/base, healMaxActivations, maxHealth/base, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap");
-        AppendIndented(builder, 2, $"blink: {chance}, 6, 16, fx_Adrenaline1  # chance%, cooldown, maxRange, startEffect");
+        AppendIndented(builder, 2, $"blink: {chance}, 6, 16             # chance%, cooldown, maxRange; fixed fx_Adrenaline1 effect");
         AppendIndented(builder, 2, $"omen: {chance}, 0.5                  # chance%, forcedEnforcerChance");
         AppendIndented(builder, 2, $"juggernaut: {chance}, 150, 5           # chance%, minimumPushForce, cooldownSeconds");
         AppendIndented(builder, 2, $"blamer: {blamerChance}, {blamerKarmaPerSecond}, {blamerMaxKarmaGain}, 0.75           # chance%, karmaPerSecond, maxKarmaGain (0 = unlimited), fleeHealthRatio");

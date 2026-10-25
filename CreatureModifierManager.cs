@@ -34,7 +34,7 @@ internal static class CreatureModifierManager
     private const string FrostPowerKey = "CreatureManager_FrostPower";
     private const string LightningPowerKey = "CreatureManager_LightningPower";
     private const string SpiritPowerKey = "CreatureManager_SpiritPower";
-    private const string ToxicDeathPowerKey = "CreatureManager_ToxicDeathPower";
+    private const string ToxicAuraPowerKey = "CreatureManager_ToxicAuraPower";
     private const string ArmorPiercingPowerKey = "CreatureManager_ArmorPiercingPower";
     private const string StaggeringPowerKey = "CreatureManager_StaggeringPower";
     private const string UndodgeableDamageReductionKey = "CreatureManager_UndodgeableDamageReduction";
@@ -66,8 +66,6 @@ internal static class CreatureModifierManager
     private const string CorrosiveChanceKey = "CreatureManager_CorrosiveChance";
     private const string CorrosivePowerKey = "CreatureManager_CorrosivePower";
     private const string CorrosiveDurationKey = "CreatureManager_CorrosiveDuration";
-    private const string ToxicDeathRadiusKey = "CreatureManager_ToxicDeathRadius";
-    private const string ToxicDeathTriggerEffectKey = "CreatureManager_ToxicDeathTriggerEffect";
     private const string AdaptivePowerKey = "CreatureManager_AdaptivePower";
     private const string UnflinchingPowerKey = "CreatureManager_UnflinchingPower";
     private const string ChameleonIntervalKey = "CreatureManager_ChameleonInterval";
@@ -84,7 +82,6 @@ internal static class CreatureModifierManager
     private const string BlinkPowerKey = "CreatureManager_BlinkPower";
     private const string BlinkCooldownKey = "CreatureManager_BlinkCooldown";
     private const string BlinkMaxRangeKey = "CreatureManager_BlinkMaxRange";
-    private const string BlinkStartEffectKey = "CreatureManager_BlinkStartEffect";
     private const string BlinkNextTimeKey = "CreatureManager_BlinkNextTime";
     private const string BlinkAlertStartTimeKey = "CreatureManager_BlinkAlertStartTime";
     private const string KnockbackPowerKey = "CreatureManager_KnockbackPower";
@@ -168,9 +165,7 @@ internal static class CreatureModifierManager
     private const float FireDefaultPower = 0.2f;
     private const float FrostDefaultPower = 0.1f;
     private const float LightningDefaultPower = 0.1f;
-    private const float ToxicDeathDefaultPower = 0.25f;
-    private const float ToxicDeathDefaultRadius = 8f;
-    private const string ToxicDeathDefaultTriggerEffect = "blob_aoe";
+    private const float ToxicAuraDefaultPower = 0.1f;
     private const float ArmorPiercingDefaultPower = 0.3f;
     private const float StaggeringDefaultPower = 0.5f;
     private const float UndodgeableDefaultDamageReduction = 0.25f;
@@ -296,7 +291,7 @@ internal static class CreatureModifierManager
         FrostPowerKey,
         LightningPowerKey,
         SpiritPowerKey,
-        ToxicDeathPowerKey,
+        ToxicAuraPowerKey,
         ArmorPiercingPowerKey,
         StaggeringPowerKey,
         UndodgeableDamageReductionKey,
@@ -328,8 +323,12 @@ internal static class CreatureModifierManager
         CorrosiveChanceKey,
         CorrosivePowerKey,
         CorrosiveDurationKey,
-        ToxicDeathRadiusKey,
-        ToxicDeathTriggerEffectKey,
+        // Old snapshots can still contain these inert values; they no longer drive an effect.
+        "CreatureManager_ToxicDeathPower",
+        "CreatureManager_ToxicDeathRadius",
+        // Inert historical snapshot key: accepting it must not reject an otherwise valid
+        // saved modifier snapshot. Effect selection no longer reads or writes this value.
+        "CreatureManager_ToxicDeathTriggerEffect",
         AdaptivePowerKey,
         UnflinchingPowerKey,
         ChameleonIntervalKey,
@@ -346,7 +345,8 @@ internal static class CreatureModifierManager
         BlinkPowerKey,
         BlinkCooldownKey,
         BlinkMaxRangeKey,
-        BlinkStartEffectKey,
+        // Accept old snapshots without restoring configurable Blink effects.
+        "CreatureManager_BlinkStartEffect",
         BlinkNextTimeKey,
         BlinkAlertStartTimeKey,
         KnockbackPowerKey,
@@ -395,7 +395,7 @@ internal static class CreatureModifierManager
         new(ModifierGroup.Affliction, "disruptive", "Disruptive", ModifierMask.Disruptive, DisruptivePowerKey, DisruptiveDefaultPower, power => DescribeDisruptive(power, DisruptiveDefaultPower, PlayerDebuffDefaultProcChance, ControlDebuffDuration), procChanceKey: DisruptiveChanceKey),
         new(ModifierGroup.Affliction, "adrenalineDrain", "Adrenaline Drain", ModifierMask.AdrenalineDrain, AdrenalineDrainPowerKey, AdrenalineDrainDefaultPower, power => DescribeAdrenalineDrain(power, AdrenalineDrainDefaultGainReduction, PlayerDebuffDefaultProcChance, AdrenalineDrainDefaultDuration), procChanceKey: AdrenalineDrainChanceKey),
         new(ModifierGroup.Affliction, "corrosive", "Corrosive", ModifierMask.Corrosive, CorrosivePowerKey, CorrosiveDefaultPower, power => DescribeCorrosive(power, PlayerDebuffDefaultProcChance, PlayerDebuffDuration), procChanceKey: CorrosiveChanceKey),
-        new(ModifierGroup.Affliction, "toxicDeath", "Toxic Death", ModifierMask.ToxicDeath, ToxicDeathPowerKey, ToxicDeathDefaultPower, power => DescribeToxicDeath(power, ToxicDeathDefaultRadius)),
+        new(ModifierGroup.Affliction, "toxicAura", "Toxic Aura", ModifierMask.ToxicAura, ToxicAuraPowerKey, ToxicAuraDefaultPower, DescribeToxicAura),
 
         new(ModifierGroup.Special, "swift", "Swift", ModifierMask.Swift, SwiftPowerKey, SwiftDefaultPower, power => $"Increases movement speed, acceleration, and turning speed by {FormatPercent(power)}."),
         new(ModifierGroup.Special, "attackSpeed", "Attack Speed", ModifierMask.AttackSpeed, AttackSpeedPowerKey, AttackSpeedDefaultPower, power => $"Increases attack animation speed by {FormatPercent(power)} and shortens both weapon and creature AI attack intervals to {FormatPercent(1f / Mathf.Max(1f, 1f + power))} of normal."),
@@ -601,7 +601,7 @@ internal static class CreatureModifierManager
         Fire = 1L << 6,
         Frost = 1L << 7,
         Lightning = 1L << 8,
-        ToxicDeath = 1L << 9,
+        ToxicAura = 1L << 9,
         ArmorPiercing = 1L << 10,
         Staggering = 1L << 11,
         AttackSpeed = 1L << 12,
@@ -734,6 +734,7 @@ internal static class CreatureModifierManager
         internal float NextRegeneration;
         internal float NextChameleon;
         internal float NextBlamer;
+        internal float NextToxicAura;
     }
 
     private enum BlamerKarmaAddResult
@@ -1602,7 +1603,7 @@ internal static class CreatureModifierManager
         {
             ModifierGroup.Offense => CreatureLocalization.Localize("cm_group_offense", "Offense: Enraged to Undodgeable"),
             ModifierGroup.Defense => CreatureLocalization.Localize("cm_group_defense", "Defense: Armored to Chameleon"),
-            ModifierGroup.Affliction => CreatureLocalization.Localize("cm_group_affliction", "Affliction: Exposed to Toxic Death"),
+            ModifierGroup.Affliction => CreatureLocalization.Localize("cm_group_affliction", "Affliction: Exposed to Toxic Aura"),
             ModifierGroup.Special => CreatureLocalization.Localize("cm_group_special", "Special: Swift to Blamer"),
             _ => string.Empty
         };
@@ -1646,7 +1647,7 @@ internal static class CreatureModifierManager
                 power,
                 ResolvePlayerDebuffProcChance(definition.ProcChance),
                 ResolvePlayerDebuffDuration(definition.Duration, PlayerDebuffDuration)),
-            ModifierMask.ToxicDeath => DescribeToxicDeath(power, Mathf.Max(0f, definition.Radius ?? ToxicDeathDefaultRadius)),
+            ModifierMask.ToxicAura => DescribeToxicAura(power),
             ModifierMask.Regenerating => DescribeRegenerating(
                 power,
                 ResolveRegeneratingHealthPerSecondCap(definition.RegeneratingHealthPerSecondCap)),
@@ -1829,14 +1830,12 @@ internal static class CreatureModifierManager
             ("duration", FormatSeconds(duration)));
     }
 
-    private static string DescribeToxicDeath(float power, float radius)
+    private static string DescribeToxicAura(float power)
     {
-        string formattedRadius = radius.ToString("0.##", CultureInfo.InvariantCulture) + "m";
-        string fallback = $"On death, poisons players within {formattedRadius} for {FormatPercent(power)} of each player's max health.";
+        string fallback = $"While alive and untamed, applies poison every second to nearby hostile players within its body radius + 3m. Each application is {FormatPercent(power)} of the player's max health before resistance, not immediate damage per second. Walls and floors block the aura.";
         return LocalizeModifierDescription(
-            "toxic_death",
+            "toxic_aura",
             fallback,
-            ("radius", formattedRadius),
             ("power", FormatPercent(power)));
     }
 
@@ -2173,12 +2172,6 @@ internal static class CreatureModifierManager
         return Mathf.Max(0f, configuredMaxRange ?? BlinkDefaultMaxRange);
     }
 
-    private static string ResolveBlinkStartEffect(string? configuredStartEffect)
-    {
-        string effect = (configuredStartEffect ?? BlinkDefaultStartEffect).Trim();
-        return string.Equals(effect, "none", StringComparison.OrdinalIgnoreCase) ? "" : effect;
-    }
-
     internal static void RegisterRpcs()
     {
         if (ZRoutedRpc.instance == null || ReferenceEquals(RegisteredRoutedRpc, ZRoutedRpc.instance))
@@ -2308,6 +2301,7 @@ internal static class CreatureModifierManager
         PassiveModifierProbeDoneCharacters.Clear();
         ActivePassiveModifierCharacters.Clear();
         PassiveModifierSchedules.Clear();
+        CreatureToxicAura.Reset();
         ActiveReapingModifierCharacters.Clear();
         UnqueryableReapingModifierCharacters.Clear();
         ReapingNearbyCandidateIds.Clear();
@@ -3233,7 +3227,8 @@ internal static class CreatureModifierManager
         PassiveModifierSchedule schedule = GetPassiveModifierSchedule(character, zdo, now);
         return (HasModifier(mask, ModifierMask.Regenerating) && now >= schedule.NextRegeneration) ||
                (HasModifier(mask, ModifierMask.Chameleon) && now >= schedule.NextChameleon) ||
-               (HasModifier(mask, ModifierMask.Blamer) && now >= schedule.NextBlamer);
+               (HasModifier(mask, ModifierMask.Blamer) && now >= schedule.NextBlamer) ||
+               (HasModifier(mask, ModifierMask.ToxicAura) && now >= schedule.NextToxicAura);
     }
 
     private static PassiveModifierSchedule GetPassiveModifierSchedule(Character character, ZDO zdo, float now)
@@ -3246,7 +3241,8 @@ internal static class CreatureModifierManager
             {
                 NextRegeneration = now + 1f,
                 NextChameleon = now + chameleonInterval,
-                NextBlamer = now + BlamerTickInterval
+                NextBlamer = now + BlamerTickInterval,
+                NextToxicAura = now + CreatureToxicAura.TickInterval
             };
             PassiveModifierSchedules[id] = schedule;
         }
@@ -3259,6 +3255,7 @@ internal static class CreatureModifierManager
         int id = character.GetInstanceID();
         PassiveModifierProbeDoneCharacters.Add(id);
         ModifierMask mask = GetStoredModifierMask(zdo);
+        CreatureToxicAura.Track(character, HasModifier(mask, ModifierMask.ToxicAura));
         if (character.IsDead())
         {
             ActivePassiveModifierCharacters.Remove(id);
@@ -3284,7 +3281,7 @@ internal static class CreatureModifierManager
             PassiveModifierSchedules.Remove(id);
             ActiveReapingModifierCharacters.Remove(id);
             UnqueryableReapingModifierCharacters.Remove(id);
-            ModifierMask trackedMask = ModifierMask.Regenerating | ModifierMask.Chameleon | ModifierMask.Blamer | ModifierMask.Reaping;
+            ModifierMask trackedMask = ModifierMask.Regenerating | ModifierMask.Chameleon | ModifierMask.Blamer | ModifierMask.Reaping | ModifierMask.ToxicAura;
             if ((mask & trackedMask) != 0)
             {
                 PassiveModifierProbeDoneCharacters.Remove(id);
@@ -3333,7 +3330,9 @@ internal static class CreatureModifierManager
         }
 
         bool hasReaping = HasModifier(mask, ModifierMask.Reaping) && HasStoredReapingSettings(zdo);
-        bool hasPassiveModifier = hasRegenerating || hasChameleon || hasBlamer;
+        bool hasToxicAura = HasModifier(mask, ModifierMask.ToxicAura) &&
+                            zdo.GetFloat(ToxicAuraPowerKey, ToxicAuraDefaultPower) > 0f;
+        bool hasPassiveModifier = hasRegenerating || hasChameleon || hasBlamer || hasToxicAura;
         if (hasPassiveModifier && canRunPassiveModifier)
         {
             ActivePassiveModifierCharacters.Add(id);
@@ -3388,6 +3387,7 @@ internal static class CreatureModifierManager
         }
 
         int id = character.GetInstanceID();
+        CreatureToxicAura.Forget(id);
         PassiveModifierProbeDoneCharacters.Remove(id);
         ActivePassiveModifierCharacters.Remove(id);
         PassiveModifierSchedules.Remove(id);
@@ -3457,13 +3457,6 @@ internal static class CreatureModifierManager
         SetActiveFloat(zdo, AdrenalineDrainDurationKey, adrenalineDrainActive, ResolvePlayerDebuffDuration(powers.AdrenalineDrainDuration, AdrenalineDrainDefaultDuration));
         bool corrosiveActive = HasModifier(mask, ModifierMask.Corrosive);
         SetActiveFloat(zdo, CorrosiveDurationKey, corrosiveActive, ResolvePlayerDebuffDuration(powers.CorrosiveDuration, PlayerDebuffDuration));
-        bool toxicDeathActive = HasModifier(mask, ModifierMask.ToxicDeath);
-        SetActiveFloat(zdo, ToxicDeathRadiusKey, toxicDeathActive, Mathf.Max(0f, powers.ToxicDeathRadius ?? ToxicDeathDefaultRadius));
-        SetActiveString(
-            zdo,
-            ToxicDeathTriggerEffectKey,
-            toxicDeathActive,
-            ResolveTriggerEffect(powers.ToxicDeathTriggerEffect, ToxicDeathDefaultTriggerEffect));
 
         bool deathwardActive = HasModifier(mask, ModifierMask.Deathward);
         SetActiveFloat(zdo, DeathwardCooldownKey, deathwardActive, ResolveDeathwardCooldown(powers.DeathwardCooldown));
@@ -3485,7 +3478,6 @@ internal static class CreatureModifierManager
         bool blinkActive = HasModifier(mask, ModifierMask.Blink);
         SetActiveFloat(zdo, BlinkCooldownKey, blinkActive, ResolveBlinkCooldown(powers.BlinkCooldown));
         SetActiveFloat(zdo, BlinkMaxRangeKey, blinkActive, ResolveBlinkMaxRange(powers.BlinkMaxRange));
-        SetActiveString(zdo, BlinkStartEffectKey, blinkActive, ResolveBlinkStartEffect(powers.BlinkStartEffect));
 
         bool knockbackActive = HasModifier(mask, ModifierMask.Knockback);
         SetActiveFloat(zdo, KnockbackCooldownKey, knockbackActive, ResolveKnockbackCooldown(powers.KnockbackCooldown));
@@ -3516,13 +3508,6 @@ internal static class CreatureModifierManager
         {
             zdo.RemoveInt(key);
         }
-    }
-
-    private static void SetActiveString(ZDO zdo, string key, bool active, string value)
-    {
-        // ZDO has no public RemoveString API. An empty value prevents stale modifier
-        // configuration from surviving a mask change while keeping the write portable.
-        zdo.Set(key, active ? value : "");
     }
 
     private static void CopyStoredModifierPowers(ZDO source, ZDO target)
@@ -3560,13 +3545,6 @@ internal static class CreatureModifierManager
         SetActiveFloat(target, AdrenalineDrainDurationKey, adrenalineDrainActive, source.GetFloat(AdrenalineDrainDurationKey, 0f));
         bool corrosiveActive = HasModifier(mask, ModifierMask.Corrosive);
         SetActiveFloat(target, CorrosiveDurationKey, corrosiveActive, source.GetFloat(CorrosiveDurationKey, 0f));
-        bool toxicDeathActive = HasModifier(mask, ModifierMask.ToxicDeath);
-        SetActiveFloat(target, ToxicDeathRadiusKey, toxicDeathActive, source.GetFloat(ToxicDeathRadiusKey, 0f));
-        SetActiveString(
-            target,
-            ToxicDeathTriggerEffectKey,
-            toxicDeathActive,
-            source.GetString(ToxicDeathTriggerEffectKey, ""));
 
         bool deathwardActive = HasModifier(mask, ModifierMask.Deathward);
         SetActiveFloat(target, DeathwardCooldownKey, deathwardActive, source.GetFloat(DeathwardCooldownKey, 0f));
@@ -3588,7 +3566,6 @@ internal static class CreatureModifierManager
         bool blinkActive = HasModifier(mask, ModifierMask.Blink);
         SetActiveFloat(target, BlinkCooldownKey, blinkActive, source.GetFloat(BlinkCooldownKey, 0f));
         SetActiveFloat(target, BlinkMaxRangeKey, blinkActive, source.GetFloat(BlinkMaxRangeKey, 0f));
-        SetActiveString(target, BlinkStartEffectKey, blinkActive, source.GetString(BlinkStartEffectKey, ""));
 
         bool knockbackActive = HasModifier(mask, ModifierMask.Knockback);
         SetActiveFloat(target, KnockbackCooldownKey, knockbackActive, source.GetFloat(KnockbackCooldownKey, 0f));
@@ -3641,12 +3618,6 @@ internal static class CreatureModifierManager
     private static float ResolvePlayerDebuffDuration(float? value, float fallback)
     {
         return Mathf.Max(0.1f, value ?? fallback);
-    }
-
-    private static string ResolveTriggerEffect(string? configured, string fallback)
-    {
-        string value = configured == null ? fallback : configured.Trim();
-        return string.Equals(value, "none", StringComparison.OrdinalIgnoreCase) ? "" : value;
     }
 
     private static float ClampDeathwardHealth(float? value)
@@ -3855,12 +3826,6 @@ internal static class CreatureModifierManager
             if (corrosive.Duration.HasValue) { powers.CorrosiveDuration = ResolvePlayerDebuffDuration(corrosive.Duration, PlayerDebuffDuration); has = true; }
         }
 
-        if (modifiers.TryGetValue("toxicDeath", out ModifierDefinition toxicDeath))
-        {
-            if (toxicDeath.Radius.HasValue) { powers.ToxicDeathRadius = Mathf.Max(0f, toxicDeath.Radius.Value); has = true; }
-            if (toxicDeath.TriggerEffect != null) { powers.ToxicDeathTriggerEffect = toxicDeath.TriggerEffect; has = true; }
-        }
-
         if (modifiers.TryGetValue("reaping", out ModifierDefinition reaping))
         {
             if (reaping.ReapingHealMaxActivations.HasValue)
@@ -3915,12 +3880,6 @@ internal static class CreatureModifierManager
         if (blink?.MaxRange.HasValue == true)
         {
             powers.BlinkMaxRange = Mathf.Max(0f, blink.MaxRange.Value);
-            has = true;
-        }
-
-        if (blink?.StartEffect != null)
-        {
-            powers.BlinkStartEffect = blink.StartEffect;
             has = true;
         }
 
@@ -4591,8 +4550,9 @@ internal static class CreatureModifierManager
         try
         {
             Vector3 position = package.ReadVector3();
-            string prefabName = package.ReadString();
-            PlayBlinkStartEffectLocal(position, prefabName);
+            // Preserve the RPC layout, but never instantiate a name sent by older peers.
+            package.ReadString();
+            PlayBlinkStartEffectLocal(position);
         }
         catch (Exception ex)
         {
@@ -4649,7 +4609,7 @@ internal static class CreatureModifierManager
             return;
         }
 
-        PlayDeathwardTriggerEffectsLocal(position);
+        PlayDeathwardTriggerEffectsLocal(position, networked: true);
     }
 
     private static void BroadcastReapingFeedback(Character character, bool scaleChanged)
@@ -4668,26 +4628,21 @@ internal static class CreatureModifierManager
             return;
         }
 
-        ApplyReapingFeedbackLocal(position, characterId, scaleChanged, scale);
+        ApplyReapingFeedbackLocal(position, characterId, scaleChanged, scale, networked: true);
     }
 
-    private static void PlayBlinkStartEffect(Vector3 position, string prefabName)
+    private static void PlayBlinkStartEffect(Vector3 position)
     {
-        if (prefabName.Length == 0)
-        {
-            return;
-        }
-
         if (ZNet.instance != null && ZNet.instance.IsServer() && ZRoutedRpc.instance != null)
         {
             ZPackage package = new();
             package.Write(position);
-            package.Write(prefabName);
+            package.Write(BlinkDefaultStartEffect);
             ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, BlinkEffectRpc, package);
             return;
         }
 
-        PlayBlinkStartEffectLocal(position, prefabName);
+        PlayBlinkStartEffectLocal(position, networked: true);
     }
 
     private static bool IsTrustedServerRpc(long sender)
@@ -4715,7 +4670,7 @@ internal static class CreatureModifierManager
             GameObject prefab = ZNetScene.instance.GetPrefab(prefabName);
             if (prefab != null)
             {
-                GameObject effect = UnityEngine.Object.Instantiate(prefab, position, Quaternion.identity);
+                GameObject effect = InstantiateModifierEffect(prefab, prefabName, position, Quaternion.identity);
                 if (parent != null)
                 {
                     effect.transform.SetParent(parent, true);
@@ -4763,35 +4718,36 @@ internal static class CreatureModifierManager
             GameObject prefab = ZNetScene.instance.GetPrefab(prefabName);
             if (prefab != null)
             {
-                UnityEngine.Object.Instantiate(prefab, position, rotation);
+                InstantiateModifierEffect(prefab, prefabName, position, rotation);
             }
         }
     }
 
-    private static void PlayBlinkStartEffectLocal(Vector3 position, string prefabName)
+    private static void PlayBlinkStartEffectLocal(Vector3 position, bool networked = false)
     {
-        if (prefabName.Length == 0 || ZNetScene.instance == null || !IsEffectWithinPlaybackRange(position))
+        if (ZNetScene.instance == null || !IsEffectWithinPlaybackRange(position))
         {
             return;
         }
 
-        GameObject prefab = ZNetScene.instance.GetPrefab(prefabName);
+        GameObject prefab = ZNetScene.instance.GetPrefab(BlinkDefaultStartEffect);
         if (prefab != null)
         {
-            UnityEngine.Object.Instantiate(prefab, position, Quaternion.identity);
+            InstantiateModifierEffect(prefab, BlinkDefaultStartEffect, position, Quaternion.identity, networked);
         }
     }
 
-    private static void PlayDeathwardTriggerEffectsLocal(Vector3 position)
+    private static void PlayDeathwardTriggerEffectsLocal(Vector3 position, bool networked = false)
     {
-        PlayConfiguredEffectsLocal(position, DeathwardTriggerEffectPrefab, MissingDeathwardEffectPrefabs, "Deathward");
+        PlayConfiguredEffectsLocal(position, DeathwardTriggerEffectPrefab, MissingDeathwardEffectPrefabs, "Deathward", networked);
     }
 
     private static void ApplyReapingFeedbackLocal(
         Vector3 position,
         ZDOID characterId,
         bool scaleChanged,
-        Vector3 scale)
+        Vector3 scale,
+        bool networked = false)
     {
         if (scaleChanged && ZNetScene.instance != null)
         {
@@ -4803,7 +4759,7 @@ internal static class CreatureModifierManager
             }
         }
 
-        PlayConfiguredEffectsLocal(position, ReapingTriggerEffectPrefab, MissingReapingEffectPrefabs, "Reaping");
+        PlayConfiguredEffectsLocal(position, ReapingTriggerEffectPrefab, MissingReapingEffectPrefabs, "Reaping", networked);
     }
 
     private static void ScheduleReapingPhysicsSync()
@@ -4853,7 +4809,8 @@ internal static class CreatureModifierManager
         Vector3 position,
         string prefabNames,
         HashSet<string> missingPrefabs,
-        string effectOwner)
+        string effectOwner,
+        bool networked = false)
     {
         if (prefabNames.Length == 0 ||
             string.Equals(prefabNames, "none", StringComparison.OrdinalIgnoreCase) ||
@@ -4877,7 +4834,7 @@ internal static class CreatureModifierManager
             GameObject prefab = ZNetScene.instance.GetPrefab(prefabName);
             if (prefab != null)
             {
-                UnityEngine.Object.Instantiate(prefab, position, Quaternion.identity);
+                InstantiateModifierEffect(prefab, prefabName, position, Quaternion.identity, networked);
                 continue;
             }
 
@@ -4886,6 +4843,47 @@ internal static class CreatureModifierManager
                 CreatureManagerPlugin.Log.LogWarning($"{effectOwner} trigger effect prefab '{prefabName}' was not found.");
             }
         }
+    }
+
+    private static GameObject InstantiateModifierEffect(
+        GameObject prefab, string prefabName, Vector3 position, Quaternion rotation, bool networked = false)
+    {
+        // These vanilla feedback prefabs are cosmetic. RPC recipients need local copies;
+        // direct client-owner feedback still needs one networked copy to reach other peers.
+        // Other prefabs may own gameplay/TTL logic; Blink uses only its fixed default.
+        // removing their ZNetView would change their authority and must not be implicit.
+        bool cosmetic = prefabName == BlinkDefaultStartEffect ||
+                         prefabName == DeathwardTriggerEffectPrefab ||
+                         prefabName == ReapingTriggerEffectPrefab ||
+                         Array.IndexOf(VortexHitEffectPrefabNames, prefabName) >= 0 ||
+                         Array.IndexOf(ReflectionEffectPrefabNames, prefabName) >= 0;
+        if (!cosmetic)
+        {
+            return UnityEngine.Object.Instantiate(prefab, position, rotation);
+        }
+
+        GameObject effect;
+        bool previousForceDisableInit = ZNetView.m_forceDisableInit;
+        try
+        {
+            // Suppress registration before Awake, not by removing an already registered view.
+            ZNetView.m_forceDisableInit = previousForceDisableInit || !networked;
+            effect = UnityEngine.Object.Instantiate(prefab, position, rotation);
+        }
+        finally
+        {
+            ZNetView.m_forceDisableInit = previousForceDisableInit;
+        }
+
+        // StaffShield Hit/Break have a three-second timer that does not start in Awake.
+        // After the suppressed view is removed, TimedDestruction performs local cleanup.
+        TimedDestruction? lifetime = effect.GetComponent<TimedDestruction>();
+        if (lifetime != null && !lifetime.m_triggerOnAwake)
+        {
+            lifetime.Trigger();
+        }
+
+        return effect;
     }
 
     private static bool IsEffectWithinPlaybackRange(Vector3 position)
@@ -5779,8 +5777,7 @@ internal static class CreatureModifierManager
         float cooldown = ResolveBlinkCooldown(zdo.GetFloat(BlinkCooldownKey, BlinkDefaultCooldown));
         zdo.Set(BlinkNextTimeKey, now + cooldown);
         Vector3 origin = character.transform.position;
-        string startEffect = ResolveBlinkStartEffect(zdo.GetString(BlinkStartEffectKey, BlinkDefaultStartEffect));
-        PlayBlinkStartEffect(origin, startEffect);
+        PlayBlinkStartEffect(origin);
         TeleportCharacter(character, destination, target.transform.position);
     }
 
@@ -7871,6 +7868,14 @@ internal static class CreatureModifierManager
         float now = Time.time;
         ModifierMask mask = GetStoredModifierMask(zdo);
         PassiveModifierSchedule schedule = GetPassiveModifierSchedule(character, zdo, now);
+        if (HasModifier(mask, ModifierMask.ToxicAura) && now >= schedule.NextToxicAura)
+        {
+            schedule.NextToxicAura = now + CreatureToxicAura.TickInterval;
+            if (TryGetToxicAuraPower(character, out float poisonPower))
+            {
+                CreatureToxicAura.ApplyPoison(character, poisonPower);
+            }
+        }
         if (HasModifier(mask, ModifierMask.Regenerating) &&
             zdo.GetFloat(RegeneratingPowerKey, 0f) > 0f &&
             now >= schedule.NextRegeneration)
@@ -8777,6 +8782,15 @@ internal static class CreatureModifierManager
         }
     }
 
+    internal static bool TryGetToxicAuraPower(Character character, out float power)
+    {
+        power = 0f;
+        return character != null && !character.IsPlayer() && !character.IsDead() && !character.IsTamed() &&
+               CreatureLevelManager.IsLevelSystemEnabled() &&
+               TryGetModifierPower(character, ModifierMask.ToxicAura, ToxicAuraPowerKey, ToxicAuraDefaultPower, out power) &&
+               !float.IsNaN(power) && !float.IsInfinity(power);
+    }
+
     internal static void HandleDeath(Character character)
     {
         if (!CreatureLevelManager.IsLevelSystemEnabled() || character == null || character.IsPlayer())
@@ -8793,40 +8807,6 @@ internal static class CreatureModifierManager
 
         ClearDelayedDamageTracking(character);
         ApplyReapingForNearbyDeaths(character);
-
-        if (!TryGetModifierPower(character, ModifierMask.ToxicDeath, ToxicDeathPowerKey, ToxicDeathDefaultPower, out float power))
-        {
-            return;
-        }
-
-        Vector3 origin = character.transform.position;
-        if (!TryGetZdo(character, out ZDO modifierZdo))
-        {
-            return;
-        }
-
-        float radius = Mathf.Max(0f, modifierZdo.GetFloat(ToxicDeathRadiusKey, ToxicDeathDefaultRadius));
-        string triggerEffect = ResolveTriggerEffect(modifierZdo.GetString(ToxicDeathTriggerEffectKey, ToxicDeathDefaultTriggerEffect), ToxicDeathDefaultTriggerEffect);
-        PlayBlinkStartEffect(origin, triggerEffect);
-
-        foreach (Player player in Player.GetAllPlayers())
-        {
-            if (player == null || player.IsDead() || Vector3.Distance(player.transform.position, origin) > radius)
-            {
-                continue;
-            }
-
-            HitData poisonHit = new()
-            {
-                m_damage =
-                {
-                    m_poison = player.GetMaxHealth() * power
-                },
-                m_point = player.transform.position,
-                m_dir = (player.transform.position - origin).normalized
-            };
-            player.Damage(poisonHit);
-        }
     }
 
     internal static void HandlePlayerDeath(Player player)

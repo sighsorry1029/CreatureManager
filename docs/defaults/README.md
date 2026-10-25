@@ -1,6 +1,6 @@
 # Default YAML reference
 
-**Version scope: CreatureManager 1.3.8 defaults (unchanged from 1.3.5).** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. The scale guidance reflects the Full-mode behavior introduced in 1.3.5.
+**Version scope: CreatureManager 1.3.9 defaults.** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. The scale guidance reflects the Full-mode behavior introduced in 1.3.5; 1.3.9 introduces Toxic Aura defaults and removes configurable Blink effects.
 
 | File | Contents |
 | --- | --- |
@@ -17,6 +17,8 @@ Additional inactive examples are maintained in [creatures.sample.yml](../../defa
 ## Applying selected settings
 
 - Existing files under `BepInEx/config/CreatureManager/` are preserved by the mod. Compare and merge the entries you need; do not replace a customized file wholesale.
+- Toxic Aura defaults to `0.1` poison strength. Existing `toxicDeath` YAML entries still work as an alias, preserving chance and power but ignoring the former radius/effect. An explicit old `0.3` remains `0.3` and may be strong for the recurring aura: review modifier blocks in both `levels.yml` and `karma.yml`, including overrides, and change the second value to `0.1` if desired. Prefer the new form `toxicAura: 10, 0.1`; keep your existing chance instead of copying `10` blindly. In the same block, explicit `toxicAura` takes priority.
+- Blink always uses `fx_Adrenaline1`. Its old fourth tuple value, including `none`, is accepted but ignored; new templates use only chance, cooldown, and range.
 - The new `levels.yml` leaves `Global.level` commented out. Published 1.3.3 generated an active `Global.level: [80, 20]`; that existing rule stays active until you remove/comment it yourself.
 - `Full + None` keeps game/other-mod levels only where no YAML level weights and no Karma/Enforcer bonus apply. Health, damage, scale, and modifier rules remain independent. This is not a switch to fully vanilla combat balance.
 - With no matching `scalePerLevel` value, both `Full` and `ExceptLevel` now use native prefab level sizes, including in dungeons. Published 1.3.4 supported this fallback only in `ExceptLevel`. Explicit `0` disables star growth; positive values retain CM's dungeon/saddle restrictions. Level one, missing prefab size entries, and stored modifier sizes are not migrated or reset.

@@ -3,7 +3,7 @@ cm_compendium_resistance_hint: "은신한 채 생물을 바라보면 이름표 �
 
 cm_group_offense: "공격: 격노부터 회피 불가까지"
 cm_group_defense: "방어: 중장갑부터 카멜레온까지"
-cm_group_affliction: "약화: 노출부터 맹독의 죽음까지"
+cm_group_affliction: "약화: 노출부터 맹독 오라까지"
 cm_group_special: "특수: 신속부터 비난자까지"
 cm_unit_seconds: "{value}초"
 
@@ -57,8 +57,8 @@ cm_modifier_adrenaline_drain_name: "아드레날린 흡수"
 cm_modifier_adrenaline_drain_description: "플레이어에게 피해를 주면 {chance} 확률로 현재 아드레날린의 {power}를 제거하고 {duration} 동안 아드레날린 획득량을 {gain} 감소시킵니다."
 cm_modifier_corrosive_name: "부식"
 cm_modifier_corrosive_description: "플레이어에게 피해를 주면 {chance} 확률로 {duration} 동안 착용 중인 투구, 흉갑, 다리 방어구, 망토, 무기와 방패의 내구도 손실을 {power} 증가시킵니다."
-cm_modifier_toxic_death_name: "맹독의 죽음"
-cm_modifier_toxic_death_description: "죽을 때 {radius} 안의 플레이어에게 각 플레이어 최대 체력의 {power}만큼 독 피해를 줍니다."
+cm_modifier_toxic_aura_name: "맹독 오라"
+cm_modifier_toxic_aura_description: "살아 있는 길들지 않은 몹이 몸통 반경 + 3m 안의 적대적인 플레이어에게 1초마다 독을 적용합니다. 매회 독 적용량은 저항 적용 전 플레이어 최대 체력의 {power}이며, 즉시 가하는 초당 피해량이 아닙니다. 벽과 바닥은 오라를 차단합니다."
 
 cm_modifier_swift_name: "신속"
 cm_modifier_swift_description: "이동 속도, 가속도, 회전 속도가 {power} 증가합니다."

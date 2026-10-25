@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using YamlDotNet.RepresentationModel;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -24,6 +25,7 @@ internal static class CreatureYaml
     internal const int MaxLocalizationTokensPerLanguage = 8192;
     internal const int MaxLocalizationTokenLength = 128;
     internal const int MaxLocalizationTextLength = 4096;
+    private static int ToxicDeathAliasNoticeReported;
 
     internal enum ModifierYamlContext
     {
@@ -851,6 +853,9 @@ internal static class CreatureYaml
         }
 
         modifiers = new Dictionary<string, ModifierDefinition>(StringComparer.OrdinalIgnoreCase);
+        bool hasExplicitToxicAura = mapping.Children.Keys.Any(key =>
+            GetYamlScalar(key).Equals("toxicAura", StringComparison.OrdinalIgnoreCase));
+        bool usedToxicDeathAlias = false;
         foreach (KeyValuePair<YamlNode, YamlNode> entry in mapping.Children)
         {
             string modifier = GetYamlScalar(entry.Key);
@@ -867,18 +872,36 @@ internal static class CreatureYaml
                 return false;
             }
 
+            bool legacyToxicDeath = modifier.Equals("toxicDeath", StringComparison.OrdinalIgnoreCase);
+            if (legacyToxicDeath)
+            {
+                usedToxicDeathAlias = true;
+                // Explicit new spelling wins within this map, independent of YAML order.
+                // Do not merge obsolete values into an intentionally partial/zero new tuple.
+                if (hasExplicitToxicAura) continue;
+                modifier = "toxicAura";
+            }
+
             if (!CreatureModifierCatalog.IsKnown(modifier))
             {
                 CreatureManagerPlugin.Log.LogError($"{blockPath} has unknown modifier '{modifier}'.");
                 return false;
             }
 
-            if (!TryReadModifierDefinition(entry.Value, source, label, modifier, context, out ModifierDefinition definition))
+            if (!TryReadModifierDefinition(entry.Value, source, label, modifier, context, legacyToxicDeath, out ModifierDefinition definition))
             {
                 return false;
             }
 
             modifiers[modifier] = definition;
+        }
+
+        if (usedToxicDeathAlias && Interlocked.Exchange(ref ToxicDeathAliasNoticeReported, 1) == 0)
+        {
+            CreatureManagerPlugin.Log.LogWarning(
+                $"{blockPath}: toxicDeath is now read as Toxic Aura: poison is applied every second while alive, not on death. " +
+                "Chance and power are preserved; old radius/effect values are ignored. " +
+                "Explicit toxicAura wins in the same modifier block. YAML files are not rewritten. This notice is shown once per session.");
         }
 
         return true;
@@ -890,6 +913,7 @@ internal static class CreatureYaml
         string label,
         string modifier,
         ModifierYamlContext context,
+        bool legacyToxicDeath,
         out ModifierDefinition definition)
     {
         definition = null!;
@@ -910,7 +934,7 @@ internal static class CreatureYaml
         bool isSplitAffliction = modifier.Equals("crippling", StringComparison.OrdinalIgnoreCase) ||
                                  modifier.Equals("disruptive", StringComparison.OrdinalIgnoreCase);
         bool isAdrenalineDrain = modifier.Equals("adrenalinedrain", StringComparison.OrdinalIgnoreCase);
-        bool isToxicDeath = modifier.Equals("toxicdeath", StringComparison.OrdinalIgnoreCase);
+        bool isToxicAura = modifier.Equals("toxicaura", StringComparison.OrdinalIgnoreCase);
         string format = GetModifierTupleFormat(
             isBlink,
             isKnockback,
@@ -925,8 +949,9 @@ internal static class CreatureYaml
             isStandardAffliction,
             isSplitAffliction,
             isAdrenalineDrain,
-            isToxicDeath);
-        string modifierPath = $"{GetModifierBlockPath(source, label, context)}.{modifier}";
+            isToxicAura);
+        if (legacyToxicDeath) format = "chance[, maxHealthPoison[, ignoredRadius[, ignoredEffect]]]";
+        string modifierPath = $"{GetModifierBlockPath(source, label, context)}.{(legacyToxicDeath ? "toxicDeath" : modifier)}";
         string text = GetYamlScalar(node);
         if (text.Length == 0)
         {
@@ -937,10 +962,10 @@ internal static class CreatureYaml
         }
 
         string[] tokens = SplitTuplePreserveEmpty(text);
-        int maxValues = isChanceOnly ? 1 :
+        int maxValues = legacyToxicDeath ? 4 : isChanceOnly ? 1 :
             isReaping ? 9 :
             isSplitAffliction || isAdrenalineDrain ? 5 :
-            isBlink || isDeathward || isBlamer || isStandardAffliction || isToxicDeath ? 4 :
+            isBlink || isDeathward || isBlamer || isStandardAffliction ? 4 :
             isRegenerating || isKnockback || isReflection ? 3 : 2;
         bool invalidCount = tokens.Length < 1 || tokens.Length > maxValues;
         if (invalidCount)
@@ -961,7 +986,10 @@ internal static class CreatureYaml
             return false;
         }
 
-        int emptyIndex = Array.FindIndex(tokens, static token => token.Length == 0);
+        // Blink's former effect name is accepted only for existing YAML files.
+        int usedTokenCount = legacyToxicDeath ? Math.Min(tokens.Length, 2) :
+            isBlink ? Math.Min(tokens.Length, 3) : tokens.Length;
+        int emptyIndex = Array.FindIndex(tokens, 0, usedTokenCount, static token => token.Length == 0);
         if (emptyIndex >= 0)
         {
             CreatureManagerPlugin.Log.LogWarning(
@@ -970,7 +998,8 @@ internal static class CreatureYaml
             return false;
         }
 
-        int numericCount = isBlink || isToxicDeath || isDeathward ? Math.Min(tokens.Length, 3) : tokens.Length;
+        int numericCount = legacyToxicDeath ? usedTokenCount :
+            isBlink || isDeathward ? Math.Min(tokens.Length, 3) : tokens.Length;
         float[] values = new float[numericCount];
         for (int index = 0; index < numericCount; index++)
         {
@@ -1063,11 +1092,6 @@ internal static class CreatureYaml
             definition.MaxRange = values[2];
         }
 
-        if (isBlink && tokens.Length >= 4)
-        {
-            definition.StartEffect = tokens[3];
-        }
-
         if (isReaping && reapingHealMaxActivations.HasValue)
         {
             definition.ReapingHealMaxActivations = reapingHealMaxActivations;
@@ -1133,16 +1157,6 @@ internal static class CreatureYaml
             definition.ProcChance = values[2];
         }
 
-        if (isToxicDeath && values.Length >= 3)
-        {
-            definition.Radius = values[2];
-        }
-
-        if (isToxicDeath && tokens.Length >= 4)
-        {
-            definition.TriggerEffect = tokens[3];
-        }
-
         if (context == ModifierYamlContext.Level)
         {
             ValidateLevelModifier(definition, modifier, modifierPath);
@@ -1176,9 +1190,9 @@ internal static class CreatureYaml
         bool isStandardAffliction,
         bool isSplitAffliction,
         bool isAdrenalineDrain,
-        bool isToxicDeath)
+        bool isToxicAura)
     {
-        if (isBlink) return "chance[, cooldown[, maxRange[, startEffect]]]";
+        if (isBlink) return "chance[, cooldown[, maxRange[, ignoredLegacyEffect]]]";
         if (isUndodgeable) return "chance[, damageReduction]";
         if (isChanceOnly) return "chance";
         if (isKnockback) return "chance[, minimumPushForce[, cooldown]]";
@@ -1191,7 +1205,7 @@ internal static class CreatureYaml
         if (isSplitAffliction) return "chance[, primaryPower[, secondaryPower[, procChance[, duration]]]]";
         if (isAdrenalineDrain) return "chance[, currentAdrenalineRemoved[, adrenalineGainReduction[, procChance[, duration]]]]";
         if (isReflection) return "chance[, reflectedDamage[, procChance]]";
-        if (isToxicDeath) return "chance[, maxHealthDamage[, radius[, triggerEffect]]]";
+        if (isToxicAura) return "chance[, maxHealthPoison]";
         return "chance[, power]";
     }
 

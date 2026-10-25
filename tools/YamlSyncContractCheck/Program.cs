@@ -1,4 +1,5 @@
 using CreatureManager;
+using YamlDotNet.RepresentationModel;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -324,7 +325,6 @@ try
             value.Duration == null &&
             value.SecondaryPower == null &&
             value.Radius == null &&
-            value.TriggerEffect == null &&
             value.MaxKarmaGain == null &&
             value.FleeHealthRatio == null &&
             value.RegeneratingHealthPerSecondCap == null &&
@@ -344,7 +344,7 @@ try
             exposed: 10, 0.2, 0.6
             crippling: 10, 0.3, 0.4, 0.5
             adrenalineDrain: 10, 0.2, 0.3, 0.4
-            toxicDeath: 10, 0.3, 6
+            toxicAura: 10, 0.05
             reaping: 10, 0.05, 12, 0.1
             juggernaut: 10, 200
             blamer: 10, 0.5, 45
@@ -382,9 +382,14 @@ try
         partialModifiers["adrenalineDrain"].Duration == null,
         "Adrenaline Drain did not preserve the supplied prefix.");
     Require(
-        partialModifiers["toxicDeath"].Radius == 6f &&
-        partialModifiers["toxicDeath"].TriggerEffect == null,
-        "Toxic Death did not leave its omitted trigger effect available for inheritance.");
+        !partialModifiers["toxicAura"].Radius.HasValue && partialModifiers["toxicAura"].Power == 0.05f,
+        "Toxic Aura did not preserve its poison strength or invented a radius override.");
+    Require(!CreatureYaml.TryReadLevelDefinitions(
+            "Global:\n  modifiers:\n    toxicAura: 10, 0.05, 6\n",
+            "removed toxic aura radius contract", out _),
+        "Toxic Aura accepted the removed radius field.");
+    CheckToxicAuraAlias();
+    CheckFixedBlinkEffect();
     Require(
         partialModifiers["reaping"].ReapingHealMaxActivations == 12 &&
         partialModifiers["reaping"].ReapingMaxHealthPerKill == 0.1f &&
@@ -1048,6 +1053,96 @@ void RoundTrip<T>(T value, Action<T> verify)
     List<T>? values = deserializer.Deserialize<List<T>>(yaml);
     Require(values is { Count: 1 }, $"{typeof(T).Name} did not round-trip as one definition.");
     verify(values[0]);
+}
+
+void CheckFixedBlinkEffect()
+{
+    foreach (var context in new[] { CreatureYaml.ModifierYamlContext.Level, CreatureYaml.ModifierYamlContext.Karma })
+    {
+        foreach (string tuple in new[] { "10", "10, 6", "10, 6, 16", "10, 6, 16, fx_Adrenaline1", "10, 6, 16, blob_aoe", "10, 6, 16, none", "10, 6, 16, " })
+        {
+            YamlStream stream = new();
+            stream.Load(new StringReader("blink: " + tuple));
+            Require(CreatureYaml.TryReadModifierBlock(stream.Documents[0].RootNode, "fixed Blink fixture", "modifiers", context,
+                    out var result, out _) && result != null, "Valid old/new Blink tuple rejected: " + tuple);
+            var blink = result!["blink"];
+            Require(blink.Chance == 10f && blink.Cooldown == (tuple == "10" ? null : 6f) &&
+                    blink.MaxRange == (tuple.StartsWith("10, 6, 16") ? 16f : null) && blink.StartEffect == null,
+                "Blink must preserve numerical settings without forwarding the old effect name.");
+        }
+        foreach (string tuple in new[] { "10, nope, 16, fx", "10, 6, NaN, fx", "10, , 16, fx", "10, 6, 16, fx, extra" })
+        {
+            YamlStream stream = new();
+            stream.Load(new StringReader("blink: " + tuple));
+            Require(!CreatureYaml.TryReadModifierBlock(stream.Documents[0].RootNode, "invalid Blink fixture", "modifiers", context,
+                out _, out _), "Blink accepted malformed active settings: " + tuple);
+        }
+    }
+    // Older synchronized DTOs may still carry this property; accepting the bundle must
+    // not make the old value participate in inheritance or runtime effect selection.
+    RoundTrip(new ModifierDefinition { Chance = 10f, Cooldown = 6f, MaxRange = 16f, StartEffect = "blob_aoe" }, restored =>
+    {
+        Require(restored.StartEffect == "blob_aoe", "Legacy DTO field was not accepted.");
+        var inherited = restored.Clone();
+        Require(inherited.StartEffect == null && inherited.Cooldown == 6f && inherited.MaxRange == 16f,
+            "Legacy effect was propagated or numeric settings were lost during inheritance.");
+    });
+}
+
+void CheckToxicAuraAlias()
+{
+    Dictionary<string, ModifierDefinition> Read(string text, CreatureYaml.ModifierYamlContext context, bool expected = true)
+    {
+        YamlStream stream = new();
+        stream.Load(new StringReader(text));
+        bool valid = CreatureYaml.TryReadModifierBlock(stream.Documents[0].RootNode,
+            "Toxic Aura alias contract", "modifiers", context, out var result, out _);
+        Require(valid == expected, $"Unexpected {context} modifier result: {text}");
+        return result ?? new Dictionary<string, ModifierDefinition>();
+    }
+
+    int NoticeCount() => CreatureManagerPlugin.Log.Warnings.Count(message => message.Contains("toxicDeath is now read as Toxic Aura"));
+    Require(NoticeCount() == 0, "Alias notice appeared before an alias was used.");
+    Read("toxicDeath: invalid, 0.3", CreatureYaml.ModifierYamlContext.Level, false);
+    Require(NoticeCount() == 0, "Invalid alias consumed the compatibility notice.");
+
+    foreach (var context in new[] { CreatureYaml.ModifierYamlContext.Level, CreatureYaml.ModifierYamlContext.Karma })
+    {
+        foreach (string tuple in new[] { "10", "10, 0.3", "10, 0.3, 4", "10, 0.3, 4, blob_aoe", "10, 0.3, ignored, custom_fx", "10, 0.3, , " })
+        {
+            var result = Read("toxicDeath: " + tuple, context);
+            Require(result.Count == 1 && !result.ContainsKey("toxicDeath"), "Alias leaked into downstream modifier selection.");
+            var aura = result["toxicAura"];
+            Require(aura.Chance == 10f && aura.Power == (tuple == "10" ? null : 0.3f) && aura.Radius == null,
+                "Alias did not preserve chance/power and discard obsolete fields.");
+        }
+        foreach (string alias in new[] { "toxicDeath: 80, 0.8, 12, custom_fx", "TOXICDEATH: this is obsolete" })
+        foreach (bool legacyFirst in new[] { true, false })
+        {
+            string canonical = "ToXiCAuRa: 0";
+            string both = legacyFirst ? alias + "\n" + canonical : canonical + "\n" + alias;
+            var result = Read(both, context);
+            Require(result.Count == 1 && result["toxicAura"].Chance == 0f && result["toxicAura"].Power == null,
+                "Explicit new key lost priority or inherited power from its obsolete sibling.");
+        }
+        foreach (string invalid in new[] { "toxicDeath: 10, nope", "toxicDeath: 10, NaN", "toxicDeath: ', 0.3'", "toxicDeath: 10, , 4", "toxicDeath: 10, 0.3, 4, fx, extra", "toxicAura: 10, 0.3, 4", "toxicAura: 10, bad\ntoxicDeath: 10, 0.3" })
+            Read(invalid, context, false);
+        Require(Read("toxicDeath: 0, 0", context)["toxicAura"].Chance == 0f &&
+                Read("toxicDeath: 10, 0.05", context)["toxicAura"].Power == 0.05f,
+            "Explicit disabled/custom settings were overwritten by the default.");
+        Require(Read("{}", context).Count == 0 && Read("[]", context).Count == 0,
+            "Alias handling inserted an unsolicited default effect.");
+    }
+    Require(NoticeCount() == 1, "Alias warning was repeated across blocks/files/contexts.");
+
+    const string nested = "Global:\n  modifiers:\n    toxicAura: 10, 0.3\nTroll:\n  modifiers:\n    toxicDeath: 0\n";
+    Require(CreatureYaml.TryReadLevelDefinitions(nested, "alias specificity", out var levels), "Valid mixed old/new level rules rejected.");
+    var inherited = levels[0].Modifiers!["toxicAura"].Clone();
+    inherited.OverlayFrom(levels[1].Modifiers!["toxicAura"]);
+    Require(inherited.Chance == 0f && inherited.Power == 0.3f,
+        "New key at a broader scope incorrectly beat the old key at a more specific scope.");
+    RoundTrip(levels[1], restored => Require(restored.Modifiers!["toxicAura"].Chance == 0f && !restored.Modifiers.ContainsKey("toxicDeath"),
+        "Synchronized DTO did not carry the canonical alias result."));
 }
 
 static void Require(bool condition, string message)

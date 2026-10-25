@@ -3,6 +3,11 @@
 Gameplay integration released in CreatureManager **1.3.7**; the combined HUD and automatic modifier overlap filter are included in **1.3.8**, 2026-10-19. The earlier 1.3.6 release record remains available in
 [the 5.0.7 review](pov-5.0.7-compatibility.md).
 
+CreatureManager **1.3.9** replaces Toxic Death with Toxic Aura and extends the poison
+overlap filter to PoV **Reeking** as well as **Rotten**. The YAML upgrade guidance is
+in the [default configuration reference](defaults/README.md); the earlier verification
+records below retain their original version scope.
+
 ## Activation and scope
 
 CM no longer requires an exact PoV release number. After plugin loading it checks
@@ -87,12 +92,14 @@ modifier mask once and removes the corresponding CM candidates:
 | Shocking | Lightning |
 | Blink | Blink, outdoors only |
 | Mirror | Reflection |
-| Rotten | Toxic Death |
+| Rotten | Toxic Aura |
+| Reeking | Toxic Aura |
 
 This is a gameplay policy to avoid overlapping concepts, not a claim that paired
 effects have identical formulas. In particular, Mirror reflects ranged hits and
-Reflection reacts to melee hits; Rotten leaves a poison pool while Toxic Death
-applies poison on death. CM Blink remains eligible indoors because PoV 5.0.10's
+Reflection reacts to melee hits; Rotten leaves a poison pool, while Reeking and
+Toxic Aura apply poison around a living creature. Both poison effects exclude
+new CM Toxic Aura rolls. CM Blink remains eligible indoors because PoV 5.0.10's
 landing check rejects interiors. Other effects, including Vortex, Deathward,
 Adaptive and Chameleon, stay eligible.
 

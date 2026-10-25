@@ -203,7 +203,7 @@ internal static class CreatureModifierCatalog
     {
         "enraged", "fire", "frost", "lightning", "spirit", "armorPiercing", "staggering", "undodgeable",
         "armored", "deathward", "regenerating", "reflection", "vortex", "adaptive", "unflinching", "chameleon",
-        "exposed", "weakened", "withered", "crippling", "disruptive", "adrenalineDrain", "corrosive", "toxicDeath",
+        "exposed", "weakened", "withered", "crippling", "disruptive", "adrenalineDrain", "corrosive", "toxicAura",
         "swift", "attackSpeed", "vampiric", "reaping", "blink", "omen", "juggernaut", "blamer"
     });
 
@@ -249,12 +249,12 @@ internal sealed class ModifierDefinition
     public float? Cooldown { get; set; }
     public int? MaxActivations { get; set; }
     public float? MaxRange { get; set; }
+    // Retained for previously serialized modifier DTOs; Blink no longer consumes it.
     public string? StartEffect { get; set; }
     public float? ProcChance { get; set; }
     public float? Duration { get; set; }
     public float? SecondaryPower { get; set; }
     public float? Radius { get; set; }
-    public string? TriggerEffect { get; set; }
     public float? MaxKarmaGain { get; set; }
     public float? FleeHealthRatio { get; set; }
     public float? RegeneratingHealthPerSecondCap { get; set; }
@@ -280,12 +280,10 @@ internal sealed class ModifierDefinition
         if (source.Cooldown.HasValue) Cooldown = source.Cooldown;
         if (source.MaxActivations.HasValue) MaxActivations = source.MaxActivations;
         if (source.MaxRange.HasValue) MaxRange = source.MaxRange;
-        if (source.StartEffect != null) StartEffect = source.StartEffect;
         if (source.ProcChance.HasValue) ProcChance = source.ProcChance;
         if (source.Duration.HasValue) Duration = source.Duration;
         if (source.SecondaryPower.HasValue) SecondaryPower = source.SecondaryPower;
         if (source.Radius.HasValue) Radius = source.Radius;
-        if (source.TriggerEffect != null) TriggerEffect = source.TriggerEffect;
         if (source.MaxKarmaGain.HasValue) MaxKarmaGain = source.MaxKarmaGain;
         if (source.FleeHealthRatio.HasValue) FleeHealthRatio = source.FleeHealthRatio;
         if (source.RegeneratingHealthPerSecondCap.HasValue)
@@ -351,8 +349,6 @@ internal sealed class ModifierPowerDefinition
     public float? AdrenalineDrainDuration { get; set; }
     public float? CorrosiveProcChance { get; set; }
     public float? CorrosiveDuration { get; set; }
-    public float? ToxicDeathRadius { get; set; }
-    public string? ToxicDeathTriggerEffect { get; set; }
 
     public int? ReapingHealMaxActivations { get; set; }
     public float? ReapingMaxHealthPerKill { get; set; }
@@ -363,7 +359,6 @@ internal sealed class ModifierPowerDefinition
     public float? ReapingScaleCap { get; set; }
     public float? BlinkCooldown { get; set; }
     public float? BlinkMaxRange { get; set; }
-    public string? BlinkStartEffect { get; set; }
     public float? KnockbackCooldown { get; set; }
     public float? BlamerMaxKarmaGain { get; set; }
     public float? BlamerFleeHealthRatio { get; set; }
