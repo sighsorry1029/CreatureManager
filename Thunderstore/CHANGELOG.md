@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.10
+
+- Add optional `speed` and `speedPerLevel` rules to `levels.yml` for movement, acceleration, and turning. The multiplier is `speed * (1 + stars * speedPerLevel)`; for example, `1.2` and `0.1` give 1.2x / 1.32x / 1.44x at zero / one / two stars. Each field inherits independently through existing Global/Boss, biome, group, and prefab rules. With no applicable value, defaults are **1 and 0**, so existing YAML without these fields retains its previous movement behavior.
+- Apply these rules in `Full` and `ExceptLevel`, including when modifiers are disabled. Multiply with Swift and other movement adjustments while leaving attack animation speed, attack intervals, and `distanceScaling` unchanged. Accept positive finite `speed` values, including values below 1 for slower movement, and nonnegative finite `speedPerLevel`; explicit `speedPerLevel: 0` overrides inherited star growth. Keep the FrozenKing phase-two exception.
+- Save the resolved speed multiplier per creature and preserve it across reloads and ownership changes. Completed creatures without a saved speed multiplier remain at 1x; changing YAML does not immediately rescale existing creatures. Supported later level changes recalculate speed, and growth/restore transitions inherit stored values. Reuse the existing movement patch without per-frame YAML searches, extra RPCs, or overwriting original movement fields.
+- Add commented examples to new YAML files and the [1.3.10 default levels.yml reference](https://github.com/sighsorry1029/CreatureManager/blob/4f58a497b6a960b8e3e4ec57634f7437c182f86c/docs/defaults/levels.yml). Existing configuration files are preserved. Add regression checks for parsing/sync, movement scaling, mode and modifier switches, saved state, Swift composition, exception cleanup, and overflow handling. Original Valheim 1.0.20 client/server managed checks pass; actual movement, riding, and multiplayer ownership transfer still require in-game verification. Update the server and all clients to **1.3.10** together and restart.
+
 ## 1.3.9
 
 - Fix CM modifier feedback effect lifetimes: RPC recipients create local cosmetic copies without registering extra network objects, and shield-hit/break effects start their cleanup timers. Preserve networked feedback where a client owner must notify other peers. This addresses the Vortex effect path reported to leave stale `ZNetScene` entries after leaving the area or teleporting; it is not a blanket fix for unrelated crashes.
