@@ -43,6 +43,8 @@ internal static class CreatureYaml
         "damagePerLevel",
         "health",
         "healthPerLevel",
+        "speed",
+        "speedPerLevel",
         "scalePerLevel",
         "distanceScaling",
         "modifiers",
@@ -752,6 +754,12 @@ internal static class CreatureYaml
                     break;
                 case "healthperlevel":
                     rule.HealthPerLevel = ReadFloat(entry.Value, source, label, "healthPerLevel");
+                    break;
+                case "speed":
+                    rule.Speed = ReadFloat(entry.Value, source, label, "speed");
+                    break;
+                case "speedperlevel":
+                    rule.SpeedPerLevel = ReadFloat(entry.Value, source, label, "speedPerLevel");
                     break;
                 case "scaleperlevel":
                     rule.ScalePerLevel = ReadFloat(entry.Value, source, label, "scalePerLevel");
@@ -1471,9 +1479,20 @@ internal static class CreatureYaml
             throw new FormatException($"Level YAML from {source} '{label}'.scalePerLevel must be a finite number of 0 or greater.");
         }
 
+        if (rule.Speed.HasValue && (!IsFinite(rule.Speed.Value) || rule.Speed.Value <= 0f))
+        {
+            throw new FormatException($"Level YAML from {source} '{label}'.speed must be a finite number greater than 0.");
+        }
+
+        if (rule.SpeedPerLevel.HasValue && (!IsFinite(rule.SpeedPerLevel.Value) || rule.SpeedPerLevel.Value < 0f))
+        {
+            throw new FormatException($"Level YAML from {source} '{label}'.speedPerLevel must be a finite number of 0 or greater.");
+        }
+
         ValidateDistanceScaling(rule.DistanceScaling, source, label);
         ValidateModifierDistanceScaling(rule.ModifierDistanceScaling, source, label);
         if (rule.Level == null && !rule.Health.HasValue && !rule.HealthPerLevel.HasValue &&
+            !rule.Speed.HasValue && !rule.SpeedPerLevel.HasValue &&
             !rule.Damage.HasValue && !rule.DamagePerLevel.HasValue && !rule.ScalePerLevel.HasValue &&
             !HasDistanceScalingEffect(rule.DistanceScaling) &&
             !HasModifierDistanceScalingValue(rule.ModifierDistanceScaling) &&

@@ -1,6 +1,6 @@
 # Default YAML reference
 
-**Version scope: CreatureManager 1.3.9 defaults.** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. The scale guidance reflects the Full-mode behavior introduced in 1.3.5; 1.3.9 introduces Toxic Aura defaults and removes configurable Blink effects.
+**Version scope: CreatureManager 1.3.9 defaults plus unreleased movement-speed examples.** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. The scale guidance reflects the Full-mode behavior introduced in 1.3.5; 1.3.9 introduces Toxic Aura defaults and removes configurable Blink effects. The commented `speed`/`speedPerLevel` examples require the current development build and are not supported by the published 1.3.9 DLL.
 
 | File | Contents |
 | --- | --- |

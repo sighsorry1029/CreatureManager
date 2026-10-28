@@ -152,6 +152,8 @@ try
             Target = "Boss",
             Damage = 1.5f,
             DamagePerLevel = 0.2f,
+            Speed = 1.2f,
+            SpeedPerLevel = 0.1f,
             Modifiers = new Dictionary<string, ModifierDefinition>
             {
                 ["enraged"] = new ModifierDefinition { Chance = 20f, Power = 0.15f },
@@ -170,6 +172,7 @@ try
             Require(definition.Target == "Boss", "Level target was not preserved.");
             Require(definition.Damage == 1.5f, "Level damage was not preserved.");
             Require(definition.DamagePerLevel == 0.2f, "Level damagePerLevel was not preserved.");
+            Require(definition.Speed == 1.2f && definition.SpeedPerLevel == 0.1f, "Level speed fields were not preserved.");
             Require(definition.ModifiersCleared, "Level terminal-clear bookkeeping was not preserved.");
             Require(definition.IsPreset, "Level preset bookkeeping was not preserved.");
             Require(definition.Modifiers?.ContainsKey("ENRAGED") == true, "Level modifier comparer was not preserved.");
@@ -199,6 +202,20 @@ try
     Require(
         !CreatureYaml.TryReadLevelDefinitions(invalidScalarLevelYaml, "invalid scalar contract", out _),
         "An invalid level scalar was partially accepted.");
+
+    Require(CreatureYaml.TryReadLevelDefinitions("Global:\n  speed: 0.8\nLox:\n  Meadows:\n    speedPerLevel: 0\n", "speed rules", out var speedRules) &&
+            speedRules is [{ Target: "Global", Speed: 0.8f, SpeedPerLevel: null },
+                { Target: "Lox", Biome: "Meadows", Speed: null, SpeedPerLevel: 0f }],
+        "Speed-only rules, independent omission, explicit zero and nested biome must survive parsing.");
+    RoundTrip(new LevelDefinition { Target = "Lox", SpeedPerLevel = 0f },
+        definition => Require(definition.Speed == null && definition.SpeedPerLevel == 0f,
+            "Speed omission and explicit zero must survive synchronization."));
+    foreach (string field in new[] { "speed", "speedPerLevel" })
+    foreach (string invalid in new[] { "-0.1", ".nan", ".inf", "-.inf", "not-a-number" })
+        Require(!CreatureYaml.TryReadLevelDefinitions($"Global:\n  {field}: {invalid}\n", "invalid speed", out _),
+            $"Invalid {field} value {invalid} was accepted.");
+    Require(!CreatureYaml.TryReadLevelDefinitions("Global:\n  speed: 0\n", "zero speed", out _),
+        "Zero speed must be rejected, not silently interpreted as an unchanged speed.");
 
     const string multiDocumentLevelYaml = """
         Troll:

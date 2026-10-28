@@ -227,6 +227,8 @@ internal sealed class LevelDefinition
     public float? DamagePerLevel { get; set; }
     public float? Health { get; set; }
     public float? HealthPerLevel { get; set; }
+    public float? Speed { get; set; }
+    public float? SpeedPerLevel { get; set; }
     public float? ScalePerLevel { get; set; }
     public List<float>? DistanceScaling { get; set; }
     public List<float>? ModifierDistanceScaling { get; set; }

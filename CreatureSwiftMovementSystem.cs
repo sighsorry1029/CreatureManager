@@ -73,13 +73,13 @@ internal static class CreatureManagerSwiftMovementPatch
             }
 
             CreatureManagerPlugin.Log.LogWarning(
-                $"Swift could not patch Character.{methodName}(float); that movement mode will not receive its speed bonus.");
+                $"CreatureManager could not patch Character.{methodName}(float); that movement mode will not receive level or Swift speed multipliers.");
         }
 
         if (targets.Count == 0)
         {
             CreatureManagerPlugin.Log.LogWarning(
-                "Swift could not find Valheim's character movement methods; movement bonuses are disabled for this game version.");
+                "CreatureManager could not find Valheim's character movement methods; level and Swift speed multipliers are disabled for this game version.");
         }
 
         _targetMethods = targets;
@@ -95,9 +95,13 @@ internal static class CreatureManagerSwiftMovementPatch
     private static void Prefix(Character __instance, out float __state)
     {
         __state = _activeMovementFactor;
-        _activeMovementFactor = CreatureModifierManager.TryGetSwiftMovementFactor(__instance, out float factor)
-            ? factor
-            : 1f;
+        float factor = CreatureLevelManager.GetSpeedMultiplier(__instance);
+        if (CreatureModifierManager.TryGetSwiftMovementFactor(__instance, out float swiftFactor))
+        {
+            factor *= swiftFactor;
+        }
+
+        _activeMovementFactor = factor > 0f && !float.IsInfinity(factor) ? factor : 1f;
     }
 
     [HarmonyPriority(Priority.Last)]
@@ -143,8 +147,8 @@ internal static class CreatureManagerSwiftMovementPatch
         foreach (string missingField in missingFields)
         {
             CreatureManagerPlugin.Log.LogWarning(
-                $"Swift could not patch Character.{__originalMethod.Name}'s {missingField} read; " +
-                "that movement mode's Swift bonus has been disabled for this game version.");
+                $"CreatureManager could not patch Character.{__originalMethod.Name}'s {missingField} read; " +
+                "that movement mode's level and Swift speed multipliers have been disabled for this game version.");
         }
 
         return missingFields.Length == 0 ? rewritten : original;
@@ -152,6 +156,7 @@ internal static class CreatureManagerSwiftMovementPatch
 
     private static float ApplyMovementFactor(float value)
     {
-        return _activeMovementFactor > 0f ? value * _activeMovementFactor : value;
+        float result = _activeMovementFactor > 0f ? value * _activeMovementFactor : value;
+        return float.IsInfinity(result) ? value : result;
     }
 }

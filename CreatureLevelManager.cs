@@ -21,6 +21,7 @@ internal static class CreatureLevelManager
     private const string DamageAppliedKey = "CreatureManager_LevelDamageApplied";
     private const string DamageMultiplierKey = "CreatureManager_LevelDamageMultiplier";
     private const string DamageReplacesVanillaKey = "CreatureManager_LevelDamageReplacesVanilla";
+    private const string SpeedMultiplierKey = "CreatureManager_LevelSpeedMultiplier";
     private const string KarmaBonusRequestRpc = "CreatureManager_LevelKarmaBonusRequest";
     private const string KarmaBonusResponseRpc = "CreatureManager_LevelKarmaBonusResponse";
     private const float KarmaBonusRetryInterval = 0.5f;
@@ -467,6 +468,7 @@ internal static class CreatureLevelManager
             zdo.Set(DamageAppliedKey, true);
         }
 
+        StoreSpeedMultiplier(character, zdo);
         zdo.Set(ProcessingCompleteKey, true);
         ForgetPendingLevelCharacter(character, zdo.m_uid);
         return true;
@@ -1318,6 +1320,7 @@ internal static class CreatureLevelManager
 
     private static void ReapplyLevelDependentRuntimeState(Character character, ZDO zdo)
     {
+        StoreSpeedMultiplier(character, zdo);
         if (TrySelectHealthMultiplier(character, out float healthMultiplier))
         {
             ApplyHealthMultiplier(character, healthMultiplier);
@@ -1365,6 +1368,12 @@ internal static class CreatureLevelManager
         if (sourceZdo == null)
         {
             return;
+        }
+
+        float speedMultiplier = sourceZdo.GetFloat(SpeedMultiplierKey, 1f);
+        if (targetZdo.GetFloat(SpeedMultiplierKey, 1f) != speedMultiplier)
+        {
+            targetZdo.Set(SpeedMultiplierKey, speedMultiplier);
         }
 
         if (sourceZdo.GetBool(HealthAppliedKey, false))
@@ -1870,6 +1879,61 @@ internal static class CreatureLevelManager
 
         multiplier = damage * GetPerLevelMultiplier(character, damagePerLevel) * distanceScaling;
         return true;
+    }
+
+    private static bool TrySelectSpeedMultiplier(Character character, out float multiplier)
+    {
+        multiplier = 1f;
+        if (!TryGetStatRuleScope(character, out LevelRuleScope scope, out _))
+        {
+            return false;
+        }
+
+        bool hasSpeed = TrySelectFloatValue(character, rule => rule.Speed, out float speed, scope);
+        bool hasPerLevel = TrySelectFloatValue(character, rule => rule.SpeedPerLevel, out float perLevel, scope);
+        if (!hasSpeed && !hasPerLevel)
+        {
+            return false;
+        }
+
+        float result = (hasSpeed ? speed : 1f) * GetPerLevelMultiplier(character, hasPerLevel ? perLevel : 0f);
+        if (result <= 0f || float.IsNaN(result) || float.IsInfinity(result))
+        {
+            return false;
+        }
+
+        multiplier = result;
+        return true;
+    }
+
+    private static void StoreSpeedMultiplier(Character character, ZDO zdo)
+    {
+        TrySelectSpeedMultiplier(character, out float multiplier);
+        // Neutral/omitted rules need no new saved key; removed rules reset a prior bonus.
+        if (zdo.GetFloat(SpeedMultiplierKey, 1f) != multiplier)
+        {
+            zdo.Set(SpeedMultiplierKey, multiplier);
+        }
+    }
+
+    internal static float GetSpeedMultiplier(Character? character)
+    {
+        if (!IsLevelSystemEnabled() || character == null || character.IsPlayer())
+        {
+            return 1f;
+        }
+
+        ZNetView? view = CharacterNetworkView(character);
+        ZDO? zdo = view != null && view.IsValid() ? view.GetZDO() : null;
+        if (zdo == null || IsFrozenKingPhaseTwo(zdo))
+        {
+            return 1f;
+        }
+
+        // Read the owner's saved result, including inherited stats. Do not reselect rules
+        // or depend on modifier eligibility in this per-movement-call path.
+        float multiplier = zdo.GetFloat(SpeedMultiplierKey, 1f);
+        return multiplier > 0f && !float.IsInfinity(multiplier) ? multiplier : 1f;
     }
 
     private static bool TrySelectScalePerLevel(Character character, out float scalePerLevel)

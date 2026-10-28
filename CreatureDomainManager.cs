@@ -5168,6 +5168,8 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "Targets: Global, Boss, biome, group, or prefab; omitted fields inherit independently.");
         AppendTemplateComment(builder, "Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss.");
         AppendTemplateComment(builder, "Nested biome blocks override their parent target in that biome.");
+        AppendTemplateComment(builder, "speed/speedPerLevel: movement, acceleration, and turning only; multiply with Swift, not attack speed or distanceScaling.");
+        AppendTemplateComment(builder, "Speed is saved per creature; completed creatures keep their saved value (1 if absent) until a supported level change.");
         AppendTemplateComment(builder, "modifiers: omit/{} = inherit, [] = clear; tuples start with chance% and may omit only trailing values.");
         AppendTemplateBlankLine(builder);
 
@@ -5178,6 +5180,8 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 1, "damagePerLevel: 0.25                 # Vanilla: 0.5. Replaces vanilla growth: damage * (1 + (level - 1) * value).");
         AppendIndented(builder, 1, "health: 1                            # Level-1 max-health multiplier.");
         AppendIndented(builder, 1, "healthPerLevel: 1                    # Health = base * health * (1 + (level - 1) * value).");
+        AppendTemplateLine(builder, 1, "speed: 1                             # Optional movement multiplier; must be > 0. Values below 1 slow movement.");
+        AppendTemplateLine(builder, 1, "speedPerLevel: 0                     # Optional star growth >= 0: speed * (1 + (level - 1) * value). No matching rule = 1 / 0.");
         AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # damageStep, healthStep, stepMeters, maxSteps (0 = unlimited).");
         AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.03, 1000, 8] # chanceStep, stepMeters, maxSteps; 20% -> 20.6% at 1000m, 24.8% at 8000m+.");
         AppendDefaultLevelModifiers(builder, bossDefaults: false);
@@ -5190,6 +5194,8 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 1, "damagePerLevel: 0.1");
         AppendIndented(builder, 1, "health: 1");
         AppendIndented(builder, 1, "healthPerLevel: 0.5");
+        AppendTemplateLine(builder, 1, "speed: 1");
+        AppendTemplateLine(builder, 1, "speedPerLevel: 0");
         AppendDefaultLevelModifiers(builder, bossDefaults: true);
         builder.AppendLine();
 

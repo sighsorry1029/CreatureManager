@@ -36,6 +36,7 @@ internal static class LevelModeContracts
     private static int RolledLevel = 4, VisualUpdates, ModifierRequests;
     private static int KarmaLevelBonus = 2;
     private static bool HasLevelWeights = true;
+    private static float SwiftFactor = 1f;
 
     internal static void Run(Assembly plugin)
     {
@@ -56,7 +57,8 @@ internal static class LevelModeContracts
             new[] { "2 - Levels", "Enable Level System", Enum.Parse(modeType, "Full"), (object)new ConfigDescription("", acceptable) })!;
         Rule = Activator.CreateInstance(plugin.GetType("CreatureManager.LevelDefinition", true)!)!;
         foreach (var pair in new Dictionary<string, float> { ["Health"] = 2f, ["HealthPerLevel"] = 0.5f,
-                     ["Damage"] = 3f, ["DamagePerLevel"] = 0.25f, ["ScalePerLevel"] = 0.1f })
+                     ["Damage"] = 3f, ["DamagePerLevel"] = 0.25f, ["ScalePerLevel"] = 0.1f,
+                     ["Speed"] = 1.2f, ["SpeedPerLevel"] = 0.1f })
             Rule.GetType().GetProperty(pair.Key)!.SetValue(Rule, pair.Value);
         field.SetValue(null, mode);
         try
@@ -98,6 +100,7 @@ internal static class LevelModeContracts
             Character character = NewCharacter(1);
             Require((bool)Call("TryApplyLevelState", character)! && GetLevel(character) == 6 && LevelWrites == 1 &&
                     KarmaQueries == 1 && WeightQueries == 1, "Full still assigns weighted level plus Karma bonus");
+            CheckSpeed(character, 1.8f, "Full uses final rolled level");
             CheckReentrantLevels(mode);
             mode.SetSerializedValue("Off");
             character = NewCharacter(3);
@@ -155,6 +158,7 @@ internal static class LevelModeContracts
             CheckScaleModes(plugin, mode, character);
             CheckBiomePresets(plugin, entry, bind, config, mode);
             CheckDefaultTemplate(plugin);
+            CheckSpeedState(plugin, entry, bind, config, mode);
             character = NewCharacter(1);
             typeof(ZDO).GetField("m_prefab", Instance)!.SetValue(CurrentZdo, "FrozenKing_p2".GetStableHashCode());
             Require(!(bool)Call("TryApplyLevelState", character)! && !(bool)Call("AllowsModifierEffects", character)!, "FrozenKing phase two stays protected in ExceptLevel");
@@ -408,6 +412,10 @@ internal static class LevelModeContracts
                 (float)global.GetType().GetProperty("DamagePerLevel")!.GetValue(global)! == 0.25f, "Global omits scale and keeps 0.25 damage growth");
         Require((float)boss.GetType().GetProperty("ScalePerLevel")!.GetValue(boss)! == 0.1f &&
                 (float)boss.GetType().GetProperty("DamagePerLevel")!.GetValue(boss)! == 0.1f, "Boss defaults stay unchanged");
+        foreach (object rule in new[] { global, boss })
+            Require(rule.GetType().GetProperty("Speed")!.GetValue(rule) == null &&
+                    rule.GetType().GetProperty("SpeedPerLevel")!.GetValue(rule) == null,
+                "new defaults leave speed as neutral commented examples");
         args = new object?[] { "Global:\n  level: [80, 20]\n", "existing explicit Global weights", null };
         Require((bool)parser.GetMethod("TryReadLevelDefinitions", Static)!.Invoke(null, args)!, "existing explicit Global weights remain valid");
         object explicitGlobal = ((IEnumerable)args[2]!).Cast<object>().Single();
@@ -423,6 +431,164 @@ internal static class LevelModeContracts
         object?[] damage = { character, 0f };
         Require((bool)Call("TryGetDamageMultiplier", damage)! && Math.Abs((float)damage[1]! - 3.75f * (1f + (level - 1) * 0.25f)) < 0.001f &&
                 (bool)Call("ReplacesVanillaLevelDamage", character)!, "actual-level damage/distance scaling and replacement flag");
+        CheckSpeed(character, 1.2f * (1f + (level - 1) * 0.1f), "actual-level speed without distance scaling or compounding");
+    }
+
+    private static void CheckSpeed(Character character, float expected, string label) =>
+        Require(Math.Abs((float)Call("GetSpeedMultiplier", character)! - expected) < 0.0001f, label);
+
+    private static void CheckSpeedState(Assembly plugin, Type entry, MethodInfo bind, ConfigFile config, ConfigEntryBase mode)
+    {
+        PropertyInfo speed = Rule.GetType().GetProperty("Speed")!;
+        PropertyInfo perLevel = Rule.GetType().GetProperty("SpeedPerLevel")!;
+        FieldInfo modifiers = entry.GetField("EnableGlobalModifiers", Static)!;
+        object? savedModifiers = modifiers.GetValue(null);
+        Type limitType = modifiers.FieldType.GetGenericArguments()[0];
+        object disabled = bind.MakeGenericMethod(limitType).Invoke(config,
+            new[] { "fixture", "modifiers", Enum.Parse(limitType, "Off"), (object)new ConfigDescription("") })!;
+        string key = Key("SpeedMultiplierKey");
+        try
+        {
+            mode.SetSerializedValue("ExceptLevel");
+            modifiers.SetValue(null, disabled);
+            foreach (var example in new (float? Speed, float? PerLevel, float Expected)[]
+                     { (null, null, 1f), (0.8f, null, 0.8f), (null, 0.1f, 1.2f), (1.2f, 0f, 1.2f), (1.2f, 0.1f, 1.44f) })
+            {
+                speed.SetValue(Rule, example.Speed);
+                perLevel.SetValue(Rule, example.PerLevel);
+                Character sample = NewCharacter(3);
+                Owner = false;
+                Require(!(bool)Call("TryApplyLevelState", sample)! && float.IsNaN(CurrentZdo.GetFloat(key, float.NaN)),
+                    "non-owner never writes a speed value");
+                Owner = true;
+                Require((bool)Call("TryApplyLevelState", sample)!, "owner initializes speed");
+                Require(!(bool)Call("AllowsModifierEffects", sample)!, "fixture really disables modifiers");
+                CheckSpeed(sample, example.Expected, "speed works independently of modifiers and field omission");
+                if (example.Expected == 1f)
+                    Require(float.IsNaN(CurrentZdo.GetFloat(key, float.NaN)), "neutral omission adds no saved speed key");
+                Owner = false;
+                CheckSpeed(sample, example.Expected, "replica reads the saved owner's speed");
+                Owner = true;
+                mode.SetSerializedValue("Off");
+                CheckSpeed(sample, 1f, "Off gates stored speed without destroying it");
+                mode.SetSerializedValue("ExceptLevel");
+                CheckSpeed(sample, example.Expected, "reenabling keeps stored speed");
+            }
+
+            Character old = NewCharacter(3);
+            SetBool(CurrentZdo, Key("ProcessingCompleteKey"), true);
+            Require((bool)Call("TryApplyLevelState", old)!, "completed older creature restores");
+            CheckSpeed(old, 1f, "older completed creature does not silently acquire new speed rules");
+            Require(float.IsNaN(CurrentZdo.GetFloat(key, float.NaN)), "older save is not rewritten");
+
+            Character original = NewCharacter(3);
+            Call("TryApplyLevelState", original);
+            ZDO savedZdo = CurrentZdo;
+            speed.SetValue(Rule, 3f);
+            perLevel.SetValue(Rule, 0.2f);
+            Call("TryApplyLevelState", original);
+            CheckSpeed(original, 1.44f, "completed processing does not reselect updated YAML");
+            Character restored = NewCharacter(3);
+            CurrentZdo = savedZdo;
+            ZNetView view = (ZNetView)typeof(Character).GetField("m_nview", Instance)!.GetValue(restored)!;
+            typeof(ZNetView).GetField("m_zdo", Instance)!.SetValue(view, savedZdo);
+            Owner = false;
+            CheckSpeed(restored, 1.44f, "new instance restores speed from the same ZDO");
+            Owner = true;
+            Call("TryApplyLevelState", restored);
+            CheckSpeed(restored, 1.44f, "ownership transfer does not compound saved speed");
+            LevelField.SetValue(restored, 4);
+            SetInt(CurrentZdo, "level", 4);
+            Call("RestoreConfiguredLevel", restored, 4);
+            CheckSpeed(restored, 4.8f, "supported later level change selects current rules");
+            speed.SetValue(Rule, null);
+            perLevel.SetValue(Rule, null);
+            LevelField.SetValue(restored, 2);
+            SetInt(CurrentZdo, "level", 2);
+            Call("RestoreConfiguredLevel", restored, 2);
+            CheckSpeed(restored, 1f, "later level change clears removed speed rules");
+
+            foreach (int source in new[] { 6, 7 })
+            {
+                Character parent = NewCharacter(3);
+                SetFloat(CurrentZdo, key, 0.75f);
+                Character child = NewCharacter(3);
+                Source = source;
+                Call("InheritLevelRuntimeState", parent, child, CurrentZdo);
+                Call("TryApplyLevelState", child);
+                CheckSpeed(child, 0.75f, "growth/tamed restore uses inherited speed despite absent stat scope");
+            }
+
+            Character creature = NewCharacter(3);
+            foreach (float invalid in new[] { 0f, -1f, float.NaN, float.PositiveInfinity })
+            {
+                SetFloat(CurrentZdo, key, invalid);
+                CheckSpeed(creature, 1f, "invalid persisted multiplier is neutral");
+            }
+            speed.SetValue(Rule, float.MaxValue);
+            perLevel.SetValue(Rule, 1f);
+            Call("StoreSpeedMultiplier", creature, CurrentZdo);
+            CheckSpeed(creature, 1f, "finite inputs that overflow do not enter movement");
+            SetFloat(CurrentZdo, key, 5f);
+            typeof(ZDO).GetField("m_prefab", Instance)!.SetValue(CurrentZdo, "FrozenKing_p2".GetStableHashCode());
+            CheckSpeed(creature, 1f, "FrozenKing phase two ignores even a saved speed override");
+            CheckMovementScope(plugin);
+        }
+        finally
+        {
+            speed.SetValue(Rule, 1.2f);
+            perLevel.SetValue(Rule, 0.1f);
+            modifiers.SetValue(null, savedModifiers);
+            Source = 0;
+            Owner = true;
+        }
+        System.Console.WriteLine("Speed contracts passed: optional fields, slowdown, zero star-growth, no distance multiplier, modifier Off, level Off/ExceptLevel/Full, owner writes/replica reads, old saves, reload/ownership persistence, level changes/removal, growth/restore, invalid and overflow guards, FrozenKing, Swift scope composition. Unity/network boundaries substituted.");
+    }
+
+    private static void CheckMovementScope(Assembly plugin)
+    {
+        Type movement = plugin.GetType("CreatureManager.CreatureManagerSwiftMovementPatch", true)!;
+        MethodInfo prefix = Copy(movement.GetMethod("Prefix", Static)!);
+        MethodInfo finalizer = movement.GetMethod("Finalizer", Static)!;
+        MethodInfo apply = movement.GetMethod("ApplyMovementFactor", Static)!;
+        FieldInfo active = movement.GetField("_activeMovementFactor", Static)!;
+        object saved = active.GetValue(null)!;
+        Character creature = NewCharacter(1);
+        creature.m_runSpeed = 10f;
+        SetFloat(CurrentZdo, Key("SpeedMultiplierKey"), 1.2f);
+        try
+        {
+            active.SetValue(null, 1f);
+            SwiftFactor = 1.5f;
+            object[] outer = { creature, 0f };
+            prefix.Invoke(null, outer);
+            Require(Math.Abs((float)apply.Invoke(null, new object[] { 10f })! - 18f) < 0.0001f, "Swift multiplies level speed");
+            SwiftFactor = 1f;
+            SetFloat(CurrentZdo, Key("SpeedMultiplierKey"), 0.5f);
+            object[] inner = { creature, 0f };
+            prefix.Invoke(null, inner);
+            Require((float)apply.Invoke(null, new object[] { 10f })! == 5f, "nested movement uses its own slowdown");
+            var exception = new InvalidOperationException("fixture");
+            Require(ReferenceEquals(finalizer.Invoke(null, new[] { (object)exception, inner[1] }), exception), "finalizer preserves exception");
+            Require(Math.Abs((float)apply.Invoke(null, new object[] { 10f })! - 18f) < 0.0001f, "nested failure restores outer factor");
+            finalizer.Invoke(null, new object?[] { null, outer[1] });
+            Require((float)apply.Invoke(null, new object[] { 10f })! == 10f && creature.m_runSpeed == 10f,
+                "scope restores neutral factor and never mutates original speed fields");
+            SwiftFactor = 2f;
+            SetFloat(CurrentZdo, Key("SpeedMultiplierKey"), float.MaxValue);
+            prefix.Invoke(null, outer);
+            Require((float)apply.Invoke(null, new object[] { 10f })! == 10f, "combined overflow is neutral");
+            finalizer.Invoke(null, new object?[] { null, outer[1] });
+            SwiftFactor = 1f;
+            prefix.Invoke(null, outer);
+            Require((float)apply.Invoke(null, new object[] { 10f })! == 10f, "finite factor cannot overflow a movement field");
+            finalizer.Invoke(null, new object?[] { null, outer[1] });
+        }
+        finally
+        {
+            active.SetValue(null, saved);
+            SwiftFactor = 1f;
+        }
     }
 
     private static Character NewCharacter(int level)
@@ -488,6 +654,7 @@ internal static class LevelModeContracts
                     "GetSpawnSource" => nameof(GetSource), "IsManagedSpawn" => nameof(IsManaged), "IsCommandSpawn" => nameof(IsCommand), _ => null
                 }
                 : type == "CreatureManager.CreatureModifierManager" && method.Name == "TryRollModifiers" ? nameof(RequestModifiers)
+                : type == "CreatureManager.CreatureModifierManager" && method.Name == "TryGetSwiftMovementFactor" ? nameof(GetSwiftFactor)
                 : type == "CreatureManager.CreatureModifierManager" && method.Name == "RefreshStoredReapingScale" ? nameof(NoCharacterAction)
                 : type == Levels.FullName ? method.Name switch
                 {
@@ -532,6 +699,7 @@ internal static class LevelModeContracts
     private static void UpdateVisuals(Character character) => VisualUpdates++;
     private static void RequestModifiers(Character character) => ModifierRequests++;
     private static void NoCharacterAction(Character character) { }
+    private static bool GetSwiftFactor(Character character, out float factor) { factor = SwiftFactor; return factor > 1f; }
     private static int GetLevel(Character character) => (int)LevelField.GetValue(character)!;
     private static ZDOID GetZdoId(Character character) =>
         ((ZNetView)typeof(Character).GetField("m_nview", Instance)!.GetValue(character)!).GetZDO().m_uid;

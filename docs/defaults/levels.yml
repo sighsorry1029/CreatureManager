@@ -19,6 +19,8 @@
 # Targets: Global, Boss, biome, group, or prefab; omitted fields inherit independently.
 # Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss.
 # Nested biome blocks override their parent target in that biome.
+# speed/speedPerLevel: movement, acceleration, and turning only; multiply with Swift, not attack speed or distanceScaling.
+# Speed is saved per creature; completed creatures keep their saved value (1 if absent) until a supported level change.
 # modifiers: omit/{} = inherit, [] = clear; tuples start with chance% and may omit only trailing values.
 #
 Global:
@@ -28,6 +30,8 @@ Global:
   damagePerLevel: 0.25                 # Vanilla: 0.5. Replaces vanilla growth: damage * (1 + (level - 1) * value).
   health: 1                            # Level-1 max-health multiplier.
   healthPerLevel: 1                    # Health = base * health * (1 + (level - 1) * value).
+#   speed: 1                             # Optional movement multiplier; must be > 0. Values below 1 slow movement.
+#   speedPerLevel: 0                     # Optional star growth >= 0: speed * (1 + (level - 1) * value). No matching rule = 1 / 0.
 #   distanceScaling: [0.03, 0.08, 1000, 5] # damageStep, healthStep, stepMeters, maxSteps (0 = unlimited).
 #   modifierDistanceScaling: [0.03, 1000, 8] # chanceStep, stepMeters, maxSteps; 20% -> 20.6% at 1000m, 24.8% at 8000m+.
   modifiers:                           # One per group; totals below 100 allow none, above 100 are weights.
@@ -75,6 +79,8 @@ Boss:                                  # Regular bosses only; Enforcers use non-
   damagePerLevel: 0.1
   health: 1
   healthPerLevel: 0.5
+#   speed: 1
+#   speedPerLevel: 0
   modifiers:                           # One per group; totals below 100 allow none, above 100 are weights.
     # Offense: Enraged to Undodgeable
     enraged: 10, 0.15                 # chance%, outgoingDamageBonus
