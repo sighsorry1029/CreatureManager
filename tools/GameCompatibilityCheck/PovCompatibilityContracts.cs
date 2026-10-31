@@ -15,7 +15,7 @@ using UnityEngine;
 
 // Optional tests against the supplied, unmodified PoV DLL. Managed detours are installed
 // only in this offline process. Unity, scene, RNG, ownership and FX boundaries are fixtures.
-internal static class PovCompatibilityContracts
+internal static partial class PovCompatibilityContracts
 {
     private const BindingFlags All = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
     private static readonly Dictionary<MethodInfo, MethodInfo> Copies = new();
@@ -163,6 +163,7 @@ internal static class PovCompatibilityContracts
             CheckHealth();
             CheckHud(pov, levelMode);
             CheckModifierExclusions(pov, levelMode);
+            CheckBloodChallenges(harness, pov, bossType, levelMode);
             CheckBossModifiers(bossType, levelMode);
             Bridge.GetMethod("Reset", All)!.Invoke(null, null);
             Require(registeredLootPatches.SequenceEqual(LootPatchRegistrations()), "cleanup preserves other owners' loot patch registrations");
@@ -636,6 +637,7 @@ internal static class PovCompatibilityContracts
     private static IEnumerable<CodeInstruction> BossFillBody() => new[] { new CodeInstruction(OpCodes.Ldarg_0), new CodeInstruction(OpCodes.Ldarg_1), new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(PovCompatibilityContracts), nameof(GrantBoss))), new CodeInstruction(OpCodes.Ret) };
     private static void GrantBoss(Character c, int count)
     {
+        if (BloodFixtureActive) { GrantBloodBoss(c, count); return; }
         Require(Owner && LevelReady && ConfigReady, "grant must have final level and authority");
         string pending = (string)Bridge.GetField("BossPendingKey", All)!.GetRawConstantValue()!;
         Require(!Data.GetBool(pending), "reservation consumed before foreign side effects");
@@ -662,6 +664,7 @@ internal static class PovCompatibilityContracts
     }
     private static MethodInfo? Boundary(MethodInfo method)
     {
+        if (BloodBoundary(method) is MethodInfo blood) return blood;
         string type = method.DeclaringType!.FullName!, name = method.Name;
         string? replacement = type == "UnityEngine.Object" ? name switch { "op_Equality" => nameof(Equal), "op_Inequality" => nameof(Different), "GetInstanceID" => nameof(InstanceId), _ => null }
             : type == "UnityEngine.Component" && name == "GetComponent" && method.IsGenericMethod && method.GetGenericArguments()[0] == typeof(Character) ? nameof(ViewCharacter)
@@ -749,7 +752,12 @@ internal static class PovCompatibilityContracts
     private static float GetHealth(Character c) => Health;
     private static float GetMaxHealthBase(Character c) => 100;
     private static int GetLevel(Character c) => CurrentLevel;
-    private static void SetLevel(Character c, int level) { CurrentLevel = level; c.SetMaxHealth(100f * level); }
+    private static void SetLevel(Character c, int level)
+    {
+        CurrentLevel = level;
+        if (BloodFixtureActive) { BloodLevelWrites++; SetInt(Data, "level", level); }
+        c.SetMaxHealth(100f * level);
+    }
     private static bool IsPlayer(Character c) => false;
     private static bool IsBoss(Character c) => Boss;
     private static bool IsDead(Character c) => Health <= 0;

@@ -1279,7 +1279,7 @@ internal static class CreatureManagerCharacterSetLevelPatch
     private static void Postfix(Character __instance, int level, float __state)
     {
         // Finish CM-owned assignments once at their caller, after all external postfixes.
-        if (CreatureLevelManager.IsSettingManagedLevel(__instance))
+        if (CreatureLevelManager.IsSettingManagedLevel(__instance) || CreaturePovCompatibility.IsBloodLevelWrite(__instance))
         {
             return;
         }

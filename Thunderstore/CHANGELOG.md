@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.11
+
+- Fix compatible Path of Valheiman **Rune of the Blood Challenge** summons in CM `Full` mode: add the rune stars to CM's normal boss stars, including applicable Karma bonuses, instead of letting the later CM roll replace them. For example, three CM stars plus two runes produces five stars. The altar's five-rune limit caps the added stars, not the combined total. `ExceptLevel` and `Off` keep PoV's normal rune behavior.
+- Track the rune contribution per creature so repeated calls, loading, and ownership changes do not add it twice. Supported boss phases inherit the completed level without adding the runes again; fixed-health phase exceptions remain in effect. Preserve missing health when finishing a deferred summon. Previously spawned bosses that already lost rune stars are not retroactively changed.
+- Keep separate PoV modifier budgets for CM's ordinary boss stars and the actual runes. With `Boss modifiers per star = 0`, five CM stars plus one rune receives the one-rune modifier budget, not six. PoV's rarity switches and effect exclusions still apply. Complete PoV selection before CM's existing modifier-overlap filter runs.
+- Validate the relevant PoV method contracts and active assignment patches. Stop new rune integration when these contracts change, avoid retrying partial effect grants, and preserve already-consumed pending rune stars without replaying unverified effects. See the [blood-rune compatibility notes](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-compatibility.md#blood-challenge-runes-in-full) for scope and limitations.
+- Update the BepInEx package dependency to **5.4.2360**. Add managed regression coverage for additive stars, modifier budgets, pending ownership/configuration, phase carry, and failure handling. These isolated checks do not replace actual host/dedicated-server encounter testing. Update the server and all clients to **1.3.11** together and restart.
+
 ## 1.3.10
 
 - Add optional `speed` and `speedPerLevel` rules to `levels.yml` for movement, acceleration, and turning. The multiplier is `speed * (1 + stars * speedPerLevel)`; for example, `1.2` and `0.1` give 1.2x / 1.32x / 1.44x at zero / one / two stars. Each field inherits independently through existing Global/Boss, biome, group, and prefab rules. With no applicable value, defaults are **1 and 0**, so existing YAML without these fields retains its previous movement behavior.

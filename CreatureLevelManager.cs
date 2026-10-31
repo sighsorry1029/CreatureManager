@@ -204,8 +204,12 @@ internal static class CreatureLevelManager
         if (!IsLevelSystemEnabled())
         {
             foreach (KeyValuePair<int, Character> pending in PendingLevelCharacters.ToArray())
-                if (CreaturePovCompatibility.TryCompleteBossModifiers(pending.Value))
+            {
+                TryApplyLevel(pending.Value);
+                if (!CreaturePovCompatibility.HasPendingBloodChallenge(pending.Value) &&
+                    CreaturePovCompatibility.TryCompleteBossModifiers(pending.Value))
                     PendingLevelCharacters.Remove(pending.Key);
+            }
             PendingKarmaBonusRequests.Clear();
             ResolvedKarmaBonuses.Clear();
             return;
@@ -244,7 +248,7 @@ internal static class CreatureLevelManager
                 continue;
             }
 
-            if (zdo.GetBool(ProcessingCompleteKey, false))
+            if (zdo.GetBool(ProcessingCompleteKey, false) && !CreaturePovCompatibility.HasPendingBloodChallenge(character))
             {
                 SynchronizeStoredRuntimeState(character, zdo);
                 ApplyRuntimeVisuals(character);
@@ -258,7 +262,7 @@ internal static class CreatureLevelManager
                 continue;
             }
 
-            if (ShouldPreserveExistingRolls(character))
+            if (ShouldPreserveExistingRolls(character) && !CreaturePovCompatibility.HasPendingBloodChallenge(character))
             {
                 SynchronizeStoredRuntimeState(character, zdo);
                 ApplyRuntimeVisuals(character);
@@ -353,6 +357,19 @@ internal static class CreatureLevelManager
             return;
         }
 
+        if (!IsLevelSystemEnabled() && CreaturePovCompatibility.HasPendingBloodChallenge(character))
+        {
+            ZNetView? view = CharacterNetworkView(character);
+            if (!CreatureDomainManager.IsSynchronizedConfigurationReady() || view == null || !view.IsOwner())
+            {
+                QueuePovBloodChallenge(character);
+                return;
+            }
+            // Runes were consumed before a live Full -> Off change. Finish the
+            // original PoV rune policy instead of abandoning a queued summon.
+            CreaturePovCompatibility.ApplyPendingBloodChallenge(character, 1);
+            CreaturePovCompatibility.TryCompleteBloodChallengeHealth(character);
+        }
         bool applied = TryApplyLevelState(character);
         if (!CreaturePovCompatibility.TryCompleteBossModifiers(character))
             PendingLevelCharacters[character.GetInstanceID()] = character;
@@ -363,6 +380,21 @@ internal static class CreatureLevelManager
 
         ApplyRuntimeVisuals(character);
         CreatureModifierManager.TryRollModifiers(character);
+    }
+
+    internal static void QueuePovBloodChallenge(Character character)
+    {
+        if (character != null) PendingLevelCharacters[character.GetInstanceID()] = character;
+    }
+
+    // Record only the level decision. HP/damage/visual/modifier completion remains
+    // in the normal owner + synchronized-configuration lifecycle.
+    internal static void AdoptPovAssignedLevel(Character character, string source)
+    {
+        if (!TryGetOwnedZdo(character, out ZDO zdo)) return;
+        zdo.Set(DesiredLevelKey, Math.Max(1, character.GetLevel()));
+        zdo.Set(DesiredLevelSourceKey, source);
+        zdo.Set(AppliedKey, true);
     }
 
     private static bool TryApplyLevelState(Character character)
@@ -408,23 +440,29 @@ internal static class CreatureLevelManager
             return false;
         }
 
-        if (zdo.GetBool(ProcessingCompleteKey, false))
+        bool bloodPending = CreaturePovCompatibility.HasPendingBloodChallenge(character);
+        if (zdo.GetBool(ProcessingCompleteKey, false) && !bloodPending)
         {
             SynchronizeStoredRuntimeState(character, zdo);
             ForgetPendingLevelCharacter(character, zdo.m_uid);
             return true;
         }
 
-        if (ShouldPreserveExistingRolls(character))
+        if (ShouldPreserveExistingRolls(character) && !bloodPending)
         {
             SynchronizeStoredRuntimeState(character, zdo);
             ForgetPendingLevelCharacter(character, zdo.m_uid);
             return true;
         }
 
-        if (!zdo.GetBool(AppliedKey, false))
+        if (bloodPending && (zdo.GetBool(AppliedKey, false) || KeepsAssignedLevels()))
         {
-            if (TryAdoptPreexistingExternalLevel(character, zdo))
+            CreaturePovCompatibility.ApplyPendingBloodChallenge(character, character.GetLevel());
+            ReapplyLevelDependentRuntimeState(character, zdo);
+        }
+        else if (!zdo.GetBool(AppliedKey, false))
+        {
+            if (!bloodPending && TryAdoptPreexistingExternalLevel(character, zdo))
             {
                 ReapplyLevelDependentRuntimeState(character, zdo);
             }
@@ -439,13 +477,19 @@ internal static class CreatureLevelManager
                 int level = 1;
                 bool hasLevelRule = TrySelectLevelWeights(character, out List<float> weights) &&
                                     TrySelectLevel(weights, GetPrefabName(character.gameObject), out level);
-                if (hasLevelRule || karmaBonus > 0)
+                if (hasLevelRule || karmaBonus > 0 || bloodPending)
                 {
-                    int finalLevel = Math.Max(1, (hasLevelRule ? level : 1) + karmaBonus);
+                    int baseline = hasLevelRule ? level : bloodPending && karmaBonus == 0 ? CreaturePovCompatibility.BloodOriginalLevel(character) : 1;
+                    int finalLevel = (int)Math.Min(int.MaxValue, Math.Max(1L, (long)baseline + karmaBonus));
                     zdo.Set(DesiredLevelKey, finalLevel);
                     zdo.Set(AppliedKey, true);
-                    SetManagedLevel(character, finalLevel);
+                    if (bloodPending) CreaturePovCompatibility.ApplyPendingBloodChallenge(character, finalLevel);
+                    else SetManagedLevel(character, finalLevel);
                 }
+            }
+            else if (bloodPending)
+            {
+                CreaturePovCompatibility.ApplyPendingBloodChallenge(character, CreaturePovCompatibility.BloodOriginalLevel(character));
             }
         }
 
@@ -469,6 +513,7 @@ internal static class CreatureLevelManager
         }
 
         StoreSpeedMultiplier(character, zdo);
+        CreaturePovCompatibility.TryCompleteBloodChallengeHealth(character);
         zdo.Set(ProcessingCompleteKey, true);
         ForgetPendingLevelCharacter(character, zdo.m_uid);
         return true;

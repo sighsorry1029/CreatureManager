@@ -13,7 +13,7 @@ namespace CreatureManager;
 
 // PoV owns raw difficulty scaling. CM must identify writes that already include it.
 // Resolve this optional contract after plugin loading, once on both client and server.
-internal static class CreaturePovCompatibility
+internal static partial class CreaturePovCompatibility
 {
     internal const string PluginGuid = "treextr.pathofvalheiman";
     private static bool _checked;
@@ -61,6 +61,7 @@ internal static class CreaturePovCompatibility
         Enable("live level ownership", () => InstallLevels(assembly), () => RemoveHarmony(ref _levelHarmony));
         Enable("star-loot ownership", () => InstallLoot(assembly), RemoveLoot);
         Enable("Full boss modifiers", () => InstallBosses(assembly), RemoveBosses);
+        Enable("Full blood-rune addition", () => InstallBloodChallenges(assembly), RemoveBloodChallenges);
         Enable("modifier overlap", () => InstallModifierExclusions(assembly), ClearModifierExclusions);
         Enable("combined modifier HUD", () => CreaturePovHud.Install(assembly, !_otherLevelProvider), CreaturePovHud.Remove);
     }
@@ -333,6 +334,7 @@ internal static class CreaturePovCompatibility
         ZNetView view = _characterView!(character);
         if (view == null || !view.IsValid()) return true;
         ZDO zdo = view.GetZDO();
+        if (zdo != null && HasPendingBloodChallenge(character)) return false;
         if (zdo == null || !zdo.GetBool(BossPendingKey)) return true;
         if (!view.IsOwner() || !CreatureDomainManager.IsSynchronizedConfigurationReady()) return false;
         bool allowed = character.IsBoss() && !character.IsPlayer() && !character.IsDead() &&
@@ -494,6 +496,7 @@ internal static class CreaturePovCompatibility
     {
         try
         {
+            RemoveBloodChallenges();
             ClearModifierExclusions();
             ClearHealth();
             try { RemoveBosses(); }

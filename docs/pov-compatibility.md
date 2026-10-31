@@ -20,14 +20,18 @@ the signatures, state types and relevant original IL of the methods it uses:
   without side effects for that empty state, preserving the original exception.
 - Full boss modifiers: the fresh/restored ZNetView boundary, stored modifier key,
   configuration types and modifier fill entry.
+- Full blood runes: the owner gate, stored star keys, level assignment, rune
+  modifier budget, health call order and phase carry assignment. The active
+  Harmony patch set is rechecked before capturing/replaying a rune or phase.
 - Combined HUD: PoV's active modifier reader, ordered icon catalog, sprite accessor,
   `RarityHud.Icons` and its caller, plus `AilmentHudBridge.Draw`'s update call and
   the status view's hierarchy. CM takes over only when its own row is ready.
 
 Each integration owns its cleanup. A changed contract produces a warning and
 disables that integration; the boss integration additionally needs the live
-level-ownership integration. Checks and reflection resolution run during startup,
-not on each attack or frame. This checks the boundaries CM relies on; it cannot
+level-ownership integration. IL checks and reflection resolution run during startup;
+the blood bridge rechecks its cached patch registration at work boundaries, not
+on each attack or every creature's frame. This checks the boundaries CM relies on; it cannot
 prove every future PoV release has unchanged semantics.
 
 The existing raw/final HP distinction, Reaping restoration, live CM mode handling,
@@ -51,7 +55,8 @@ PoV performs its own random modifier selection and boss exclusions. `Boss stars`
 modifiers per star still means no modifiers; use 1 to opt into one per star.
 CM modifiers are independent and can be disabled separately.
 
-There is no second star roll, forced full heal or call to `BossStars.Give`.
+For an ordinary boss grant without a blood rune, there is no second star roll,
+forced full heal or call to `BossStars.Give`.
 Before invoking PoV, CM skips bosses with any stored `pt.crmod` flags, including
 effects hidden by PoV settings, because `Fill` can remove existing effects.
 
@@ -72,6 +77,80 @@ If PoV throws after partially applying modifiers, CM does not retry that grant.
 It reports the error once and stops further boss grants until restart. Other
 integrations remain active. PoV's effects may themselves change health, shields,
 movement or damage; enabling their modifiers intentionally retains those effects.
+
+## Blood Challenge runes in Full
+
+CreatureManager 1.3.11 gives blood runes an additive policy in
+`Full`: **final stars = CM's normal stars, including applicable Karma, + rune count**.
+PoV normally assigns its rune count as the final star count. Without this bridge,
+CM's later initial level roll can replace that assignment. The bridge coordinates
+these two decisions before completing the creature's level-dependent effects.
+
+The existing altar limit of five runes is an additional-star limit. For example,
+CM five stars plus one rune produces six stars. It is not clamped to five stars.
+Ordinary CM spawns continue to use their existing rules. `ExceptLevel` and `Off`
+retain PoV's own rune policy rather than receiving a new CM base roll.
+
+The base decision, rune contribution and completion state belong to the creature,
+not to a client-local counter. An owner change or a saved creature loading again
+must not reroll the base or apply the same rune contribution twice. Supported boss
+phases carry the completed result; the next phase does not add the runes again.
+PoV's fixed-health phase exceptions remain in effect.
+
+Deferred application preserves missing health rather than granting a late full
+heal. A partial foreign failure is recorded as failed and is not retried. If a
+patch changes after runes were captured, CM preserves their consumed star
+contribution without replaying unverified PoV effects. New captures stop until
+restart; unrelated CM and PoV integrations continue.
+
+Stars and PoV modifier counts have separate budgets. The normal CM boss-modifier
+share still follows PoV's switches, first-kill policy and configured modifiers per
+star. The rune share follows PoV's existing rune rule: at least one modifier per
+actual rune while its rarity system is working. Thus CM five stars plus one rune
+with `Boss modifiers per star = 0` contributes one rune's modifier share, not six.
+PoV's available effects and exclusions still limit what can actually be selected.
+CM's own modifier selection follows the completed PoV selection so its existing
+overlap filter sees those effects.
+
+The bridge checks the relevant PoV methods and their behavior contract rather
+than a whole-DLL version/hash allowlist. Its hooks are optional and do not change
+PoV's DLL, configuration, altar inventory handling, or normal world saving.
+Existing bosses that lost rune stars before this patch are not retroactively
+reconstructed from ambiguous old PoV state. New altar summons are the meaningful
+comparison case; explicit spawn commands have their own preserved-level policy.
+
+### Blood-rune verification, 2026-10-31
+
+The pre-release local Debug build passed with zero warnings/errors. Its merged DLL was
+copied to the Steam game's `BepInEx/plugins/CreatureManager.dll`; source and
+installed SHA-256 matched. That implementation check preceded the 1.3.11 release
+build. The manifest BepInEx dependency is now `5.4.2360`.
+
+The complete compatibility harness passed with zero failures for both supplied
+original PoV **5.3.3** and **5.3.6** DLLs, using Valheim **1.0.21**'s original game
+assembly and bundled Mono. The baseline without PoV also passed with zero
+failures. The blood cases cover additive stars beyond five,
+Karma/no-rule bases, independent modifier budgets, duplicate calls, pending
+configuration/ownership, preserved ZDO state on a reconstructed character,
+mode changes, phase carry/fixed health, partial failures and rejected changed
+IL or missing/late Harmony patches. See
+[`PovBloodChallengeContracts.cs`](../tools/GameCompatibilityCheck/PovBloodChallengeContracts.cs).
+
+This is isolated managed execution: Unity scene/native calls, ownership,
+configuration readiness, rule inputs and PoV random effect selection use fixtures.
+Original `Give` and phase bodies run with test-only native-boundary substitutions;
+CM's level algorithm uses an IL copy with fixture inputs. The production contract
+is validated before admitting those substitutions in the test. Native-call
+diagnostics from standalone Mono do not establish actual game compatibility.
+No ZDO serialization/reload, Unity world, host or dedicated-server encounter was
+run. Test logs, exact
+input/build hashes and the deployment comparison are retained locally under
+`artifacts/PoVBloodChallenge-20261031`.
+
+Use this same patched CM DLL on server and clients, then check a new altar summon,
+save/rejoin, owner transfer and a boss phase transition in the actual modpack.
+Only the local Steam plugin was updated by this Debug build; Gale profiles and
+remote servers were not changed.
 
 ## Automatic modifier overlap filter
 
