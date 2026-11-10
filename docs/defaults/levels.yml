@@ -12,12 +12,13 @@
 #   Easy/Normal/Hard/VeryHard supply biome weights before Global.level, which only fills unmatched cases (such as unsupported biomes).
 #   Full + None supplies no built-in weights. Uncomment Global.level to supply fallback weights; more specific YAML level rules still win.
 #   With no matching weights AND no Karma/Enforcer bonus, the assigned level is kept. Weights are base rolls, not final level caps.
-# Bosses Follow Biome Level Preset only enables a regular-boss fallback in Full with a preset other than None.
-#   Explicit Boss/group/prefab level rules still work in Full + None; regular bosses never inherit Global.
+# Bosses Follow Biome Level Preset (On, Full only): bosses fall back to biome YAML level weights, then the built-in preset.
+#   Biome YAML works even with preset None. Off skips both biome fallbacks; explicit Boss/group/prefab rules still work.
+#   Only level weights are shared: boss stats/modifiers never inherit top-level biome YAML or Global. Existing biome YAML can now affect new bosses.
 # Karma tracking, Enforcer summons, and loot have separate settings. Setting changes do not reroll completed creatures.
 #
 # Targets: Global, Boss, biome, group, or prefab; omitted fields inherit independently.
-# Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss.
+# Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss > biome level fallback (if enabled).
 # Nested biome blocks override their parent target in that biome.
 # speed/speedPerLevel: movement, acceleration, and turning only; multiply with Swift, not attack speed or distanceScaling.
 # Speed is saved per creature; completed creatures keep their saved value (1 if absent) until a supported level change.
@@ -73,7 +74,7 @@ Global:
     blamer: 5, 0.5, 45, 0.75           # chance%, karmaPerSecond, maxKarmaGain (0 = unlimited), fleeHealthRatio
 
 Boss:                                  # Regular bosses only; Enforcers use non-boss rules.
-  # level: [100]                       # Boss fallback: level 1; omit to allow the enabled built-in biome preset ([] is invalid).
+  # level: [100]                       # Boss fallback: level 1; omit to allow enabled biome YAML/preset weights ([] is invalid).
   scalePerLevel: 0.1
   damage: 1
   damagePerLevel: 0.1
@@ -143,7 +144,7 @@ TentaRoot:
 # Other biomes keep the selected preset's defaults; explicit YAML rules retain their normal priority.
 # Weights are ordered from level 1 (zero stars), level 2 (one star), and so on, before Karma/Enforcer bonuses; they are not final star caps.
 # None preset: no built-in distribution. Explicit YAML level rules (including Global.level) and Karma/Enforcer bonuses still apply in Full.
-# Copied biome rules do not affect regular bosses; use Boss/group/prefab level rules for them.
+# Copied biome level weights also affect regular bosses when Bosses Follow Biome Level Preset is On; Boss/group/prefab level rules take priority.
 #
 # Easy preset:
 # Meadows:

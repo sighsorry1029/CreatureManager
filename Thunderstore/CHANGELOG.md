@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.13
+
+- In `Full` mode, extend **Bosses Follow Biome Level Preset** to top-level biome YAML `level` weights. Regular bosses now use matching biome YAML before the built-in preset when no Boss/group/prefab level rule applies. Explicit biome weights also work with preset `None`; turning the option Off excludes both biome fallbacks while keeping explicit boss rules.
+- **Balance change:** the option remains **On** by default, so existing biome YAML can now affect newly spawned bosses. Only base level weights are shared: boss stats, size, speed, and modifiers do not inherit top-level biome YAML, and bosses still exclude Global. Existing completed creatures are not rerolled; Karma bonuses and Enforcer rules are unchanged.
+- Simplify the README while preserving all images, GIFs, modifier icons, and their descriptions. Move detailed configuration, examples, commands, reload behavior, and troubleshooting into the [user guide](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md), with links to the existing compatibility and default-YAML references.
+- Add regression checks for biome YAML/preset priority, On/Off and None, explicit boss/group/prefab rules, Global exclusion, and same-frame separation of level rules from stat/modifier rules. Update the server and all clients to **1.3.13** together and restart.
+
 ## 1.3.12
 
 - Restore compatibility with Path of Valheiman **6.0.7** for Full-mode boss modifiers, Blood Challenge rune additions, automatic modifier overlap filtering, and the combined HUD. Support PoV's expanded 64-bit modifier storage without losing effects above bit 31 or treating them as an empty modifier list. Compatibility still checks the required behavior contracts rather than requiring an exact PoV version or DLL hash.

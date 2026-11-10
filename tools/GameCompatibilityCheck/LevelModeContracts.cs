@@ -157,6 +157,7 @@ internal static class LevelModeContracts
             Source = 0;
             CheckScaleModes(plugin, mode, character);
             CheckBiomePresets(plugin, entry, bind, config, mode);
+            CheckBossBiomeRules(plugin, entry, bind, config);
             CheckDefaultTemplate(plugin);
             CheckSpeedState(plugin, entry, bind, config, mode);
             character = NewCharacter(1);
@@ -395,6 +396,154 @@ internal static class LevelModeContracts
             mode.SetSerializedValue("ExceptLevel");
         }
     }
+
+    private static void CheckBossBiomeRules(Assembly plugin, Type entry, MethodInfo bind, ConfigFile config)
+    {
+        FieldInfo toggleField = entry.GetField("BossesFollowBiomeLevelPreset", Static)!;
+        FieldInfo presetField = entry.GetField("BiomeLevelPreset", Static)!;
+        FieldInfo definitionsField = Levels.GetField("ActiveDefinitions", Static)!;
+        object? savedToggle = toggleField.GetValue(null), savedPreset = presetField.GetValue(null);
+        object savedDefinitions = definitionsField.GetValue(null)!;
+        ConfigEntryBase Bind(FieldInfo field, string value) => (ConfigEntryBase)bind
+            .MakeGenericMethod(field.FieldType.GetGenericArguments()[0]).Invoke(config,
+                new[] { "boss fixture", field.Name, Enum.Parse(field.FieldType.GetGenericArguments()[0], value),
+                    (object)new ConfigDescription("") })!;
+        ConfigEntryBase toggle = Bind(toggleField, "On"), preset = Bind(presetField, "Easy");
+        toggleField.SetValue(null, toggle);
+        presetField.SetValue(null, preset);
+        Type definition = plugin.GetType("CreatureManager.LevelDefinition", true)!;
+        Type context = Levels.GetNestedType("LevelRuleContext", BindingFlags.NonPublic)!;
+        Type scope = Levels.GetNestedType("LevelRuleScope", BindingFlags.NonPublic)!;
+        object full = Enum.Parse(scope, "Full");
+        Character character = Uninitialized<Character>();
+        MethodInfo parse = plugin.GetType("CreatureManager.CreatureYaml", true)!.GetMethod("TryReadLevelDefinitions", Static)!;
+        MethodInfo load = Copy(plugin.GetType("CreatureManager.CreatureDomainManager", true)!.GetMethod("LoadLevelPresetDefinitions", Static)!);
+        var copies = new Dictionary<MethodInfo, MethodInfo>();
+
+        // Unlike the lifecycle fixtures, these copies keep the real parser, matcher,
+        // selectors and cache. Substitute scene/frame/object APIs and optional EWD lookup.
+        MethodInfo CopySelection(MethodInfo source)
+        {
+            if (copies.TryGetValue(source, out MethodInfo result)) return result;
+            using var copy = new DynamicMethodDefinition(source);
+            typeof(DynamicMethodDefinition).GetProperty(nameof(DynamicMethodDefinition.OriginalMethod))!.SetValue(copy, null);
+            copy.OwnerType = typeof(LevelModeContracts);
+            foreach (var instruction in copy.Definition.Body.Instructions.ToArray())
+            {
+                if (!(instruction.Operand is MethodReference method)) continue;
+                string type = method.DeclaringType.FullName;
+                string? boundary = type == context.FullName!.Replace('+', '/') && method.Name == "From" ? nameof(GetRuleContext)
+                    : type == "UnityEngine.Time" && method.Name == "get_frameCount" ? nameof(RuleFrame)
+                    : type == "CreatureManager.CreatureKarmaManager" && method.Name == "TryResolveExpandWorldDataBiome" ? nameof(NoExternalBiome)
+                    : type == "CreatureManager.CreatureKarmaManager" && method.Name == "TryGetBiomeDisplayName" ? nameof(NoBiomeDisplayName)
+                    : type == "UnityEngine.Object" && method.Name == "op_Equality" ? nameof(SameObject) : null;
+                MethodInfo? replacement = boundary == null ? null : typeof(LevelModeContracts).GetMethod(boundary, Static);
+                if (replacement == null && (type == Levels.FullName ||
+                    type == "CreatureManager.CreatureKarmaManager" && method.Name == "TryResolveBiomeName"))
+                    replacement = CopySelection((MethodInfo)method.ResolveReflection());
+                if (replacement == null) continue;
+                instruction.OpCode = Mono.Cecil.Cil.OpCodes.Call;
+                instruction.Operand = copy.Definition.Module.ImportReference(replacement);
+                if (boundary == nameof(GetRuleContext))
+                    copy.Definition.Body.GetILProcessor().InsertAfter(instruction,
+                        Mono.Cecil.Cil.Instruction.Create(Mono.Cecil.Cil.OpCodes.Unbox_Any, copy.Definition.Module.ImportReference(context)));
+            }
+            return copies[source] = copy.Generate();
+        }
+        object? Select(string name, params object?[] args) => CopySelection(Levels.GetMethod(name, Static)!).Invoke(null, args);
+        void Rules(string yaml, bool boss = true, bool enforcer = false)
+        {
+            object?[] args = { yaml, "boss biome selection fixture", null };
+            Require((bool)parse.Invoke(null, args)!, "boss selection YAML parses");
+            object[] rules = ((IEnumerable)load.Invoke(null, Array.Empty<object>())!).Cast<object>()
+                .Concat(((IEnumerable)args[2]!).Cast<object>()).ToArray();
+            Array active = Array.CreateInstance(definition, rules.Length);
+            for (int i = 0; i < rules.Length; i++) active.SetValue(rules[i], i);
+            definitionsField.SetValue(null, active);
+            RuleContext = Activator.CreateInstance(context, Instance, null,
+                new object[] { "Bonemass", Heightmap.Biome.Swamp, 0f, boss, enforcer }, null)!;
+            Levels.GetMethod("InvalidateRuleSearchCache", Static)!.Invoke(null, null);
+        }
+        void Weights(string label, params float[] expected)
+        {
+            object?[] args = { character, null };
+            bool found = (bool)Select("TrySelectLevelWeights", args)!;
+            Require(found == (expected.Length > 0) && ((IEnumerable<float>)args[1]!).SequenceEqual(expected), label);
+        }
+        try
+        {
+            const string biome = "Swamp:\n  level: [100]\n  health: 9\n  damage: 9\n  speed: 9\n  scalePerLevel: 9\n  distanceScaling: [1, 1, 100, 0]\n  modifiers:\n    swift: 100, 0.2\n";
+            const string global = "Global:\n  level: [0, 100]\n";
+            Rules(biome);
+            Weights("boss biome YAML overrides Easy preset", 100);
+            foreach (string property in new[] { "Health", "Damage", "Speed", "ScalePerLevel" })
+            {
+                RuleFloatProperty = definition.GetProperty(property)!;
+                Delegate selector = typeof(LevelModeContracts).GetMethod(nameof(ReadRuleFloat), Static)!
+                    .MakeGenericMethod(definition).CreateDelegate(typeof(Func<,>).MakeGenericType(definition, typeof(float?)));
+                object?[] args = { character, selector, 0f, full };
+                Require(!(bool)Select("TrySelectFloatValue", args)!, "same-frame boss excludes shared biome " + property);
+                Weights("level selection survives a different cached scope", 100);
+            }
+            object?[] distance = { character, 0, 0f, full };
+            Require(!(bool)Select("TrySelectDistanceScalingMultiplier", distance)!, "boss excludes shared biome distance scaling");
+            object search = Select("GetRuleSearch", character, full)!;
+            Require(((IDictionary)Select("GetEffectiveModifierDefinitions", search)!).Count == 0,
+                "same-frame boss excludes shared biome modifiers");
+            Weights("level weights survive modifier cache lookup", 100);
+            Rules("Boss:\n  health: 2\n" + biome);
+            Weights("a Boss stat rule does not block biome level fallback", 100);
+            Rules("Swamp:\n  health: 9\n");
+            Weights("missing biome level keeps built-in preset", 70, 25, 5);
+            preset.SetSerializedValue("None");
+            Rules(biome);
+            Weights("explicit biome level works with preset None", 100);
+            Rules(global + "Meadows:\n  level: [100]\n");
+            Weights("unmatched boss never falls back to Global");
+
+            foreach (string option in new[] { "On", "Off" })
+            {
+                toggle.SetSerializedValue(option);
+                preset.SetSerializedValue("Easy");
+                Rules(global + biome);
+                Weights("biome fallback toggle " + option, option == "On" ? new[] { 100f } : Array.Empty<float>());
+                Rules("Boss:\n  level: [0, 100]\n" + biome);
+                Weights("Boss level takes priority with toggle " + option, 0, 100);
+                Rules("Boss:\n  level: [0, 100]\n  Swamp:\n    level: [0, 0, 100]\n" + biome);
+                Weights("nested Boss biome remains explicit with toggle " + option, 0, 0, 100);
+                Rules("groups:\n  Group: [Bonemass]\nBoss:\n  level: [0, 100]\nGroup:\n  level: [0, 0, 100]\n" + biome);
+                Weights("group level outranks Boss with toggle " + option, 0, 0, 100);
+                Rules("groups:\n  Group: [Bonemass]\nGroup:\n  level: [0, 100]\nBonemass:\n  level: [0, 0, 0, 100]\n" + biome);
+                Weights("prefab level outranks group with toggle " + option, 0, 0, 0, 100);
+            }
+            Rules("");
+            Weights("Off also excludes the built-in boss preset");
+            Rules(global + biome, boss: false);
+            Weights("ordinary creature ignores boss toggle", 100);
+            Rules(global + biome, enforcer: true);
+            Weights("boss-flagged Enforcer ignores boss toggle", 100);
+            preset.SetSerializedValue("None");
+            Rules(global, enforcer: true);
+            Weights("Enforcer still uses Global fallback", 0, 100);
+        }
+        finally
+        {
+            toggleField.SetValue(null, savedToggle);
+            presetField.SetValue(null, savedPreset);
+            definitionsField.SetValue(null, savedDefinitions);
+            Levels.GetMethod("InvalidateRuleSearchCache", Static)!.Invoke(null, null);
+            RuleContext = null!;
+        }
+        System.Console.WriteLine("Boss biome rules passed: parsed YAML, Easy/None, On/Off, field fallback, Boss/nested biome/group/prefab precedence, Global exclusion, ordinary/Enforcer policy, same-frame level/stat/distance/modifier cache separation. Scene context and optional EWD lookup substituted; real selection logic retained.");
+    }
+
+    private static object RuleContext = null!;
+    private static PropertyInfo RuleFloatProperty = null!;
+    private static object GetRuleContext(Character character) => RuleContext;
+    private static int RuleFrame() => 42;
+    private static bool NoExternalBiome(string name, out Heightmap.Biome biome) { biome = Heightmap.Biome.None; return false; }
+    private static bool NoBiomeDisplayName(Heightmap.Biome biome, out string name) { name = ""; return false; }
+    private static float? ReadRuleFloat<T>(T rule) => (float?)RuleFloatProperty.GetValue(rule);
 
     private static void CheckDefaultTemplate(Assembly plugin)
     {

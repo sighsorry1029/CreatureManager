@@ -5161,12 +5161,13 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "  Easy/Normal/Hard/VeryHard supply biome weights before Global.level, which only fills unmatched cases (such as unsupported biomes).");
         AppendTemplateComment(builder, "  Full + None supplies no built-in weights. Uncomment Global.level to supply fallback weights; more specific YAML level rules still win.");
         AppendTemplateComment(builder, "  With no matching weights AND no Karma/Enforcer bonus, the assigned level is kept. Weights are base rolls, not final level caps.");
-        AppendTemplateComment(builder, "Bosses Follow Biome Level Preset only enables a regular-boss fallback in Full with a preset other than None.");
-        AppendTemplateComment(builder, "  Explicit Boss/group/prefab level rules still work in Full + None; regular bosses never inherit Global.");
+        AppendTemplateComment(builder, "Bosses Follow Biome Level Preset (On, Full only): bosses fall back to biome YAML level weights, then the built-in preset.");
+        AppendTemplateComment(builder, "  Biome YAML works even with preset None. Off skips both biome fallbacks; explicit Boss/group/prefab rules still work.");
+        AppendTemplateComment(builder, "  Only level weights are shared: boss stats/modifiers never inherit top-level biome YAML or Global. Existing biome YAML can now affect new bosses.");
         AppendTemplateComment(builder, "Karma tracking, Enforcer summons, and loot have separate settings. Setting changes do not reroll completed creatures.");
         AppendTemplateBlankLine(builder);
         AppendTemplateComment(builder, "Targets: Global, Boss, biome, group, or prefab; omitted fields inherit independently.");
-        AppendTemplateComment(builder, "Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss.");
+        AppendTemplateComment(builder, "Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss > biome level fallback (if enabled).");
         AppendTemplateComment(builder, "Nested biome blocks override their parent target in that biome.");
         AppendTemplateComment(builder, "speed/speedPerLevel: movement, acceleration, and turning only; multiply with Swift, not attack speed or distanceScaling.");
         AppendTemplateComment(builder, "Speed is saved per creature; completed creatures keep their saved value (1 if absent) until a supported level change.");
@@ -5188,7 +5189,7 @@ internal static class CreatureDomainManager
         builder.AppendLine();
 
         builder.AppendLine("Boss:                                  # Regular bosses only; Enforcers use non-boss rules.");
-        AppendIndented(builder, 1, "# level: [100]                       # Boss fallback: level 1; omit to allow the enabled built-in biome preset ([] is invalid).");
+        AppendIndented(builder, 1, "# level: [100]                       # Boss fallback: level 1; omit to allow enabled biome YAML/preset weights ([] is invalid).");
         AppendIndented(builder, 1, "scalePerLevel: 0.1");
         AppendIndented(builder, 1, "damage: 1");
         AppendIndented(builder, 1, "damagePerLevel: 0.1");
@@ -5230,7 +5231,7 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "Other biomes keep the selected preset's defaults; explicit YAML rules retain their normal priority.");
         AppendTemplateComment(builder, "Weights are ordered from level 1 (zero stars), level 2 (one star), and so on, before Karma/Enforcer bonuses; they are not final star caps.");
         AppendTemplateComment(builder, "None preset: no built-in distribution. Explicit YAML level rules (including Global.level) and Karma/Enforcer bonuses still apply in Full.");
-        AppendTemplateComment(builder, "Copied biome rules do not affect regular bosses; use Boss/group/prefab level rules for them.");
+        AppendTemplateComment(builder, "Copied biome level weights also affect regular bosses when Bosses Follow Biome Level Preset is On; Boss/group/prefab level rules take priority.");
         foreach (CreatureManagerPlugin.LevelBiomePreset preset in new[]
                  {
                      CreatureManagerPlugin.LevelBiomePreset.Easy,

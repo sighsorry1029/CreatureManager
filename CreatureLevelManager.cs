@@ -77,7 +77,8 @@ internal static class CreatureLevelManager
     private enum LevelRuleScope
     {
         Full,
-        BaselineOnly
+        BaselineOnly,
+        LevelWeights
     }
 
     private enum ModifierApplicationMode
@@ -1648,7 +1649,7 @@ internal static class CreatureLevelManager
     private static bool TrySelectLevelWeights(Character character, out List<float> weights)
     {
         weights = new List<float>();
-        if (!TrySelectRule(character, rule => rule.Level is { Count: > 0 }, out LevelDefinition rule))
+        if (!TrySelectRule(character, rule => rule.Level is { Count: > 0 }, out LevelDefinition rule, LevelRuleScope.LevelWeights))
         {
             return false;
         }
@@ -2355,7 +2356,7 @@ internal static class CreatureLevelManager
             return true;
         }
 
-        if ((context.IsEnforcer || !context.IsBoss || BossCanUsePresetBiomeRule(definition)) && MatchesBiome(target, context.Biome))
+        if ((context.IsEnforcer || !context.IsBoss || BossCanUseBiomeRule(definition, scope)) && MatchesBiome(target, context.Biome))
         {
             candidate = new LevelRuleCandidate(definition, 100, index);
             return true;
@@ -2385,9 +2386,10 @@ internal static class CreatureLevelManager
         return string.Equals(target, "boss", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool BossCanUsePresetBiomeRule(LevelDefinition definition)
+    private static bool BossCanUseBiomeRule(LevelDefinition definition, LevelRuleScope scope)
     {
-        return definition.IsPreset &&
+        // Shared biome YAML supplies only level weights, never boss stats or modifiers.
+        return (definition.IsPreset || scope == LevelRuleScope.LevelWeights) &&
                CreatureManagerPlugin.BossesFollowBiomeLevelPreset?.Value == CreatureManagerPlugin.Toggle.On;
     }
 

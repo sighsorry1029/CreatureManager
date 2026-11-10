@@ -1,6 +1,14 @@
 # CreatureManager
 
-Add 32 combat modifiers and launch live boss hunt events across dungeons and the open world. Clone and configure creatures, attacks, AI, equipment, appearances, and textures; inspect resistances and scale difficulty by biome, distance, or preset.
+Customize Valheim creatures with 32 combat modifiers, biome-based levels, regional Karma, and Enforcer encounters.
+
+- Edit or clone creatures, attacks, projectiles, AI, factions, equipment, and textures.
+- Tune levels, stats, loot, and modifier chances.
+- Create outdoor and dungeon encounters with configurable enemies and rewards.
+- Inspect resistances in game and use generated references to find prefab names.
+- Reload YAML and server-owned textures without restarting for most changes.
+
+[Quick start](#quick-start) · [Settings](#settings) · [Compatibility](#compatibility) · [User guide](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md)
 
 ## Showcase
 
@@ -64,12 +72,6 @@ Add 32 combat modifiers and launch live boss hunt events across dungeons and the
 
 Modifier icons appear on creature and boss HUDs. The Valheim Compendium contains a CreatureManager page with modifier names, icons, and descriptions using the active global values.
 
-When using WackyEpicMMOSystem, `1 - General` → `Adjust EpicMMO LevelBar Position` is a server-synchronized switch, **On** by default. It places regular creature level labels at `(70, -15)`, including recreated labels, without editing EpicMMO's configuration. This displayed position takes priority over EpicMMO's configured coordinates. **Off** restores the position recorded before adjustment. Boss, player, and mount HUDs are unchanged. The switch applies live and works independently of CreatureManager's level and modifier settings; clients without EpicMMO and dedicated servers do not adjust UI.
-
-Toxic Aura replaces Toxic Death. Use `toxicAura: chance, maxHealthPoison`, for example `toxicAura: 10, 0.1`. Existing `toxicDeath` entries in `levels.yml` and `karma.yml` are accepted as an alias: chance and power are preserved, while old radius/effect values are ignored. In the same modifier block, explicit `toxicAura` wins regardless of order and the two entries are never merged. New `toxicAura` entries accept only chance and optional power. A compatibility notice is logged once per session; existing files are not rewritten or populated automatically. The radius is the larger XZ extent of the live body collider plus 3m, so creature scaling is included. Poison is reapplied once per second through vanilla poison/resistance rules, without additional attacker damage multipliers; it does not stack as direct damage per second. Only the creature's network owner applies damage. Each client maintains a local particle-only visual extracted from `blob_aoe`, with no `Aoe`, `ZNetView` or repeated effect RPCs. Death, taming, disabled effects and scene teardown stop it; there is no death burst or lingering pool.
-
-**Upgrading from Toxic Death:** the new default poison strength is `0.1`, but an existing YAML value of `0.3` is preserved and may feel much stronger as a recurring aura. Review the applicable modifier blocks in **both `levels.yml` and `karma.yml`**, including per-creature and Enforcer overrides. To use the new default strength, change the second tuple value to `0.1` while keeping your chance, for example `toxicDeath: 10, 0.1, 4, blob_aoe`, or replace it with `toxicAura: 10, 0.1`. Existing saved Toxic Death flags also become Toxic Aura; old per-creature power/radius/effect fields are not migrated, and a missing new aura power uses `0.1`.
-
 ### In-game Tools
 
 ![Defensive modifier entries in the Compendium](https://i.ibb.co/C3VG6r3B/compendium.png)
@@ -84,7 +86,7 @@ Toxic Aura replaces Toxic Death. Use `toxicAura: chance, maxHealthPoison`, for e
 
 *While sneaking, inspect a creature to view its effective resistances, weaknesses, and immunities beneath the target's nameplate.*
 
-### Combat Modifiers gifs
+### Combat Modifier GIFs
 
 #### Offense and Defense
 
@@ -124,15 +126,9 @@ Toxic Aura replaces Toxic Death. Use `toxicAura: chance, maxHealthPoison`, for e
 
 *Blink teleports the creature near its target to close distance quickly. `Blink Alert Grace Period (s)` delays Blink and its extended attack range for 3 seconds after the creature becomes alerted by default; the timer still expires when no attack can start.*
 
-Blink always uses the built-in `fx_Adrenaline1` effect. Configure `blink: chance, cooldown, maxRange` in `levels.yml` or `karma.yml`. An existing fourth tuple value (including `none`) is accepted but ignored; stored creature effect names are also ignored. Existing YAML files are not rewritten. This prevents custom effect prefabs from creating unintended network or gameplay objects; Blink's chance, cooldown and range remain configurable.
-
 ![Omen modifier triggering an Enforcer check](https://i.ibb.co/G4x2sPfH/omen.gif)
 
 *Omen can request an Enforcer encounter when the affected creature is killed directly by a player or by a lethal poison, fire, or spirit tick with a confirmed player contribution, including mixed damage.*
-
-Karma/Omen DoT rewards use the damage pool that actually killed the creature, not unrelated active effects or a recent-hit timeout. Karma accepts confirmed player/tamed/PlayerSpawned contributors; Omen still requires a real player. Within each pool the first confirmed player takes precedence over a tame/summon. Simultaneous fire/spirit ticks also prefer a real player, then use the fire candidate if both are equally eligible. This selects a reward representative, not the largest damage contributor. The server still validates that source, ownership and duplicate deaths; a disconnected/unverifiable selected source is not replaced with a nearby player.
-
-Reaping is independent of this contributor policy: all creature and player deaths within 24m count, including tamed creatures, PlayerSpawned summons, mixed DoT, monster combat and environmental deaths. A death can benefit each nearby surviving Reaping creature once, not the dead creature itself. Despawns, unloads and deletion without a confirmed death do not count. Owner, distance, duplicate-death and growth-limit checks remain in place; a confirmed player respawn allows that player's next death to count again. Summon-heavy fights and repeated player deaths can reach the existing growth caps faster.
 
 ![Juggernaut modifier producing heavy knockback](https://i.ibb.co/xKxGBpjK/juggernaut.gif)
 
@@ -178,227 +174,63 @@ Existing creatures can be modified or cloned. For advanced examples, install [Mo
 
 *Root Witch is a spellcaster boss who casts a variety of spells.*
 
-## Highlights
+## Quick Start
 
-- Clone or edit vanilla and modded creature prefabs.
-- Configure selected `Character` and `Humanoid` fields, equipment, appearance, scale, and textures.
-- Clone and tune monster attack prefabs, including damage, animation, projectile, AI range, and attack status effects.
-- Clone projectile prefabs and override `Projectile.m_spawnOnHit`, weighted random on-hit spawns, or `SpawnAbility.m_spawnPrefab` without duplicating their remaining component state.
-- Build reusable `BaseAI` and `MonsterAI` presets, or borrow AI directly from another creature prefab.
-- Optionally diversify combat targets for monsters, bosses and Enforcers with synchronized AI settings.
-- Add and edit factions without mirroring unrelated game systems.
-- Define weighted levels for global, boss, biome, group, and individual prefab rules.
-- Scale health, damage, modifier chance, and visuals by level or world distance.
-- Roll 32 combat modifiers across Offense, Defense, Affliction, and Special groups.
-- Add regional Karma progression and configurable Enforcer encounters.
-- Inspect loaded creatures, attacks, AI, loadouts, projectiles, textures, and level visuals through generated references.
-- Hot-reload YAML and server-owned PNG textures; connected clients cache and apply the authoritative files automatically.
+1. Install BepInExPack Valheim 5.4.2360 and CreatureManager on the server and every client. Use matching CreatureManager builds and keep the package's `BepInEx` folder, including sample textures.
+2. Launch once to generate `BepInEx/config/sighsorry.CreatureManager.cfg` and the YAML files under `BepInEx/config/CreatureManager/`.
+3. Change feature switches in the `.cfg`. For creature edits, find the prefab in a `*.reference.yml` file and copy only the fields you want to change into the matching active YAML.
+4. Save the file. Most changes reload automatically; in multiplayer, edit the server's configuration.
 
-## Getting Started
+Existing YAML is preserved during updates. Loaded creatures generally keep their current settings, and completed level/modifier rolls are not rerolled. Test changes with new creatures; changing an existing clone's `clonedFrom` requires a restart.
 
-1. Open `BepInEx/config/CreatureManager` after the first launch.
-2. Find the target prefab in a generated reference file.
-3. Copy the relevant entry or name into the matching active YAML file.
-4. Change only the fields you need.
-5. Save the file. Most YAML and texture changes reload automatically.
+See [reload behavior](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md#reload-behavior) and [sample setup](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md#samples-and-file-names). The showcased Bonebeard, Vincent, and Root Witch examples require MonsterLabZ; the base mod does not.
 
-Saving an active YAML file updates synchronized templates and global rules without a restart. Already loaded creatures keep their creature fields, AI, equipped attack data, and completed level and modifier state; existing Enforcers keep their identity, level, loot, and modifiers. Creature GameObjects instantiated after the reload use the current templates; this includes persistent creatures loaded again after a zone unload. Projectiles and ragdolls are separate runtime objects, so ones created after the reload also use current templates even when their source creature already existed. Faction relationships, Karma economy and encounter checks, server localization, and shared texture visuals are live global or visual exceptions. Changing `clonedFrom` for an already registered clone requires a restart.
+## Settings
 
-The generated YAML headers are the schema reference. This README intentionally does not duplicate their field-by-field examples.
+Start in `sighsorry.CreatureManager.cfg`. These are the main controls; each option also has an explanation in the generated config.
 
-Every modifier tuple requires `chance` first. Later values form an optional trailing suffix: stop after the last value you want to override. Omitted values inherit through the normal rule chain and otherwise use runtime defaults. Explicit `0` is a supplied value subject to normal field validation, while empty interior slots such as `10, , 5` are invalid.
-
-## Configuration Files
-
-| File | Purpose |
-|---|---|
-| `creatures.yml` | Clone and edit creatures, humanoid loadouts, appearance, scale, textures, and AI assignment. |
-| `attacks.yml` | Clone and edit monster attack item prefabs. |
-| `creatures.sample.yml` | Inactive creature examples generated on the first launch. Copy selected entries into an active creature file, or rename it to `creatures_sample.yml` to activate it. |
-| `attacks.sample.yml` | Inactive attack examples generated on the first launch. Copy selected entries into an active attack file, or rename it to `attacks_sample.yml` to activate it. |
-| `projectile.yml` | Clone projectile prefabs and override fixed or weighted-random on-hit spawns and spawn-ability prefab references. |
-| `ai.yml` | Override same-name creature AI directly or define uniquely named reusable AI presets. |
-| `factions.yml` | Define and edit factions. This domain is intentionally single-file. |
-| [`levels.yml`](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/levels.yml) | Configure level weights, stat scaling, distance scaling, visuals, and modifiers. |
-| [`karma.yml`](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/karma.yml) | Configure regional Karma and Enforcer encounters. |
-| `localization/<Language>.yml` | Define server-authoritative localized text using Valheim language names such as `English.yml` and `Korean.yml`. |
-| `textures/` | Store top-level PNG files used by creature texture overrides. The server synchronizes only files referenced by active creature definitions; clients keep verified SHA-256 content in `cache/synced-textures`. Release packages install the bundled `cm_*.png` samples here as ordinary files; the DLL does not generate them. |
-
-Browse all seven [default YAML files](https://github.com/sighsorry1029/CreatureManager/tree/main/docs/defaults), generated from the same code used on first launch. The reference currently documents **1.3.12**; these links track current source, so check the version notice before copying. Existing user files are not automatically updated: merge only the entries you need rather than replacing your configuration wholesale.
-
-The creature, attack, projectile, AI, and level domains load both `.yml` and `.yaml` base or split files, such as `creatures.yml`, `creatures.yaml`, and `creatures_*.yaml`. The generated `creatures.sample.yml` and `attacks.sample.yml` names do not match those active patterns, so the examples remain inactive. Copy selected entries into the active files, or install MonsterLabZ and rename them to `creatures_sample.yml` and `attacks_sample.yml` to activate the complete sample set. Bonebeard, Vincent, and Root Witch require MonsterLabZ. Vitrfell uses the packaged `cm_boar2.png` texture. Faction and Karma configuration intentionally accept only the single canonical files `factions.yml` and `karma.yml`.
-
-Install the package's `BepInEx` folder too, including on dedicated servers that supply referenced PNGs to clients. DLL-only Debug updates do not install sample PNGs. Give personal texture replacements a separate filename, because package updates can replace bundled files. Existing configuration and sample YAML files are not rewritten: when adopting the renamed PNGs, update old texture references such as `boar2` to `cm_boar2`, or retain the matching old PNGs.
-
-## Generated References
-
-| File | Contents |
-|---|---|
-| `creatures.reference.yml` | Compact loaded creature information. |
-| `creatures.full.yml` | Full creature scaffold generated on demand. |
-| `attacks.reference.yml` | Loaded monster attack prefab candidates. |
-| `ai.reference.yml` | Loaded creature AI values and reusable source prefab names. |
-| `creatureLoadout.reference.txt` | Likely creature and NPC equipment prefabs. |
-| `projectile.reference.yml` | Projectile, AOE, and spawn-ability candidates, their supported override fields, and reference-only `usedByAttacks` metadata. |
-| `textures.reference.txt` | Loaded `Texture2D` names grouped by source. |
-| `levelVisual.reference.yml` | Vanilla `LevelEffects` profiles generated on demand. |
-
-References refresh automatically after Valheim's prefab databases are ready and only rewrite when their generated content changes. Treat them as discovery output rather than active configuration.
-
-## Core Systems
-
-### Creatures, Attacks, and AI
-
-Creature definitions can modify an existing prefab or clone one with `clonedFrom`. An AI definition named after a loaded `MonsterAI` or `AnimalAI` creature applies directly to that prefab; a unique AI name remains a reusable preset and can use `copyFrom` for its baseline. A creature-level `ai:` assignment is only needed to select a reusable preset or borrow another creature prefab's AI, and takes priority over same-name direct application. Clones can also use cloned attacks, custom factions, humanoid equipment, and local texture overrides.
-
-The supported surface is intentionally narrower than a full prefab database dump. It concentrates on fields useful for monsters and customizable NPCs while leaving drop-table editing, spawn tables, player prefabs, and large effect graphs to other domains or mods.
-
-The synchronized `7 - AI` settings add optional combat target switching, independently of levels and modifiers:
-
-| Setting | Default |
-| --- | --- |
-| `Player Target Switching` | `Off` |
-| `Player Target Switch Interval (s)` | `10` |
-| `Player Target Switch Chance (%)` | `25` |
-| `Player Target Hold Duration (s)` | `5` (range `0`–`30`) |
-
-When enabled, an alerted, untamed MonsterAI creature (including bosses and Enforcers) can choose a sensed, hostile player other than its current target, with a path check before switching. One player is sufficient when an animal is currently tanking. Attempts wait the configured interval and use normal target-search ticks. Valid selections are retained for the configured hold duration, released on the next search tick; attacks are not interrupted and normal pursuit abandonment remains active. Death, lost sensing or a blocked path can end a hold early. A hold duration of `0` disables holding; switching attempts still follow the configured interval. An active hold takes precedence over the switch interval, so it is not interrupted by another switching attempt. Failed rolls, missing candidates and unreachable selections consume the interval. Changing any of these settings clears pending attempts and holds and restarts the attempt interval; Off returns to normal selection on the next search.
-
-Tamed creatures and FrozenKing phase 2 are excluded. This feature does not identify ranged attackers or override ability-specific targeting (such as independently targeted meteors). Decisions run only on the creature's network owner, including in dedicated-server games.
-
-### Levels and Progression
-
-Level rules can target broad defaults or narrow content: global rules, bosses, biomes, named groups, and individual prefabs. Built-in biome presets provide a starting point, while explicit YAML rules replace only the values you choose.
-
-The synchronized `[2 - Levels]` option `Enable Level System` accepts:
-
-| Value | Automatic level assignment | Stat, distance, scale, and modifier rules |
+| Setting | Default | What it controls |
 | --- | --- | --- |
-| `Off` | Keep the level assigned by the game or another mod | Disabled |
-| `ExceptLevel` | Keep the level assigned by the game or another mod | Enabled, using that actual level |
-| `Full` (default) | CreatureManager level weights, biome presets, and Karma/Enforcer level bonuses | Enabled |
+| `Enable Level System` | `Full` | `Full` assigns levels and applies stat/modifier rules. `ExceptLevel` keeps game/other-mod levels but applies those rules. `Off` disables this system, not the whole mod. |
+| `Biome Level Preset` | `Easy` | Choose built-in biome level weights, or `None` to use YAML weights without a built-in preset. |
+| `Bosses Follow Biome Level Preset` | `On` | In Full, bosses can fall back to biome level weights after explicit Boss/group/prefab level rules. |
+| `Global Modifiers`, `Boss Modifiers`, `Enforcer Modifiers` | `Max4` | Set each category's automatic modifier limit, or choose `Off`. |
+| `Karma System Mode` | `KarmaLevelAndEnforcer` | Regional progression and Enforcer encounters; modes can enable either part separately. |
+| `Character Loot System` | `CalculateChance` | Adjust eligible star-scaled loot; `Vanilla` keeps the existing calculation. Creature and boss amounts default to +50% per star. |
+| `Player Target Switching` | `Off` | Let hostile monsters occasionally switch to another sensed player. |
 
-`Biome Level Preset` is used only in `Full` mode:
+`ExceptLevel` is not a fully vanilla combat preset: stat and modifier rules still apply. Karma, loot, AI, and creature overrides have their own controls. Level weights are base rolls, not final star caps.
 
-| Preset | Level weights supplied by the preset |
+**Since 1.3.13:** boss biome fallback includes top-level YAML `level` weights, even with preset `None`. With the default option On, existing biome YAML can now affect new bosses. Only level weights are shared, not biome stats/modifiers. See [boss rules and upgrade notes](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md#boss-level-fallback).
+
+### YAML Files
+
+Active files live under `BepInEx/config/CreatureManager/`. Reference files are for inspection, not editing.
+
+| File | Use it for |
 | --- | --- |
-| `Easy` (default), `Normal`, `Hard`, `VeryHard` | Built-in biome distributions; explicit YAML biome/group/prefab weights take priority. |
-| `None` | No built-in distribution. Matching YAML `level` weights and Karma/Enforcer level bonuses still apply. |
+| `creatures.yml` | Creature edits/clones, equipment, appearance, textures, and AI assignment. |
+| `attacks.yml`, `projectile.yml` | Attack edits/clones, projectiles, and spawn abilities. |
+| `ai.yml`, `factions.yml` | AI presets and faction relationships. |
+| `levels.yml` | Level weights, stat scaling, and combat modifiers. |
+| `karma.yml` | Karma gain/decay, Enforcers, minions, and bonus loot. |
+| `localization/<Language>.yml`, `textures/` | Server text and custom PNG textures. |
 
-Newly generated `levels.yml` files end with commented biome distributions for all four built-in presets, generated from the same weights used at runtime, plus an explanation of `None`. Copy or uncomment only the biome blocks you want to override, merging with existing blocks to avoid duplicate keys. Existing YAML files are preserved.
+Use the [default YAML reference](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/README.md) and [configuration guide](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md#configuration-files) for fields, split files, and examples. The generated headers describe the accepted syntax; merge the settings you need instead of replacing a customized file.
 
-`Full + None` lets YAML choose which creatures receive CM level rolls. New defaults leave `Global.level` commented out (**since 1.3.4; 1.3.3 generated an active `[80, 20]` rule**). If enabled, including in an existing file, `Global.level: [80, 20]` supplies a base roll of 80% zero-star / 20% one-star wherever no more specific YAML level rule or built-in biome preset applies. Global is the last fallback, not an override of prefab/group/biome rules. To keep game/other-mod levels except selected targets, use `Full + None`, leave broad level weights disabled, and add weights to the desired prefab/group/biome. Leave other fields in place to retain their independent stat and modifier rules. A creature with no matching weights keeps its assigned level **only if no Karma/Enforcer level bonus applies**. Weights specify the base roll, not a final star cap; even `level: [100]` can receive bonus levels. Disable Karma level bonuses separately when a strict normal-spawn distribution is wanted.
+## Compatibility
 
-With `None`, `Bosses Follow Biome Level Preset` has no built-in distribution to use. Regular bosses still accept explicit Boss/group/prefab level rules in `Full`, and never inherit Global. `None` controls only built-in level weights; stat, size, and modifier rules remain independent. The default remains `Full + Easy`, and existing YAML files are not rewritten.
+- **Multiplayer:** install matching CreatureManager builds and the same gameplay mods on the server and clients. Server settings are synchronized.
+- **Do not combine with CLLC, StarLevelSystem, MonsterDB, or MonsterModifiers:** these are declared incompatible.
+- **DropNSpawn / Drop That:** CM yields loot scaling to DropNSpawn. With Drop That alone, CM can still adjust eligible star-scaled drops. [Details](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md#star-loot-scaling).
+- **Path of Valheiman:** supported integrations coordinate levels, health, loot, boss modifiers, and HUD icons. An unsupported integration logs a warning rather than assuming compatibility from the version number. [Integration guide](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-compatibility.md).
+- **WackyEpicMMOSystem:** `Adjust EpicMMO LevelBar Position` adjusts ordinary-creature level labels; turn it Off to keep the original placement. [Details](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/epicmmo-hud-compatibility.md).
 
-Existing `Off` config values remain valid. The former `On` selection (including numeric `1`) is read as `Full`, and `Vanilla` (including numeric `2`) is read as `ExceptLevel`; both are saved under their new names. With `ExceptLevel`, `Biome Level Preset`, `Bosses Follow Biome Level Preset`, and YAML `level` weights do not assign levels. Biome/group/prefab health, damage, per-level and distance multipliers, visual scale, and modifiers still follow the normal rule and spawn-source restrictions; the three modifier switches remain independent. Karma tracking and Enforcer encounters follow `Karma System Mode`, but their level bonuses are skipped. Loot settings remain independent. Explicit command levels (including `cm:spawn`) still work. Switching modes does not reroll or reset completed level/stat/modifier state on existing creatures; test automatic level assignment with new spawns.
+## More Help
 
-`ExceptLevel` only excludes CreatureManager's automatic level assignment. In a new default `levels.yml`, change `Global.damagePerLevel` from **0.25** to **0.5** to match vanilla per-star damage growth for regular creatures. Default health growth already matches vanilla, and omitted Global `scalePerLevel` preserves the prefab's original level sizes in this mode. Other matching rules and modifiers still apply; Karma, Enforcer encounters, and loot remain independently configured. Boss rules are separate and still apply if another mod or an explicit command gives a boss extra levels.
+- [User guide](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md): rules, examples, hot reload, and troubleshooting.
+- [Console commands](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md#console-commands): references, `cm:spawn`, and `cm:karma`.
+- [Default YAML and upgrade guidance](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/README.md).
+- [Changelog](https://github.com/sighsorry1029/CreatureManager/blob/main/Thunderstore/CHANGELOG.md) · [Source](https://github.com/sighsorry1029/CreatureManager).
 
-In both `Full` and `ExceptLevel`, if no matching rule supplies `scalePerLevel`, creatures use their prefab's original level sizes, including in dungeons and on saddle-able creatures (**extended to Full in 1.3.5**). This applies with any biome preset. Omission means no value is inherited from any applicable Global/Boss, biome, group, or prefab rule. Level one and levels without a prefab size entry leave the current size alone; no growth is extrapolated beyond the prefab's table. An explicit `0` keeps the original size without star growth; a positive value uses CM's existing size formula and dungeon/saddle restrictions. Color-state cycling remains enabled. Prefabs without level-size setups receive no automatic CM size adjustment when the rule is omitted.
-
-New default YAML files leave Global `scalePerLevel: 0.1` as a commented example and keep Boss `scalePerLevel: 0.1` active. Uncomment the Global example to enable CM star growth, or set it to `0` to disable star growth where no more specific rule overrides it. Published 1.3.4 treated an omitted scale rule as no star-size increase in `Full`; the new native-size fallback changes that behavior without rewriting YAML. Existing explicit values remain overrides. This does not migrate stored modifier sizes or guarantee that removing a rule immediately restores every loaded creature's previous size; original level-size behavior is applied when its visuals are processed again.
-
-Levels can control weighted star distribution, health, damage, movement speed, visual scale, distance scaling, and modifier selection. `damagePerLevel` replaces vanilla's 50% monster damage growth per level: for example, `damage: 1` and `damagePerLevel: 0.2` make a level 6 creature deal 2x level-1 damage to character targets before distance, multiplayer, and modifier scaling. Vanilla level visual states rotate when a creature exceeds the visual states supplied by its prefab.
-
-`speed` and `speedPerLevel` multiply walking, running, flying, swimming, acceleration, and turning by `speed * (1 + (level - 1) * speedPerLevel)`. For example, `speed: 1.2` and `speedPerLevel: 0.1` give 1.2x / 1.32x / 1.44x at zero / one / two stars. Each field inherits independently through the usual level-rule priority; with no matching value, defaults are 1 and 0. `speed` must be finite and greater than zero (values below 1 slow movement); `speedPerLevel` must be finite and nonnegative, and explicit 0 overrides inherited star growth. The generated YAML leaves both as commented examples. These rules work in `Full` and `ExceptLevel`, including with modifiers disabled, and stop applying in `Off`. They multiply with Swift and other movement adjustments; they do not change attack animation speed, attack intervals, or `distanceScaling`. Unlike the absolute `creatures.yml` character speed tuple, these are additional multipliers.
-
-The owner stores the resolved speed multiplier alongside each creature's level stats. Completed creatures retain that value on configuration reload and owner changes; older creatures without a speed value remain at 1x. Supported later level changes recalculate it without rerolling modifiers, while growth/restore transitions inherit stored stats. No speed rules are searched every frame, and original speed fields are not overwritten or repeatedly multiplied.
-
-CreatureManager is spawn-aware. Natural hostile spawns receive the complete matching rule, while breeding, eggs, grow-up transitions, tamed restores, Blood Magic summons, and explicit console spawns preserve or restrict values according to their lifecycle instead of blindly rerolling every creature initialization.
-
-`FrozenKing_p2` is protected because its health drives the seven-Aspect encounter. CreatureManager skips level/stat scaling, the creature `health` override (including regeneration time), and all modifiers for this exact prefab, and leaves incoming encounter damage unchanged. `cm:spawn` accepts it only at level 1 without modifiers; modifier inheritance and snapshot restore reject it. Phase 1, phase 3, and the Aspects retain their normal rules. This prevents interference in new encounters; it does not repair previously altered health or recover a stalled fight. Other mods and direct game commands can still alter the encounter.
-
-### Star Loot Scaling
-
-The synchronized `[6 - Loot]` settings in `BepInEx/config/sighsorry.CreatureManager.cfg` work independently of `Enable Level System`:
-
-| Setting | Default | Behavior |
-|---|---|---|
-| `Character Loot System` | `CalculateChance` | Replaces exponential star scaling for eligible item drops. Select `Vanilla` to preserve existing scaling. |
-| `Chance For Additional Loot Per Star For Creatures` | `50` | Additional successful-drop amount percentage per star, from 0 to 100. |
-| `Chance For Additional Loot Per Star For Bosses` | `50` | The same percentage for characters the game identifies as bosses. |
-
-`CalculateChance` keeps an eligible item's base drop chance and scales its successful amount by `1 + stars * percentage / 100`. Only the fractional remainder is rolled: with a base amount of 1 and 50%, one star gives 1 or 2 items, two stars give 2, and three stars give 2 or 3. This changes loot balance: vanilla increases both drop chance and amount by stars. Zero percent keeps the base chance and amount. The game's resource modifiers and 100-item per-entry cap still apply.
-
-Only non-trophy items whose drop entry enables `levelMultiplier` are eligible. One-per-player rewards, non-item drops, player drops, and explicit Enforcer bonus loot retain their existing behavior. Ordinary Enforcer drops use the game's boss classification. Calculation happens on the creature's network owner; the existing death, ragdoll and item-spawn paths remain responsible for delivery. Settings affect newly generated loot, not loot already stored in ragdolls.
-
-The default applies to new or missing settings. An existing saved `Vanilla` selection or custom percentage is preserved; change it explicitly to opt into the new defaults.
-
-When DropNSpawn is loaded, CreatureManager automatically leaves loot scaling to DropNSpawn and logs a notice when `CalculateChance` is first used. Drop That alone does not disable CreatureManager's calculation: its configured items, conditions and base quantities remain in use, and CreatureManager replaces star scaling only on eligible entries with `ScaleByLevel=true`. Entries with `ScaleByLevel=false` are excluded. Drop That's quantity-limit postprocessing, stacking and ragdoll metadata paths remain in place. If your Drop That tables already set the complete reward for each level, set `ScaleByLevel=false` on those entries or select `Vanilla` in CreatureManager.
-
-With Path of Valheiman, CM checks the required interoperability contracts at startup instead of requiring one exact PoV version. Final-health, live level-ownership, star-loot and boss-modifier integration are checked separately; an incompatible contract disables the affected integration with a warning. CM prevents Reaping's already-scaled maximum HP and explicit health restoration from being scaled again. PoV reads CM's current `Full` / `ExceptLevel` / `Off` level ownership instead of keeping its first cached result. PoV's separate star-drop replacement yields when CM's `CalculateChance` is active or DropNSpawn is loaded; rarity bonuses and additional loot remain independent. `Vanilla` without DropNSpawn preserves PoV's existing loot policy.
-
-In `Full`, newly created boss prefabs can receive PoV modifiers using their final CM star count and PoV's **Boss modifiers per star** setting, whether spawned by an altar, CreatureSpawner, a command or another direct creation path. PoV's boss/rarity switches, first-kill restriction and boss modifier exclusions still apply. Normal presets use **0** modifiers per star; set this to **1** if desired. Saved bosses, preserved creature restores and bosses already carrying PoV modifiers are not rerolled. CM's modifier settings remain independent: turn them off separately if you want only PoV modifiers.
-
-With compatible PoV, `Full` adds **Rune of the Blood Challenge** stars to CM's normal boss stars, including applicable Karma bonuses: CM three stars plus two runes produces five stars. The altar's five-rune limit caps the added stars, not the combined total. The rune contribution is recorded per creature and applied once; loading the creature or transferring ownership does not add it again, and supported boss phases inherit the completed result. PoV modifiers use separate budgets for CM's ordinary boss grant and the actual runes, so CM's base stars do not receive the rune's minimum-one-modifier bonus. `ExceptLevel` and `Off` retain PoV's normal rune behavior. See [blood-rune integration](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-compatibility.md#blood-challenge-runes-in-full).
-
-For new automatic modifier rolls, CM avoids overlapping effects already active through PoV, including **Mirror → Reflection** and **Rotten or Reeking → Toxic Aura**. **CM Blink remains eligible in dungeons**, where PoV Blink cannot land. This applies to ordinary creatures, bosses and Enforcers, including YAML chances of 100%; existing rolls and explicit admin-forced modifiers are preserved. Remaining candidates keep CM's group probability rules and maximum count, so excluded effects are not guaranteed a replacement. Later PoV changes such as Heir inheritance do not remove existing CM effects. See the [complete overlap policy](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-compatibility.md#automatic-modifier-overlap-filter).
-
-When compatible PoV is installed, CM automatically controls the shared enemy display: **PoV modifier icons first, then CM icons**, packed into right-aligned rows of **four**. Up to four effects use one row, five to eight use two, and nine to twelve use three; there is no six-icon cutoff. Stars use CM's own style. PoV's **Modifier display** setting does not hide or replace these shared icons/stars, and CM's **Modifier HUD Icon Layout** applies only outside this integration. PoV still controls modifier effects and optional names. Its visible status/ailment icons use the same size and right alignment in separate rows of four below the modifier block, with CM resistance text below them. PoV status visibility is retained; CM controls the shared icon size and placement. No config file is rewritten. This is client presentation only and is independent of CM's level-assignment mode. Missing PoV, another recognized star provider or a rejected HUD contract retains the existing display. See [scope, limitations and verification](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-compatibility.md).
-
-CreatureManager does not rewrite the selected setting or the other mod's configuration. Install the same gameplay mods on the server and all clients so ownership changes do not change which drop system is active.
-
-### Karma and Enforcers
-
-Karma is a regional pressure system based on a sliding 3x3 neighborhood of vanilla zones. Outdoor and dungeon neighborhoods track independent Karma, levels, decay, and Enforcer cooldowns while sharing the configured thresholds and gain rules. Kills of untamed, non-player creatures by a player, a tamed creature, or another player-side creature raise Karma in the current neighborhood; runtime-summoned creatures, including Enforcers and their minions, do not. Higher thresholds can add levels to future natural spawns, and idle regions decay over time.
-
-Enforcers turn high Karma into encounters. A biome or dungeon table can choose an Enforcer, minions, modifiers, level bonus, bonus loot, and location restrictions. Nearby overlapping player regions are evaluated as one connected check region to avoid duplicate rolls for the same group.
-
-New default `karma.yml` files include three DeepNorth encounters: Barka alone outdoors, ElakingMole with one Elaking in `TheHole01`, and JotunWarrior with one BlobMork in `MorkBorg`. Each uses `[40, 30, 2]` for required Karma, consumed Karma, and additional level bonus, inherits the Enforcer modifier rules, and grants its Enforcer's trophy plus two Silver Necklaces as bonus loot. The level bonus is not a final star cap. Dungeon entries match the location prefab names, not the dungeon generator names. Existing `karma.yml` files are preserved; add a DeepNorth section manually to enable these encounters in an existing configuration.
-
-Enforcer behavior can be used together with Karma levels or independently through BepInEx configuration. Current Karma appears near the minimap, and Enforcer events use localized center-screen messages.
-
-DropNSpawn's optional periodic dungeon spawner can consult `CreatureManager.CreatureManagerSpawnApi.CanSpawn(GameObject prefab, Vector3 position)` to honor the existing boss/Enforcer ordinary-spawn blocking settings. Call this API on Unity's main thread immediately before creation using the registered prefab and final world position. It evaluates current settings/state; it does not reserve a spawn or apply Enforcer/Karma summon behavior. Use the updated builds of both mods for this integration.
-
-Dungeon Enforcer location matching covers the registered interior zone, including rooms outside the entrance's location radius. Placement stays in that same zone. Loaded-scene placement accounts for the prefab capsule's bottom when positioning it on the floor; navigation still targets the floor, and a warned reservation keeps its selected position. These rules do not add support for relocated or multi-zone custom interiors.
-
-For troubleshooting, enable **3 - Karma → Dungeon Enforcer Diagnostics** on the server or host (default **Off**, local and not synchronized). `[DungeonEnforcerDiag]` reports counts by reason every 30 seconds, with at most three short prefab/location and coordinate samples per reason. Counts describe candidate checks and outcomes, not spawn probabilities. Toggle changes, world reset and a successful `karma.yml` reload clear the observations. No report is emitted for an empty window.
-
-`UnloadedAnchorFallback` means the server used an existing spawner ZDO because dungeon geometry was not loaded locally; it does **not** confirm free space around that point. `FloorMissing`, `CapsuleBlocked`, `PathAndLineBlocked`, `InvalidDungeonZone`, `MinionPositionMissing` and `ReservationCanceled` help distinguish placement failures. Dedicated-server client-assisted geometry validation is not implemented by this change: the existing anchor fallback, server authority, encounter costs and minion policy remain unchanged.
-
-## Common Workflows
-
-**Tune an existing creature**
-
-Find it in `creatures.reference.yml`, copy its identity into `creatures.yml`, and add only the fields being changed.
-
-**Build a customizable humanoid NPC or creature**
-
-Generated references compact repeated prefab entries into this weighted notation while preserving their first-occurrence order. The generated `usedByAttacks` field is informational and is ignored in active configuration. Component blocks already identify their kind, so no `type` field is generated or accepted.
-
-Install MonsterlabZ and refer to samples in creatures.sample.yml and attacks.sample.yml. Change those files name into creatures_sample.yml and attacks_sample.yml, respectively.
-
-
-**Create world progression**
-
-Use `levels.yml` for biome, group, prefab, boss, distance, and modifier rules. Keep broad defaults near the top and add narrow overrides only where needed.
-
-**Create regional encounters**
-
-Use `karma.yml` to tune Karma gain and decay, then assign outdoor or dungeon Enforcer tables by biome and optional location.
-
-**Reskin a creature**
-
-Inspect `textures.reference.txt`, place a PNG directly in the server's `textures` directory when needed, and reference it from the creature's texture slots. Rooted paths, subdirectories, traversal names, links, and non-PNG local files are rejected. The synchronized manifest is content-addressed, so clients request only missing hashes and keep the previous complete texture generation if a transfer or validation fails. CreatureManager creates a target-specific ragdoll prefab for configured scale, textures, or appearance instead of changing the shared source ragdoll. Texture entries are also attempted on matching ragdoll renderer names/paths; a ragdoll without a matching renderer logs a warning and leaves that slot unchanged. Existing `EffectData` scale flags run unchanged during creation, after which CreatureManager restores the exact configured scale on its target-specific ragdoll. Runtime texture property blocks keep configured body textures authoritative when `appearance.modelIndex` updates the ragdoll model.
-
-## Console Commands
-
-| Command | Purpose |
-|---|---|
-| `cm:reference creature` | Regenerate the compact creature reference. |
-| `cm:reference attack` | Regenerate the attack reference. |
-| `cm:reference ai` | Regenerate the AI reference. |
-| `cm:reference loadout` | Regenerate the creature loadout list. |
-| `cm:reference projectile` | Regenerate `projectile.reference.yml`. |
-| `cm:reference texture` | Regenerate the texture list. |
-| `cm:reference levelvisual` | Generate the vanilla level visual reference. |
-| `cm:full creature` | Generate the full creature scaffold. |
-| `cm:spawn <prefab> [modifiers] [level]` | Spawn a test creature with up to four forced modifiers and an optional exact level. |
-| `cm:karma` | Show the current outdoor or dungeon neighborhood Karma. |
-| `cm:karma <value>` | Set the current outdoor or dungeon neighborhood Karma to a non-negative value. |
-
-The spawn command supports prefab and comma-separated modifier completion. It is intended for testing and does not perform a normal level or modifier roll. `cm:spawn` and `cm:karma` are available to the local listen-server host and connected dedicated-server administrators; a dedicated-server console has no player position to target.
-
-## Git
-https://github.com/sighsorry1029/CreatureManager
+GitHub `main` documents current source and may include unreleased changes; check each document's version notes.
