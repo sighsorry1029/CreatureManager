@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.12
+
+- Restore compatibility with Path of Valheiman **6.0.7** for Full-mode boss modifiers, Blood Challenge rune additions, automatic modifier overlap filtering, and the combined HUD. Support PoV's expanded 64-bit modifier storage without losing effects above bit 31 or treating them as an empty modifier list. Compatibility still checks the required behavior contracts rather than requiring an exact PoV version or DLL hash.
+- Preserve PoV difficulty scaling when CM reads maximum health to retain missing HP before writing a new raw maximum. Keep already-scaled health writes separate, including Reaping and recovery paths, without applying difficulty twice or disabling PoV's protection for other mods.
+- Keep **CM boss stars + consumed Blood Challenge runes** in `Full`, including when PoV's newer local star cap would otherwise trim the rune contribution. Preserve PoV's cap in `Off` and `ExceptLevel`, including pending summons after a mode change. Existing ownership, duplicate-grant, phase and fixed-health safeguards remain in place.
+- Display PoV's new embedded modifier icons in the existing combined four-column layout. Cache and reuse CM-owned icon textures/sprites, release them when the integration is removed, and preserve PoV-owned assets and native HUD fallback. Existing overlap pairs, the dungeon Blink exception, status placement and user settings remain unchanged.
+- Add managed regression coverage for 32/64-bit effects, raw/final health, rune caps and mode changes, all 46 PoV icon resources, and cleanup/failure paths. See the [updated compatibility notes](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/pov-compatibility.md) for scope and remaining in-game checks. Update the server and all clients to **1.3.12** together and restart.
+
 ## 1.3.11
 
 - Fix compatible Path of Valheiman **Rune of the Blood Challenge** summons in CM `Full` mode: add the rune stars to CM's normal boss stars, including applicable Karma bonuses, instead of letting the later CM roll replace them. For example, three CM stars plus two runes produces five stars. The altar's five-rune limit caps the added stars, not the combined total. `ExceptLevel` and `Off` keep PoV's normal rune behavior.

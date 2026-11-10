@@ -8,6 +8,79 @@ overlap filter to PoV **Reeking** as well as **Rotten**. The YAML upgrade guidan
 in the [default configuration reference](defaults/README.md); the earlier verification
 records below retain their original version scope.
 
+## PoV 6.0.7 update — CreatureManager 1.3.12, 2026-11-10
+
+The supplied original PoV 6.0.7 DLL has SHA-256
+`D6F7D6AE1D4772650E8657AF030022ED2873FE430B48FADF5A57C076FA4069E1`.
+Its modifier enum is now Int64, with additional effects above bit 31. CM accepts
+the recognized Int32 and Int64 contracts rather than a release/hash allowlist.
+The older reader is zero-extended; the new reader uses PoV's complete stored mask,
+including `pt.crmod2`. Fresh/late boss checks and blood-rune modifier budgets must
+not mistake upper-bit-only effects for an empty creature or trim them. Selection
+still belongs to PoV's `Fill`, including its exclusions and group policies.
+The existing 14 overlap pairs and dungeon Blink exception are unchanged. New
+same-name effects such as PoV Deathward are not automatically treated as CM's
+self-revival effect.
+
+PoV now infers that a same-frame max-health read followed by a foreign max-health
+write is already scaled. CM also reads max health merely to preserve missing HP
+before writing a **raw** target. A one-use, thread-local character scope identifies
+that CM write at PoV's verified predicate call; other writers retain PoV's
+heuristic. The explicit final-health API and pending-current-health cleanup remain
+separate. A rejected raw integration withholds CM's raw health rewrite and does
+not record it as applied; it does not disable a valid final-health integration.
+The scope unwinds on exceptions and does not suppress a subsequent foreign
+read-derived write in the same call's postfix. No PoV difficulty formula is copied.
+
+`BossStars.Give` now clamps its input to PoV's configured star cap. Only CM's
+captured **Full** rune replay bypasses that local clamp, preserving the documented
+CM base stars plus consumed runes policy and the same rune modifier budget.
+Ordinary calls and Off/ExceptLevel keep PoV's cap. A pending switch out of Full
+also keeps that cap, including cap zero's intentional no-level/no-effect result.
+PoV's long phase-modifier storage and fixed-health phase behavior are preserved.
+No altar inventory handling, config values, or existing saved creatures are rewritten.
+
+The combined HUD retains four columns and its existing status placement. It reads
+all 64 bits and resolves either the older borrowed atlas or the new verified
+embedded `enemymod` PNGs. CM lazily creates and owns one texture/sprite pair per
+PNG; the bounded cache is reused across HUD/world recreation and released on
+adapter removal. Borrowed PoV atlas sprites are never destroyed. Partial decode
+or creation failures release CM's objects and retain native HUD fallback. PNGs
+use CM's fixed bilinear rendering; this does not promise identical mipmapping to
+PoV's own UI settings. Runtime DLL replacement is unsupported.
+
+Validation used Valheim 1.0.21 original client 26249040 and dedicated-server
+26266951 assemblies and Mono runtimes. The baseline Debug build and standalone
+checks passed. The old PoV harness stopped at the new health heuristic's native
+Unity boundary; that was a test-fixture limitation, not evidence of a game crash.
+The updated Debug build and checker build have zero warnings/errors. The final
+DLL passed standalone, PoV 6.0.7 client and PoV 6.0.7 server managed checks with
+zero failures, plus YAML sync/parser checks. The Debug plugin was deployed to
+the local Steam game's plugins directory with matching SHA-256.
+
+Release 1.3.12 was built with zero warnings/errors. Its final merged DLL also
+passed standalone and PoV 6.0.7 client/server managed checks with zero failures,
+plus the Release YAML sync/parser checks. The 17-file release ZIP was checked
+for CRC integrity, exact source-file contents, matching DLL/manifest version and
+the BepInEx 5.4.2360 dependency. The isolated Mono runs emit native Unity internal-call
+warnings because they do not start the Unity engine; their passing managed checks
+do not establish graphics or game-session compatibility.
+
+Added cases exercise the real read heuristic, raw/final HP and deficit preservation,
+nested foreign writes, rejected writes and exception cleanup; 32/64-bit readers,
+upper-bit-only boss effects and long phase carry; five runes with caps zero/two
+across Full/Off/ExceptLevel and pending mode changes; all 46 PNG resources,
+cross-HUD cache reuse and partial-failure/idempotent cleanup. Native graphics,
+world/ownership inputs, PoV random effect application and transport are fixtures.
+The earlier 5.3.6 original DLL is no longer available locally; its full runtime
+suite was not rerun, although the Int32 reader is covered by a synthetic fixture.
+Logs and input/output hashes are under `artifacts/PoV607Patch-20261110` locally.
+
+No Unity world or actual host/dedicated multiplayer session was run. Use the same
+patched CM on server and clients, then check new and saved bosses, owner transfer,
+blood summons/phase changes, injured and Reaping creatures, and the combined HUD
+through world exit/rejoin. These are remaining game checks, not passed tests.
+
 ## Activation and scope
 
 CM no longer requires an exact PoV release number. After plugin loading it checks
@@ -15,6 +88,8 @@ the signatures, state types and relevant original IL of the methods it uses:
 
 - Final HP: the scaled maximum-health setter, thread-local nesting/exception
   cleanup, and per-character pending current-health conversion.
+- Raw HP: the optional read-derived heuristic, thread-local read state and caller
+  guard; CM's exception is limited to its own raw write.
 - Live level ownership: the recognized level providers in `ForeignLevels`.
 - Star loot: entry initializes an empty `__state`, and Postfix/Finalizer return
   without side effects for that empty state, preserving the original exception.
@@ -57,7 +132,8 @@ CM modifiers are independent and can be disabled separately.
 
 For an ordinary boss grant without a blood rune, there is no second star roll,
 forced full heal or call to `BossStars.Give`.
-Before invoking PoV, CM skips bosses with any stored `pt.crmod` flags, including
+Before invoking PoV, CM skips bosses with any stored modifier flags (including
+the upper `pt.crmod2` word when present), including
 effects hidden by PoV settings, because `Fill` can remove existing effects.
 
 The additive ZDO bool `CreatureManager_PovBossModifiersPending` records only a
@@ -233,7 +309,8 @@ there is no separate left-hand status column.
 
 The adapter reads active PoV effects at most every 0.25 seconds per displayed HUD.
 It resolves reflection once at startup and reuses icon lists/objects. Destroyed
-sprites are retried; PoV owns their assets. Per-HUD state is weakly keyed and
+sprites are retried. Older atlas sprites are borrowed from PoV; new embedded PNGs
+are decoded into a CM-owned cache released on adapter removal. Per-HUD state is weakly keyed and
 cleared on world teardown, and surviving named CM rows are reused after a reset.
 Normal frames neither create icons nor force a default-height/expanded-height
 layout cycle. Actual performance has not been measured.

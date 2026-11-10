@@ -1,9 +1,11 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Resources;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
@@ -18,11 +20,16 @@ internal static class CreaturePovHud
     private const int Columns = 4, Size = 17, Step = 18;
     private static Harmony? _harmony;
     private static bool _enabled;
-    private static Func<Character, int>? _modifiers;
+    private static Func<Character, long>? _modifiers;
     private static Func<int, Sprite>? _tile;
     private static IDictionary? _foreignRows;
     private static Func<object, RectTransform>? _foreignRoot;
-    private static readonly List<(int Mask, int Tile)> Catalog = new();
+    private static readonly List<(long Mask, int Tile, string? Resource)> Catalog = new();
+    private static Assembly? _iconAssembly;
+    private static Func<Texture2D, byte[], bool, bool>? _loadImage;
+    // Bounded by the installed PoV catalog. Reused across worlds; only CM-created
+    // sprites/textures are released when this adapter is removed. Atlas sprites are borrowed.
+    private static readonly Dictionary<string, (Texture2D Texture, Sprite Sprite)> OwnedIcons = new(StringComparer.Ordinal);
     private static ConditionalWeakTable<GameObject, Row> Rows = new();
 
     internal sealed class Row
@@ -34,7 +41,8 @@ internal static class CreaturePovHud
         internal RectTransform? Resistance, Statuses, StatusParent;
         internal readonly List<(RectTransform Slot, Text? Counter)> StatusSlots = new();
         internal readonly List<(RectTransform Slot, Text? Counter)> ActiveStatuses = new();
-        internal int Mask = -1;
+        internal long Mask;
+        internal bool HasMask;
         internal float NextRefresh, ResistanceOffset;
         internal bool Ready;
     }
@@ -46,24 +54,30 @@ internal static class CreaturePovHud
         if (!allowed) return; // Another star provider keeps its existing HUD policy.
         Type hud = assembly.GetType("PassiveTree.RarityHud", true)!;
         Type mods = assembly.GetType("PassiveTree.RarityMods", true)!;
-        Type bits = mods.GetNestedType("Mod")!;
-        if (bits == null || !bits.IsEnum || Enum.GetUnderlyingType(bits) != typeof(int))
-            throw new NotSupportedException("PoV modifier HUD representation changed");
+        Type bits = CreaturePovCompatibility.ModifierType(mods);
         MethodInfo on = Method(mods, "On", bits, typeof(Character));
-        var character = Expression.Parameter(typeof(Character));
-        _modifiers = Expression.Lambda<Func<Character, int>>(Expression.Convert(Expression.Call(on, character), typeof(int)), character).Compile();
+        _modifiers = CreaturePovCompatibility.ModifierReader(on);
         _tile = (Func<int, Sprite>)Delegate.CreateDelegate(typeof(Func<int, Sprite>),
             Method(assembly.GetType("PassiveTree.UI.UiKit", true)!, "Tile", typeof(Sprite), typeof(int)));
         var map = (Dictionary<string, int>)AccessTools.DeclaredField(assembly.GetType("PassiveTree.IconMap", true), "ByGroup").GetValue(null);
         MethodInfo icon = Method(mods, "Icon", typeof(string), bits);
         MethodInfo each = Method(mods, "Each", typeof(IEnumerable<>).MakeGenericType(bits), bits);
+        var resources = new HashSet<string>(assembly.GetManifestResourceNames(), StringComparer.Ordinal);
         Catalog.Clear();
-        foreach (object bit in (IEnumerable)each.Invoke(null, new[] { Enum.ToObject(bits, -1) })!)
+        foreach (object bit in (IEnumerable)each.Invoke(null, new[] { Enum.ToObject(bits, -1L) })!)
         {
             string key = (string)icon.Invoke(null, new[] { bit })!;
-            if (key != null && map.TryGetValue(key, out int index)) Catalog.Add((Convert.ToInt32(bit), index));
+            long mask = CreaturePovCompatibility.ModifierValue(bits, bit);
+            if (key != null && map.TryGetValue(key, out int index)) Catalog.Add((mask, index, null));
+            else if (key != null && key.StartsWith("enemymod:", StringComparison.Ordinal) &&
+                     resources.Contains("PassiveTree." + key.Replace(':', '.') + ".png"))
+                Catalog.Add((mask, -1, "PassiveTree." + key.Replace(':', '.') + ".png"));
+            else throw new NotSupportedException("PoV modifier icon source changed: " + key);
         }
         if (Catalog.Count == 0) throw new NotSupportedException("PoV modifier icon catalog is empty");
+        _iconAssembly = assembly;
+        _loadImage = (Func<Texture2D, byte[], bool, bool>)Delegate.CreateDelegate(typeof(Func<Texture2D, byte[], bool, bool>),
+            Method(typeof(ImageConversion), "LoadImage", typeof(bool), typeof(Texture2D), typeof(byte[]), typeof(bool)));
         FieldInfo rows = AccessTools.DeclaredField(hud, "rows");
         FieldInfo root = AccessTools.DeclaredField(hud.GetNestedType("Row", BindingFlags.NonPublic), "Root");
         if (rows == null || !rows.IsStatic || !typeof(IDictionary).IsAssignableFrom(rows.FieldType) || root?.FieldType != typeof(RectTransform))
@@ -115,26 +129,81 @@ internal static class CreaturePovHud
         row.NextRefresh = Time.unscaledTime + .25f;
         try
         {
-            int mask = _modifiers!(character);
-            if (mask == row.Mask && !row.Sprites.Any(sprite => sprite == null)) return row;
+            long mask = _modifiers!(character);
+            if (row.HasMask && mask == row.Mask && !row.Sprites.Any(sprite => sprite == null)) return row;
             row.Sprites.Clear();
             bool complete = true;
             foreach (var entry in Catalog)
             {
                 if ((mask & entry.Mask) == 0) continue;
-                Sprite sprite = _tile!(entry.Tile);
+                Sprite sprite = entry.Resource == null ? _tile!(entry.Tile) : EmbeddedIcon(entry.Resource);
                 if (sprite != null) row.Sprites.Add(sprite);
                 else complete = false; // Assets may not be ready yet; retry next refresh.
             }
-            row.Mask = complete ? mask : -1;
+            row.Mask = mask;
+            row.HasMask = complete;
             return row;
         }
         catch (Exception ex)
         {
             _enabled = false;
+            ClearRows();
             CreatureManagerPlugin.Log.LogWarning($"PoV combined HUD disabled until restart; original display retained: {ex.Message}");
             return null;
         }
+    }
+
+    private static Sprite EmbeddedIcon(string resource)
+    {
+        if (OwnedIcons.TryGetValue(resource, out var cached))
+        {
+            if (cached.Sprite != null && cached.Texture != null) return cached.Sprite;
+            UnityEngine.Object.Destroy(cached.Sprite);
+            UnityEngine.Object.Destroy(cached.Texture);
+            OwnedIcons.Remove(resource);
+        }
+        using Stream stream = _iconAssembly!.GetManifestResourceStream(resource) ?? throw new MissingManifestResourceException(resource);
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        Texture2D? texture = null;
+        Sprite? sprite = null;
+        try
+        {
+            texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            if (!_loadImage!(texture, bytes.ToArray(), true)) throw new InvalidDataException("Invalid PoV icon: " + resource);
+            texture.name = resource;
+            texture.filterMode = FilterMode.Bilinear;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(.5f, .5f), 100f, 0, SpriteMeshType.FullRect);
+            if (sprite == null) throw new InvalidDataException("Could not create PoV icon: " + resource);
+            sprite.name = resource;
+            OwnedIcons.Add(resource, (texture, sprite));
+            return sprite;
+        }
+        catch
+        {
+            if (sprite != null) UnityEngine.Object.Destroy(sprite);
+            if (texture != null) UnityEngine.Object.Destroy(texture);
+            throw;
+        }
+    }
+
+    private static void ReleaseOwnedIcons()
+    {
+        // Clear references in surviving CM rows before releasing our native objects.
+        if (EnemyHud.instance is EnemyHud enemyHud)
+            foreach (EnemyHud.HudData hud in enemyHud.m_huds.Values)
+                if (hud.m_gui != null && Rows.TryGetValue(hud.m_gui, out Row row))
+                    foreach (Image icon in row.Icons)
+                        if (icon != null) icon.sprite = null;
+        foreach (var icon in OwnedIcons.Values)
+        {
+            UnityEngine.Object.Destroy(icon.Sprite);
+            UnityEngine.Object.Destroy(icon.Texture);
+        }
+        OwnedIcons.Clear();
+        _iconAssembly = null;
+        _loadImage = null;
     }
 
     internal static int RowCount(int count) => (Math.Max(0, count) + Columns - 1) / Columns;
@@ -323,6 +392,7 @@ internal static class CreaturePovHud
     {
         _enabled = false;
         if (_harmony != null) { _harmony.UnpatchSelf(); RebuildCaller(); _harmony = null; }
+        ReleaseOwnedIcons();
         ClearRows();
         Catalog.Clear();
         _modifiers = null; _tile = null; _foreignRows = null; _foreignRoot = null;

@@ -21,6 +21,10 @@ internal static partial class CreaturePovCompatibility
     private static Harmony? _levelHarmony;
     private static Harmony? _lootHarmony;
     private static Harmony? _bossHarmony;
+    private static Harmony? _rawHealthHarmony;
+    private static Func<Character, bool>? _derivedHealthRead;
+    private static bool _rawHealthSupported = true;
+    [ThreadStatic] private static Character? _rawHealthCharacter;
     private static Action<Character, float>? _setScaledMaxHealth;
     private static Func<Character, bool>? _removePendingHealth;
     private const string BossPendingKey = "CreatureManager_PovBossModifiersPending";
@@ -31,8 +35,9 @@ internal static partial class CreaturePovCompatibility
     private static Action<Character, int>? _fillBossModifiers;
     private static AccessTools.FieldRef<Character, ZNetView>? _characterView;
     private static bool _bossFailureReported;
-    private static Func<Character, int>? _activeModifiers;
-    private static (int Pov, CreatureModifierManager.ModifierMask Cm)[] _modifierExclusions = Array.Empty<(int, CreatureModifierManager.ModifierMask)>();
+    private static Func<Character, long>? _activeModifiers;
+    private static Func<Character, long>? _storedModifiers;
+    private static (long Pov, CreatureModifierManager.ModifierMask Cm)[] _modifierExclusions = Array.Empty<(long, CreatureModifierManager.ModifierMask)>();
 
     internal static bool HasHealthBridge => _setScaledMaxHealth != null;
 
@@ -58,6 +63,8 @@ internal static partial class CreaturePovCompatibility
     private static void Install(Assembly assembly)
     {
         Enable("final HP", () => InstallHealth(assembly), ClearHealth);
+        _rawHealthSupported = false;
+        Enable("raw HP", () => InstallRawHealth(assembly), RemoveRawHealth);
         Enable("live level ownership", () => InstallLevels(assembly), () => RemoveHarmony(ref _levelHarmony));
         Enable("star-loot ownership", () => InstallLoot(assembly), RemoveLoot);
         Enable("Full boss modifiers", () => InstallBosses(assembly), RemoveBosses);
@@ -69,9 +76,7 @@ internal static partial class CreaturePovCompatibility
     private static void InstallModifierExclusions(Assembly assembly)
     {
         Type mods = assembly.GetType("PassiveTree.RarityMods", true)!;
-        Type bits = mods.GetNestedType("Mod")!;
-        if (bits == null || !bits.IsEnum || Enum.GetUnderlyingType(bits) != typeof(int))
-            throw new NotSupportedException("PoV active modifier representation changed");
+        Type bits = ModifierType(mods);
         MethodInfo on = StaticMethod(mods, "On", bits, typeof(Character));
         // Resolve named flags once; do not couple this policy to a PoV release number
         // or to stored flags for effects disabled by PoV's live configuration.
@@ -92,23 +97,41 @@ internal static partial class CreaturePovCompatibility
             ("Rotten", CreatureModifierManager.ModifierMask.ToxicAura),
             ("Reeking", CreatureModifierManager.ModifierMask.ToxicAura)
         };
-        var resolved = new (int Pov, CreatureModifierManager.ModifierMask Cm)[mappings.Length];
-        int seen = 0;
+        var resolved = new (long Pov, CreatureModifierManager.ModifierMask Cm)[mappings.Length];
+        long seen = 0;
         for (int i = 0; i < mappings.Length; i++)
         {
             if (!Enum.IsDefined(bits, mappings[i].Pov))
                 throw new NotSupportedException("PoV modifier missing: " + mappings[i].Pov);
-            int value = Convert.ToInt32(Enum.Parse(bits, mappings[i].Pov));
-            if (value <= 0 || (value & (value - 1)) != 0 || (seen & value) != 0)
+            long value = ModifierValue(bits, Enum.Parse(bits, mappings[i].Pov));
+            if (value == 0 || (value & unchecked(value - 1)) != 0 || (seen & value) != 0)
                 throw new NotSupportedException("PoV modifier flag changed: " + mappings[i].Pov);
             resolved[i] = (value, mappings[i].Cm);
             seen |= value;
         }
-        var character = Expression.Parameter(typeof(Character));
-        var reader = Expression.Lambda<Func<Character, int>>(
-            Expression.Convert(Expression.Call(on, character), typeof(int)), character).Compile();
         _modifierExclusions = resolved;
-        _activeModifiers = reader;
+        _activeModifiers = ModifierReader(on);
+    }
+
+    internal static Type ModifierType(Type mods)
+    {
+        Type? bits = mods.GetNestedType("Mod");
+        if (bits == null || !bits.IsEnum ||
+            (Enum.GetUnderlyingType(bits) != typeof(int) && Enum.GetUnderlyingType(bits) != typeof(long)))
+            throw new NotSupportedException("PoV modifier representation changed");
+        return bits;
+    }
+
+    internal static long ModifierValue(Type bits, object value) => Enum.GetUnderlyingType(bits) == typeof(int)
+        ? unchecked((uint)Convert.ToInt32(value)) : Convert.ToInt64(value);
+
+    internal static Func<Character, long> ModifierReader(MethodInfo method)
+    {
+        var character = Expression.Parameter(typeof(Character));
+        Expression call = Expression.Call(method, character);
+        // Zero-extend the old signed Int32 flags; do not invent upper flags.
+        if (Enum.GetUnderlyingType(method.ReturnType) == typeof(int)) call = Expression.Convert(call, typeof(uint));
+        return Expression.Lambda<Func<Character, long>>(Expression.Convert(call, typeof(long)), character).Compile();
     }
 
     internal static CreatureModifierManager.ModifierMask GetExcludedModifiers(Character character)
@@ -117,7 +140,7 @@ internal static partial class CreaturePovCompatibility
         if (_activeModifiers == null) return excluded;
         try
         {
-            int active = _activeModifiers(character);
+            long active = _activeModifiers(character);
             foreach (var rule in _modifierExclusions)
                 if ((active & rule.Pov) != 0) excluded |= rule.Cm;
             // PoV Blink cannot land indoors. Keep CM's guarded dungeon Blink.
@@ -136,7 +159,7 @@ internal static partial class CreaturePovCompatibility
     private static void ClearModifierExclusions()
     {
         _activeModifiers = null;
-        _modifierExclusions = Array.Empty<(int, CreatureModifierManager.ModifierMask)>();
+        _modifierExclusions = Array.Empty<(long, CreatureModifierManager.ModifierMask)>();
     }
 
     private static void Enable(string feature, Action install, Action cleanup)
@@ -214,6 +237,93 @@ internal static partial class CreaturePovCompatibility
         _levelHarmony.Patch(foreign, prefix: new HarmonyMethod(typeof(CreaturePovCompatibility), nameof(ForeignLevelsPrefix)));
     }
 
+    private static void InstallRawHealth(Assembly assembly)
+    {
+        if (!HasHealthBridge) throw new NotSupportedException("final-health contract is required; CM raw HP writes are suspended");
+        Type difficulty = assembly.GetType("PassiveTree.EnemyDifficulty", true)!;
+        MethodInfo? derived = AccessTools.DeclaredMethod(difficulty, "DerivedFromRead");
+        Type? readPatch = difficulty.GetNestedType("MaxHealthRead", BindingFlags.NonPublic);
+        FieldInfo? last = AccessTools.DeclaredField(difficulty, "lastRead");
+        FieldInfo? frame = AccessTools.DeclaredField(difficulty, "lastReadFrame");
+        if (derived == null && readPatch == null && last == null && frame == null)
+        {
+            _rawHealthSupported = true; // Previously validated final-health contract, without the read heuristic.
+            return;
+        }
+        derived = StaticMethod(difficulty, "DerivedFromRead", typeof(bool), typeof(Character));
+        MethodInfo read = StaticMethod(readPatch!, "Postfix", typeof(void), typeof(Character));
+        if (last?.FieldType != typeof(Character) || frame?.FieldType != typeof(int) ||
+            !last.IsStatic || !frame.IsStatic || !last.IsDefined(typeof(ThreadStaticAttribute), false) ||
+            !frame.IsDefined(typeof(ThreadStaticAttribute), false))
+            throw new NotSupportedException("PoV read-derived HP state changed; CM raw HP writes are suspended");
+        RequireMember(read, last, OpCodes.Stsfld);
+        RequireMember(read, frame, OpCodes.Stsfld);
+        RequireMember(derived, last, OpCodes.Ldsfld);
+        RequireMember(derived, frame, OpCodes.Ldsfld);
+        MethodInfo prefix = StaticMethod(difficulty.GetNestedType("MaxHealth", BindingFlags.NonPublic)!, "Prefix", typeof(void),
+            typeof(Character), typeof(float).MakeByRefType(), difficulty.GetNestedType("MaxHealthState")!.MakeByRefType());
+        ValidateRawHealthCaller(PatchProcessor.GetOriginalInstructions(prefix), derived);
+        _derivedHealthRead = (Func<Character, bool>)Delegate.CreateDelegate(typeof(Func<Character, bool>), derived);
+        _rawHealthHarmony = new Harmony("sighsorry.CreatureManager.PoV.RawHealth");
+        _rawHealthHarmony.Patch(prefix, transpiler: new HarmonyMethod(typeof(CreaturePovCompatibility), nameof(RawHealthTranspiler)));
+        // PoV may have compiled this patch into Character's wrapper before late startup.
+        _rawHealthHarmony.CreateProcessor(AccessTools.DeclaredMethod(typeof(Character), nameof(Character.SetMaxHealth))).Patch();
+        _rawHealthSupported = true;
+    }
+
+    private static IEnumerable<CodeInstruction> RawHealthTranspiler(IEnumerable<CodeInstruction> instructions)
+    {
+        var codes = instructions.ToList();
+        int index = ValidateRawHealthCaller(codes, _derivedHealthRead!.Method);
+        codes[index].opcode = OpCodes.Call;
+        codes[index].operand = AccessTools.DeclaredMethod(typeof(CreaturePovCompatibility), nameof(IsDerivedHealthRead));
+        return codes;
+    }
+
+    private static int ValidateRawHealthCaller(List<CodeInstruction> instructions, MethodInfo derived)
+    {
+        var codes = instructions.Where(code => code.opcode != OpCodes.Nop).ToList();
+        int index = codes.FindIndex(code => code.Calls(derived));
+        if (index < 0 || codes.Count(code => code.Calls(derived)) != 1 || index + 3 >= codes.Count ||
+            (codes[index + 1].opcode != OpCodes.Brfalse && codes[index + 1].opcode != OpCodes.Brfalse_S) ||
+            codes[index + 2].opcode != OpCodes.Ret || codes[index + 1].operand is not Label target ||
+            !codes[index + 3].labels.Contains(target))
+            throw new NotSupportedException("PoV read-derived HP guard changed; CM raw HP writes are suspended");
+        return instructions.IndexOf(codes[index]);
+    }
+
+    private static bool IsDerivedHealthRead(Character character)
+    {
+        if (_rawHealthCharacter is not null && ReferenceEquals(_rawHealthCharacter, character))
+        {
+            _rawHealthCharacter = null; // One raw write, not a later foreign write in its postfix.
+            return false;
+        }
+        return _derivedHealthRead!(character);
+    }
+
+    internal static bool TrySetRawMaxHealth(Character character, float health)
+    {
+        if (!_rawHealthSupported) return false;
+        Character? previous = _rawHealthCharacter;
+        _rawHealthCharacter = character;
+        try { character.SetMaxHealth(health); return true; }
+        finally { _rawHealthCharacter = previous; }
+    }
+
+    private static void RemoveRawHealth()
+    {
+        _rawHealthSupported = false;
+        if (_rawHealthHarmony != null)
+        {
+            _rawHealthHarmony.UnpatchSelf();
+            _rawHealthHarmony.CreateProcessor(AccessTools.DeclaredMethod(typeof(Character), nameof(Character.SetMaxHealth))).Patch();
+            _rawHealthHarmony = null;
+        }
+        _derivedHealthRead = null;
+        _rawHealthCharacter = null;
+    }
+
     private static void InstallLoot(Assembly assembly)
     {
         Type stars = assembly.GetType("PassiveTree.CreatureStars", true)!;
@@ -257,15 +367,12 @@ internal static partial class CreaturePovCompatibility
         Type api = assembly.GetType("Valheiman.Api.Creatures", true)!;
         Type difficulty = assembly.GetType("PassiveTree.EnemyDifficulty", true)!;
         MethodInfo fill = StaticMethod(mods, "Fill", typeof(void), typeof(Character), typeof(int));
-        Type modBits = mods.GetNestedType("Mod")!;
-        if (modBits == null || !modBits.IsEnum || Enum.GetUnderlyingType(modBits) != typeof(int))
-            throw new NotSupportedException("PoV stored modifier representation changed");
+        Type modBits = ModifierType(mods);
         MethodInfo set = StaticMethod(mods, "Set", typeof(void), typeof(Character), modBits);
         MethodInfo stored = StaticMethod(mods, "Stored", modBits, typeof(Character));
         RequireMember(fill, stored);
         RequireMember(fill, set);
-        RequireLiteral(stored, "pt.crmod");
-        RequireLiteral(set, "pt.crmod");
+        ValidateModifierStorage(mods, modBits, stored, set);
         MethodInfo on = StaticMethod(boss, "get_On", typeof(bool));
         MethodInfo working = StaticMethod(rarity, "get_Working", typeof(bool));
         RequireMember(working, AccessTools.DeclaredPropertyGetter(difficulty, "SystemOn"));
@@ -277,12 +384,38 @@ internal static partial class CreaturePovCompatibility
         _bossModsPerStar = ConfigEntry<int>(boss, "ModsPerStar");
         // Character.m_nview is protected in the original game DLL, not a public API.
         _characterView = AccessTools.FieldRefAccess<Character, ZNetView>("m_nview");
+        _storedModifiers = ModifierReader(stored);
         _fillBossModifiers = (Action<Character, int>)Delegate.CreateDelegate(typeof(Action<Character, int>), fill);
         MethodInfo awake = AccessTools.DeclaredMethod(typeof(ZNetView), "Awake");
         RequireMember(awake, AccessTools.DeclaredField(typeof(ZNetView), "m_initZDO"));
         _bossHarmony = new Harmony("sighsorry.CreatureManager.PoV.Bosses");
         _bossHarmony.Patch(awake, prefix: new HarmonyMethod(typeof(CreaturePovCompatibility), nameof(BossViewPrefix)),
             postfix: new HarmonyMethod(typeof(CreaturePovCompatibility), nameof(BossViewPostfix)));
+    }
+
+    private static void ValidateModifierStorage(Type mods, Type bits, MethodInfo stored, MethodInfo set)
+    {
+        if (Enum.GetUnderlyingType(bits) == typeof(int))
+        {
+            RequireLiteral(stored, "pt.crmod");
+            RequireLiteral(set, "pt.crmod");
+            return;
+        }
+        MethodInfo read = StaticMethod(mods, "Read", bits, typeof(ZDO));
+        MethodInfo write = StaticMethod(mods, "Write", typeof(void), typeof(ZDO), bits);
+        RequireMember(stored, read);
+        RequireMember(set, write);
+        foreach (string key in new[] { "pt.crmod", "pt.crmod2" })
+        {
+            RequireLiteral(read, key);
+            RequireLiteral(write, key);
+        }
+        RequireMember(read, AccessTools.DeclaredMethod(typeof(ZDO), "GetInt", new[] { typeof(string), typeof(int) }));
+        RequireMember(write, AccessTools.DeclaredMethod(typeof(ZDO), "Set", new[] { typeof(string), typeof(int) }));
+        var codes = PatchProcessor.GetOriginalInstructions(read);
+        if (!codes.Any(code => code.opcode == OpCodes.Conv_U8) || !codes.Any(code => code.opcode == OpCodes.Or) ||
+            !codes.Where((code, i) => i > 0 && code.opcode == OpCodes.Shl && codes[i - 1].LoadsConstant(32)).Any())
+            throw new NotSupportedException("PoV split modifier storage changed");
     }
 
     private static void RequireLiteral(MethodInfo method, string value)
@@ -320,7 +453,7 @@ internal static partial class CreaturePovCompatibility
 
     private static void ReserveBossModifiers(Character character, ZDO zdo)
     {
-        if (zdo == null || zdo.GetInt("pt.crmod") != 0 || CreatureLevelManager.IsFrozenKingPhaseTwo(character)) return;
+        if (zdo == null || HasStoredBossModifiers(character) || CreatureLevelManager.IsFrozenKingPhaseTwo(character)) return;
         // Do not consult unsynchronized settings or character HP during Awake.
         // The existing Character Start/spawn lifecycle queues the final owner decision.
         zdo.Set(BossPendingKey, true);
@@ -344,7 +477,7 @@ internal static partial class CreaturePovCompatibility
         // Consume before calling PoV: Fill may partially write flags/HP/wards before
         // throwing, and must never be retried or re-entered as a new grant.
         zdo.Set(BossPendingKey, false);
-        if (!allowed || zdo.GetInt("pt.crmod") != 0) return true;
+        if (!allowed || HasStoredBossModifiers(character)) return true;
         long count = (long)Math.Max(0, character.GetLevel() - 1) * (_bossModsPerStar?.Value ?? 0);
         if (count <= 0) return true;
         try { _fillBossModifiers(character, (int)Math.Min(int.MaxValue, count)); }
@@ -360,6 +493,12 @@ internal static partial class CreaturePovCompatibility
             _bossFailureReported = true;
             CreatureManagerPlugin.Log.LogWarning($"PoV boss modifier compatibility disabled until restart; the failed grant will not be retried: {ex.Message}");
         }
+    }
+
+    private static bool HasStoredBossModifiers(Character character)
+    {
+        try { return _storedModifiers!(character) != 0; }
+        catch (Exception ex) { DisableBossGrants(ex); return true; }
     }
 
     private static void ValidateHealthScope(List<CodeInstruction> instructions, FieldInfo scope)
@@ -483,6 +622,7 @@ internal static partial class CreaturePovCompatibility
     private static void RemoveBosses()
     {
         _fillBossModifiers = null;
+        _storedModifiers = null;
         _bossOn = _rarityWorking = null;
         _characterView = null;
         _killedBefore = _leftAlone = null;
@@ -498,6 +638,7 @@ internal static partial class CreaturePovCompatibility
         {
             RemoveBloodChallenges();
             ClearModifierExclusions();
+            RemoveRawHealth();
             ClearHealth();
             try { RemoveBosses(); }
             finally
@@ -511,6 +652,6 @@ internal static partial class CreaturePovCompatibility
             }
             _otherLevelProvider = false;
         }
-        finally { _checked = false; }
+        finally { _checked = false; _rawHealthSupported = true; }
     }
 }

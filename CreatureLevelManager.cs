@@ -497,9 +497,8 @@ internal static class CreatureLevelManager
         {
             RestoreStoredHealthMultiplier(character, zdo);
         }
-        else if (TrySelectHealthMultiplier(character, out float healthMultiplier))
+        else if (TrySelectHealthMultiplier(character, out float healthMultiplier) && ApplyHealthMultiplier(character, healthMultiplier))
         {
-            ApplyHealthMultiplier(character, healthMultiplier);
             zdo.Set(HealthMultiplierKey, healthMultiplier);
             zdo.Set(HealthAppliedKey, true);
         }
@@ -1368,13 +1367,14 @@ internal static class CreatureLevelManager
         StoreSpeedMultiplier(character, zdo);
         if (TrySelectHealthMultiplier(character, out float healthMultiplier))
         {
-            ApplyHealthMultiplier(character, healthMultiplier);
-            zdo.Set(HealthMultiplierKey, healthMultiplier);
-            zdo.Set(HealthAppliedKey, true);
+            if (ApplyHealthMultiplier(character, healthMultiplier))
+            {
+                zdo.Set(HealthMultiplierKey, healthMultiplier);
+                zdo.Set(HealthAppliedKey, true);
+            }
         }
-        else if (zdo.GetBool(HealthAppliedKey, false))
+        else if (zdo.GetBool(HealthAppliedKey, false) && ApplyHealthMultiplier(character, 1f))
         {
-            ApplyHealthMultiplier(character, 1f);
             zdo.Set(HealthMultiplierKey, 1f);
             zdo.Set(HealthAppliedKey, false);
         }
@@ -1424,9 +1424,8 @@ internal static class CreatureLevelManager
         if (sourceZdo.GetBool(HealthAppliedKey, false))
         {
             float healthMultiplier = Mathf.Max(0f, sourceZdo.GetFloat(HealthMultiplierKey, 1f));
-            if (healthMultiplier > 0f)
+            if (healthMultiplier > 0f && ApplyHealthMultiplier(target, healthMultiplier))
             {
-                ApplyHealthMultiplier(target, healthMultiplier);
                 targetZdo.Set(HealthMultiplierKey, healthMultiplier);
                 targetZdo.Set(HealthAppliedKey, true);
             }
@@ -2433,38 +2432,39 @@ internal static class CreatureLevelManager
         return Mathf.Max(0f, 1f + steps * perStep);
     }
 
-    private static void ApplyHealthMultiplier(Character character, float multiplier)
+    private static bool ApplyHealthMultiplier(Character character, float multiplier)
     {
         if (multiplier <= 0f || float.IsNaN(multiplier) || float.IsInfinity(multiplier))
         {
-            return;
+            return false;
         }
 
         float vanillaMaxHealth = character.GetMaxHealthBase() * Math.Max(1, character.GetLevel());
         float targetMaxHealth = vanillaMaxHealth * multiplier;
         if (targetMaxHealth <= 0f || float.IsNaN(targetMaxHealth) || float.IsInfinity(targetMaxHealth))
         {
-            return;
+            return false;
         }
 
         float currentMaxHealth = character.GetMaxHealth();
         if (Mathf.Approximately(currentMaxHealth, targetMaxHealth))
         {
-            return;
+            return true;
         }
 
         float currentHealth = character.GetHealth();
         float missingHealth = Mathf.Max(0f, currentMaxHealth - currentHealth);
-        character.SetMaxHealth(targetMaxHealth);
+        if (!CreaturePovCompatibility.TrySetRawMaxHealth(character, targetMaxHealth)) return false;
         // This is a raw max-health write: PoV must still apply difficulty once.
         // Restore the deficit against its resulting max, without its raw-HP conversion.
         if (CreaturePovCompatibility.HasHealthBridge) targetMaxHealth = character.GetMaxHealth();
         if (currentMaxHealth > 0f && currentHealth > 0f)
         {
-            if (targetMaxHealth <= 0f || float.IsNaN(targetMaxHealth) || float.IsInfinity(targetMaxHealth)) return;
+            if (targetMaxHealth <= 0f || float.IsNaN(targetMaxHealth) || float.IsInfinity(targetMaxHealth)) return false;
             float minimumHealth = Mathf.Min(1f, targetMaxHealth);
             CreaturePovCompatibility.SetFinalHealth(character, Mathf.Clamp(targetMaxHealth - missingHealth, minimumHealth, targetMaxHealth));
         }
+        return true;
     }
 
     private static bool TrySelectLevel(List<float> weights, string prefabName, out int level)

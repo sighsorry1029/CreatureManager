@@ -33,6 +33,7 @@ internal static partial class CreaturePovCompatibility
         internal int Runes;
         internal bool Full;
         internal bool LevelAssigned;
+        internal bool CompletedWithoutLevel;
     }
 
     private sealed class BloodPhaseScope
@@ -87,6 +88,7 @@ internal static partial class CreaturePovCompatibility
     private static void ValidateBloodGive(List<CodeInstruction> instructions)
     {
         var codes = instructions.Where(code => code.opcode != OpCodes.Nop).ToList();
+        FindBloodCap(codes);
         int[] levels = Enumerable.Range(0, codes.Count).Where(i => codes[i].operand is MethodInfo method &&
             method.DeclaringType == typeof(Character) && method.Name == nameof(Character.SetLevel)).ToArray();
         int[] fills = Enumerable.Range(0, codes.Count).Where(i => codes[i].operand is MethodInfo method &&
@@ -119,6 +121,51 @@ internal static partial class CreaturePovCompatibility
             throw new NotSupportedException("PoV blood-rune modifier budget or rarity guard changed");
     }
 
+    private static int FindBloodCap(List<CodeInstruction> codes)
+    {
+        List<CodeInstruction> original = codes;
+        codes = codes.Where(code => code.opcode != OpCodes.Nop).ToList();
+        int[] caps = Enumerable.Range(0, codes.Count).Where(i => codes[i].operand is MethodInfo method &&
+            method.DeclaringType?.FullName == "PassiveTree.BossStars" && method.Name == "get_Cap").ToArray();
+        if (caps.Length == 0)
+        {
+            if (codes.Any(code => code.opcode == OpCodes.Starg || code.opcode == OpCodes.Starg_S))
+                throw new NotSupportedException("PoV rune input mutation changed");
+            return -1;
+        }
+        int cap = caps[0];
+        int level = codes.FindIndex(code => code.operand is MethodInfo method &&
+            method.DeclaringType == typeof(Character) && method.Name == nameof(Character.SetLevel));
+        int rolled = codes.FindIndex(code => Equals(code.operand, "pt.boss.rolled"));
+        if (caps.Length != 1 || cap < 1 || cap + 2 >= codes.Count || cap >= level || codes[cap - 1].opcode != OpCodes.Ldarg_1 ||
+            codes[cap].operand is not MethodInfo getter || getter.ReturnType != typeof(int) || getter.GetParameters().Length != 0 ||
+            codes[cap + 1].operand is not MethodInfo min || min.DeclaringType != typeof(UnityEngine.Mathf) || min.Name != "Min" ||
+            min.ReturnType != typeof(int) || !min.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(int), typeof(int) }) ||
+            (codes[cap + 2].opcode != OpCodes.Starg && codes[cap + 2].opcode != OpCodes.Starg_S) ||
+            (codes[cap + 2].operand is ParameterInfo parameter ? parameter.Position : Convert.ToInt32(codes[cap + 2].operand)) != 1 ||
+            !codes.Take(cap).Any(code => code.operand is MethodInfo owner && owner.DeclaringType == typeof(ZNetView) && owner.Name == nameof(ZNetView.IsOwner)) ||
+            codes.Take(cap).Any(code => Equals(code.operand, "pt.boss.rolled")) ||
+            codes.Count(code => code.opcode == OpCodes.Starg || code.opcode == OpCodes.Starg_S) != 1 ||
+            rolled <= cap || rolled + 8 >= codes.Count ||
+            !codes[rolled + 1].LoadsConstant(1) || codes[rolled + 2].operand is not MethodInfo store ||
+            store != AccessTools.DeclaredMethod(typeof(ZDO), nameof(ZDO.Set), new[] { typeof(string), typeof(bool) }) ||
+            codes[rolled + 3].opcode != OpCodes.Ldarg_1 || !codes[rolled + 4].LoadsConstant(0) ||
+            (codes[rolled + 5].opcode != OpCodes.Bgt && codes[rolled + 5].opcode != OpCodes.Bgt_S) ||
+            codes[rolled + 6].opcode != OpCodes.Ret || codes[rolled + 5].operand is not Label positive ||
+            !codes[rolled + 7].labels.Contains(positive) || !Equals(codes[rolled + 8].operand, "pt.boss.stars"))
+            throw new NotSupportedException("PoV blood-rune cap changed");
+        return original.IndexOf(codes[cap + 1]);
+    }
+
+    private static int BloodRuneCap(int stars, int cap, Character character)
+    {
+        BloodReplay? replay = ReplayFor(character);
+        if (replay?.Full == true) return stars;
+        int accepted = Math.Min(stars, cap);
+        if (replay != null && accepted == 0) replay.CompletedWithoutLevel = true;
+        return accepted;
+    }
+
     private static void ValidateBloodPhase(List<CodeInstruction> codes)
     {
         int[] assignments = Enumerable.Range(0, codes.Count).Where(i => codes[i].operand is MethodInfo method &&
@@ -146,6 +193,16 @@ internal static partial class CreaturePovCompatibility
     {
         List<CodeInstruction> codes = instructions.ToList();
         ValidateBloodGive(codes);
+        int cap = FindBloodCap(codes);
+        if (cap >= 0)
+        {
+            var character = new CodeInstruction(OpCodes.Ldarg_0);
+            character.labels.AddRange(codes[cap].labels); codes[cap].labels.Clear();
+            character.blocks.AddRange(codes[cap].blocks); codes[cap].blocks.Clear();
+            codes[cap].opcode = OpCodes.Call;
+            codes[cap].operand = AccessTools.DeclaredMethod(typeof(CreaturePovCompatibility), nameof(BloodRuneCap));
+            codes.Insert(cap, character);
+        }
         foreach (CodeInstruction code in codes)
         {
             if (code.operand is not MethodInfo method) continue;
@@ -260,7 +317,7 @@ internal static partial class CreaturePovCompatibility
             if (BloodContractCurrent())
             {
                 _bloodGive!(character, runes);
-                if (!replay.LevelAssigned || !BloodOwner(character))
+                if ((!replay.LevelAssigned && !replay.CompletedWithoutLevel) || !BloodOwner(character))
                     throw new InvalidOperationException("PoV blood-rune replay did not complete its owned level assignment");
                 zdo.Set(BloodStateKey, 3);
             }
@@ -295,7 +352,7 @@ internal static partial class CreaturePovCompatibility
             if (phase != null) phase.LevelAssigned = character.GetLevel() == originalLevel;
             return;
         }
-        int finalLevel = (int)Math.Min(int.MaxValue, (long)replay.BaseLevel + replay.Runes);
+        int finalLevel = replay.Full ? (int)Math.Min(int.MaxValue, (long)replay.BaseLevel + replay.Runes) : originalLevel;
         BloodData(character)!.Set("pt.boss.stars", finalLevel - 1);
         character.SetLevel(finalLevel);
         replay.LevelAssigned = character.GetLevel() == finalLevel;
@@ -310,7 +367,7 @@ internal static partial class CreaturePovCompatibility
         if (replay.Full && BossModifiersAllowed(character))
             count += (long)Math.Max(0, replay.BaseLevel - 1) * Math.Max(0, _bossModsPerStar?.Value ?? 0);
         // Fill is a target, not an increment; never trim previously stored effects.
-        uint bits = unchecked((uint)(BloodData(character)?.GetInt("pt.crmod") ?? 0));
+        ulong bits = unchecked((ulong)_storedModifiers!(character));
         int existing = 0;
         while (bits != 0) { existing++; bits &= bits - 1; }
         _bloodOriginalFill(character, (int)Math.Min(int.MaxValue, Math.Max(existing, count)));

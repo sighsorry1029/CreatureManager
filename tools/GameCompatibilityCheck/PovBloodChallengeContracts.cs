@@ -34,6 +34,8 @@ internal static partial class PovCompatibilityContracts
           : type == "ZDO" && name == "Set" && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), typeof(string) }) ? nameof(BloodSetString)
           : type == "PassiveTree.EnemyDifficulty" && name == "Ensure" ? nameof(BloodEnsure)
           : type == "PassiveTree.EnemyDifficulty" && name == "FixedHealth" ? nameof(IsFrozen)
+          : type == "PassiveTree.RarityMods" && name == "Set" ?
+              (Enum.GetUnderlyingType(method.GetParameters()[1].ParameterType) == typeof(long) ? nameof(BloodSetMods64) : nameof(BloodSetMods32))
           : type == "CreatureManager.CreatureManagerSpawnLifecycle" && name == "IsCommandSpawn" ? nameof(FalseCharacter)
           : type == "ZNetView" && name == "IsOwner" ? nameof(BloodIsOwner)
           : null;
@@ -58,6 +60,8 @@ internal static partial class PovCompatibilityContracts
     private static bool BloodIsOwner(ZNetView view) => Owner && (!BloodRejectReplayOwner ||
         ((System.Collections.ICollection)Bridge.GetField("BloodReplays", All)!.GetValue(null)!).Count == 0);
     private static void BloodForeignPostfix() { }
+    private static void BloodSetMods64(Character c, long mask) => SetPovMask(mask); // Native effect application is outside the phase-state test.
+    private static void BloodSetMods32(Character c, int mask) => SetPovMask(unchecked((uint)mask));
     private static void GrantBloodBoss(Character c, int count)
     {
         Require(Owner, "blood grant is authoritative");
@@ -76,6 +80,11 @@ internal static partial class PovCompatibilityContracts
         MethodInfo phase = phaseType.GetMethod("Give", All)!;
         MethodInfo apply = null!;
         string state = BloodKey("BloodStateKey"), runes = BloodKey("BloodRunesKey"), baseline = BloodKey("BloodBaseKey");
+        FieldInfo? capField = bossType.GetProperty("Cap", All) == null ? null : pov.GetType("PassiveTree.RarityRoll")?.GetField("MaxStars", All);
+        object? savedCap = capField?.GetValue(null);
+        var capConfig = new ConfigFile(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CM-cap-" + Guid.NewGuid() + ".cfg"), false) { SaveOnConfigSet = false };
+        ConfigEntry<int> cap = capConfig.Bind("cap", "stars", 2);
+        capField?.SetValue(null, cap);
         try
         {
             // Install has already checked the supplied untouched methods. The only
@@ -109,6 +118,19 @@ internal static partial class PovCompatibilityContracts
             changed = PatchProcessor.GetOriginalInstructions(phase);
             changed.RemoveAll(code => code.operand is MethodInfo method && method.DeclaringType == typeof(Character) && method.Name == "SetLevel");
             Rejected("ValidateBloodPhase", changed);
+            if (capField != null)
+            {
+                changed = PatchProcessor.GetOriginalInstructions(give);
+                int rolled = changed.FindIndex(code => Equals(code.operand, "pt.boss.rolled"));
+                changed[rolled + 5].opcode = OpCodes.Blt_S;
+                Rejected("ValidateBloodGive", changed);
+                changed = PatchProcessor.GetOriginalInstructions(give);
+                changed[rolled + 6].opcode = OpCodes.Nop;
+                Rejected("ValidateBloodGive", changed);
+                changed = PatchProcessor.GetOriginalInstructions(give);
+                changed.First(code => code.opcode == OpCodes.Starg || code.opcode == OpCodes.Starg_S).operand = 0;
+                Rejected("ValidateBloodGive", changed);
+            }
 
             apply = Copy(Levels.GetMethod("TryApplyLevel", All)!);
             void Tick() => apply.Invoke(null, new object[] { Actor });
@@ -125,6 +147,7 @@ internal static partial class PovCompatibilityContracts
                 Owner = ConfigReady = Boss = WasKilled = RarityWorking = BloodKarmaReady = BloodHasRule = true;
                 FrozenPhase = LeftAlone = PreserveRolls = ThrowBossFill = BloodRejectReplayOwner = false;
                 CurrentLevel = 1; BloodBaseLevel = chosenLevel; BloodKarmaBonus = 0;
+                cap.Value = 2; FixtureFrame++;
                 Maximum = Health = 400; BossGrants = BossGrantCount = BloodDraws = BloodEnsures = BloodLevelWrites = 0;
                 SetFloat(Data, "PT_EnemyHealthFactor", 4f);
                 SetBool(Data, BloodKey("BossPendingKey"), true);
@@ -148,6 +171,26 @@ internal static partial class PovCompatibilityContracts
             Require(CurrentLevel == 7 && BossGrantCount == 1, "five CM stars plus one rune exceeds five final stars but grants only one rune modifier at m=0");
             Reset(6, 0); SetInt(Data, "pt.crmod", 31); Give(1); Tick();
             Require(CurrentLevel == 7 && BossGrantCount == 5, "Fill target preserves five existing PoV modifiers when new budget is only one");
+            if (capField != null)
+            {
+                Reset(6, 0); SetPovMask(31L << 32); Give(1); Tick();
+                Require(CurrentLevel == 7 && BossGrantCount == 5, "blood Fill counts existing upper-bit modifiers too");
+                foreach (int limit in new[] { 0, 2 })
+                {
+                    Reset(4); cap.Value = limit; Give(5); Tick();
+                    Require(CurrentLevel == 9 && BossGrantCount == 8 && Data.GetInt(state) == 3,
+                        "Full adds all five consumed runes and their budget independently of PoV cap " + limit);
+                    foreach (string selection in new[] { "Off", "ExceptLevel" })
+                    {
+                        Reset(4); cap.Value = limit; levelMode.SetSerializedValue(selection); Give(5);
+                        Require(CurrentLevel == (limit == 0 ? 1 : 3) && BossGrantCount == limit && Data.GetInt(state) == 0,
+                            "direct " + selection + " retains PoV cap " + limit);
+                        Reset(4); cap.Value = limit; Give(5); levelMode.SetSerializedValue(selection); Tick();
+                        Require(CurrentLevel == (limit == 0 ? 1 : 3) && BossGrantCount == limit && Data.GetInt(state) == 3,
+                            "pending Full to " + selection + " cap " + limit + " completes without disabling replay");
+                    }
+                }
+            }
             Reset(4, 2); WasKilled = false; Give(2); Tick();
             Require(CurrentLevel == 6 && BossGrantCount == 4, "first-kill rule blocks only base PoV modifiers, not actual rune contribution");
             Reset(3); BloodKarmaBonus = 2; Give(2); Tick();
@@ -199,6 +242,14 @@ internal static partial class PovCompatibilityContracts
             Tick();
             Require(CurrentLevel == 6 && BloodDraws == 0 && Data.GetInt(state) == 0 && BossGrants == 0,
                 "next phase adopts the already-combined five stars without rolling, adding runes or duplicating Fill");
+            FieldInfo phaseMods = carry.GetType().GetField("Mods")!;
+            if (Enum.GetUnderlyingType(phaseMods.FieldType) == typeof(long))
+            {
+                Reset(9); phaseMods.SetValue(carry, Enum.ToObject(phaseMods.FieldType, 1L << 51));
+                phase.Invoke(null, new[] { Actor, carry }); Tick();
+                Require(Data.GetLong("pt.boss.phase-mods") == (1L << 51) && Data.GetInt("pt.crmod2") == (1 << 19) && CurrentLevel == 6,
+                    "original phase path carries high flags in its long ZDO field without truncation or a new Fill");
+            }
             Reset(9); FrozenPhase = true; phase.Invoke(null, new[] { Actor, carry });
             Require(CurrentLevel == 1 && !Data.GetBool(LevelKey("AppliedKey")) && BloodLevelWrites == 0,
                 "FrozenKing fixed-health phase does not pretend that the skipped SetLevel assigned carried stars");
@@ -252,6 +303,7 @@ internal static partial class PovCompatibilityContracts
         }
         finally
         {
+            capField?.SetValue(null, savedCap);
             BloodFixtureActive = false; Copies.Clear(); native.UnpatchSelf();
             Owner = ConfigReady = Boss = WasKilled = RarityWorking = true;
             FrozenPhase = LeftAlone = PreserveRolls = ThrowBossFill = BloodRejectReplayOwner = false;

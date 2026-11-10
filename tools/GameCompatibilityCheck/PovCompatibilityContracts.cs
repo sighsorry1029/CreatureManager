@@ -94,6 +94,15 @@ internal static partial class PovCompatibilityContracts
             harness.Patch(pov.GetType("PassiveTree.CreatureRarity", true)!.GetProperty("Working")!.GetGetMethod()!, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(RarityBody)));
             harness.Patch(pov.GetType("PassiveTree.RarityMods", true)!.GetMethod("Fill", All)!, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(BossFillBody)));
             harness.Patch(pov.GetType("PassiveTree.RarityMods", true)!.GetMethod("On", All)!, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(PovBoundaries)));
+            harness.Patch(pov.GetType("PassiveTree.RarityMods", true)!.GetMethod("Stored", All)!, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(PovBoundaries)));
+            MethodInfo? derivedRead = Difficulty.GetMethod("DerivedFromRead", All);
+            if (derivedRead != null)
+            {
+                harness.Patch(derivedRead, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(PovBoundaries)));
+                MethodInfo read = Difficulty.GetNestedType("MaxHealthRead", All)!.GetMethod("Postfix", All)!;
+                harness.Patch(read, transpiler: new HarmonyMethod(typeof(PovCompatibilityContracts), nameof(PovBoundaries)));
+                foreign.Patch(AccessTools.Method(typeof(Character), "GetMaxHealth"), postfix: new HarmonyMethod(read));
+            }
             foreach (MethodInfo method in new[] {
                 Difficulty.GetMethod("SetScaledMaxHealth", All)!, Difficulty.GetMethod("WriteHealth", All)!,
                 Difficulty.GetNestedType("MaxHealth", BindingFlags.NonPublic)!.GetMethod("Prefix", All)!,
@@ -161,7 +170,8 @@ internal static partial class PovCompatibilityContracts
             Chainloader.PluginInfos.Remove("sighsorry.DropNSpawn");
 
             CheckHealth();
-            CheckHud(pov, levelMode);
+            CheckRawHealth(harness);
+            CheckHud(pov, levelMode, harness);
             CheckModifierExclusions(pov, levelMode);
             CheckBloodChallenges(harness, pov, bossType, levelMode);
             CheckBossModifiers(bossType, levelMode);
@@ -199,10 +209,11 @@ internal static partial class PovCompatibilityContracts
 
     private static void CheckModifierExclusions(Assembly pov, ConfigEntryBase mode)
     {
+        CheckMaskReaders();
         Type foreignMods = pov.GetType("PassiveTree.RarityMods", true)!;
         Type foreignMask = foreignMods.GetNestedType("Mod")!;
         Type cmMask = Modifiers.GetNestedType("ModifierMask", All)!;
-        int PovBit(string name) => Convert.ToInt32(Enum.Parse(foreignMask, name));
+        long PovBit(string name) => Convert.ToInt64(Enum.Parse(foreignMask, name));
         long CmBit(string name) => Convert.ToInt64(Enum.Parse(cmMask, name));
         MethodInfo get = Copy(Bridge.GetMethod("GetExcludedModifiers", All)!);
         long Excluded() => Convert.ToInt64(get.Invoke(null, new object[] { Actor }));
@@ -221,19 +232,19 @@ internal static partial class PovCompatibilityContracts
         var bosses = config.Bind("overlap", "boss off", "");
         ordinaryOff.SetValue(null, ordinary); bossOff.SetValue(null, bosses);
         FieldInfo reader = Bridge.GetField("_activeModifiers", All)!;
-        var realReader = (Func<Character, int>)reader.GetValue(null)!;
+        var realReader = (Func<Character, long>)reader.GetValue(null)!;
         try
         {
             Boss = Interior = false; RarityWorking = true;
             foreach (string name in Enum.GetNames(foreignMask))
             {
-                SetInt(Data, "pt.crmod", PovBit(name));
+                SetPovMask(PovBit(name));
                 var match = expected.SingleOrDefault(pair => pair.Item1 == name);
                 Require(Excluded() == (match.Item2 == null ? 0 : CmBit(match.Item2)), "exact policy for active PoV " + name);
             }
-            int all = expected.Aggregate(0, (mask, pair) => mask | PovBit(pair.Item1));
+            long all = expected.Aggregate(0L, (mask, pair) => mask | PovBit(pair.Item1));
             long allCm = expected.Aggregate(0L, (mask, pair) => mask | CmBit(pair.Item2));
-            SetInt(Data, "pt.crmod", all);
+            SetPovMask(all);
             Require(Excluded() == allCm, "combined active flags compose without excluding unrelated modifiers");
             Interior = true;
             Require(Excluded() == (allCm & ~CmBit("Blink")), "dungeon retains CM Blink and only Blink");
@@ -250,7 +261,7 @@ internal static partial class PovCompatibilityContracts
             reader.SetValue(null, null);
             Require(Excluded() == 0, "absent or unsupported PoV retains CM candidates");
             int reads = 0;
-            reader.SetValue(null, (Func<Character, int>)(c => { reads++; return realReader(c); }));
+            reader.SetValue(null, (Func<Character, long>)(c => { reads++; return realReader(c); }));
             Require(Excluded() == allCm && reads == 1, "one active mask read per selection");
 
             // Execute the production weighted group selector with only RNG and
@@ -303,7 +314,7 @@ internal static partial class PovCompatibilityContracts
             Require(!PatchProcessor.GetOriginalInstructions(Modifiers.GetMethod("TryApplyForcedModifiers", All)!).Any(code =>
                 code.operand is MethodInfo m && (m.Name == "GetExcludedModifiers" || m.Name == "RollConfiguredMask")), "explicit forced modifiers retain priority");
             Rejected("InstallModifierExclusions", typeof(object).Assembly);
-            System.Console.WriteLine("PoV overlap contracts passed: all 26 named effects, 13 exclusions, live ordinary/boss disable lists, dungeon Blink, weighted rolls and empty groups, existing/forced rolls, owner/config/Off gates, pending boss order and absent-provider fallback. No game session.");
+            System.Console.WriteLine($"PoV overlap contracts passed: {Enum.GetNames(foreignMask).Length - 1} named effects, {expected.Length} exclusions, live ordinary/boss disable lists, dungeon Blink, weighted rolls and empty groups, existing/forced rolls, owner/config/Off gates, pending boss order and absent-provider fallback. No game session.");
         }
         finally
         {
@@ -324,7 +335,7 @@ internal static partial class PovCompatibilityContracts
         Func<bool> complete = () => (bool)finish.Invoke(null, new object[] { Actor })!;
         Action clear = () =>
         {
-            SetInt(Data, pending, 0); SetInt(Data, "pt.boss.rolled", 0); SetInt(Data, "pt.crmod", 0);
+            SetInt(Data, pending, 0); SetInt(Data, "pt.boss.rolled", 0); SetPovMask(0);
             SetBool(Data, (string)Levels.GetField("ProcessingCompleteKey", All)!.GetRawConstantValue()!, false);
             levelMode.SetSerializedValue("Full"); BossEnabled.Value = BossFirstKill.Value = true; BossMods.Value = 1;
             Owner = ConfigReady = Boss = WasKilled = RarityWorking = true;
@@ -356,6 +367,13 @@ internal static partial class PovCompatibilityContracts
         Require(complete() && BossGrants == 1 && Data.GetBool("pt.boss.rolled"), "altar Roll still coexists with generic reservation");
         clear(); spawn(); SetInt(Data, "pt.crmod", 1); CurrentLevel = 3; LevelReady = true;
         Require(complete() && BossGrants == 0 && Data.GetInt("pt.crmod") == 1, "existing manual/foreign modifiers cannot be trimmed");
+        if (Enum.GetUnderlyingType(bossType.Assembly.GetType("PassiveTree.RarityMods+Mod")!) == typeof(long))
+        {
+            clear(); spawn(); SetPovMask(1L << 51); CurrentLevel = 3; LevelReady = true;
+            Require(complete() && BossGrants == 0 && Data.GetInt("pt.crmod2") == (1 << 19), "high-only existing effects prevent a late boss grant");
+            clear(); SetPovMask(1L << 32); spawn();
+            Require(!Data.GetBool(pending) && BossGrants == 0, "high-only existing effects prevent a fresh reservation");
+        }
         clear(); spawn(); CurrentLevel = 1; LevelReady = true;
         Require(complete() && BossGrants == 0 && !Data.GetBool(pending), "zero-star boss consumes without granting");
         clear(); BossMods.Value = 0; spawn(); complete();
@@ -435,7 +453,7 @@ internal static partial class PovCompatibilityContracts
         clear();
     }
 
-    private static void CheckHud(Assembly pov, ConfigEntryBase mode)
+    private static void CheckHud(Assembly pov, ConfigEntryBase mode, Harmony harness)
     {
         Type hud = Bridge.Assembly.GetType("CreatureManager.CreaturePovHud", true)!;
         MethodInfo draw = pov.GetType("PassiveTree.UI.AilmentHudBridge", true)!.GetMethod("Draw", All)!;
@@ -449,7 +467,7 @@ internal static partial class PovCompatibilityContracts
         catch (TargetInvocationException ex) when (ex.InnerException is NotSupportedException) { rejected = true; }
         Require(rejected, "unknown status lifecycle contract rejected");
         MethodInfo rowCount = hud.GetMethod("RowCount", All)!, height = hud.GetMethod("Height", All)!, position = hud.GetMethod("IconPosition", All)!;
-        foreach (int count in new[] { 0, 1, 3, 4, 5, 7, 8, 9, 12, 26, 30 })
+        foreach (int count in new[] { 0, 1, 3, 4, 5, 7, 8, 9, 12, 26, 30, 46, 50 })
         {
             int rows = (int)rowCount.Invoke(null, new object[] { count })!;
             Require(rows == (count == 0 ? 0 : (count - 1) / 4 + 1), "no blank or truncated rows for count " + count);
@@ -474,6 +492,7 @@ internal static partial class PovCompatibilityContracts
         object? savedDisplay = display.GetValue(null);
         var config = new ConfigFile(Path.Combine(Path.GetTempPath(), "CM-Hud-" + Guid.NewGuid() + ".cfg"), false) { SaveOnConfigSet = false };
         ConfigEntryBase choice = Bind(config, display, "Icons");
+        BeginIconFixtures(hud, harness);
         try
         {
             Type rowType = hud.GetNestedType("Row", All)!;
@@ -482,7 +501,7 @@ internal static partial class PovCompatibilityContracts
             object newHud() { object value = FormatterServices.GetUninitializedObject(hudData); hudData.GetField("m_gui", All)!.SetValue(value, New<GameObject>()); return value; }
             Sprite sprite = New<Sprite>();
             int reads = 0;
-            source.SetValue(null, (Func<Character, int>)(_ => { reads++; return int.MaxValue; }));
+            source.SetValue(null, (Func<Character, long>)(_ => { reads++; return -1L; }));
             tile.SetValue(null, (Func<int, Sprite>)(_ => sprite));
             foreach (string selection in new[] { "Icons", "IconsAndNames", "Names", "ColouredStars", "VanillaStars", "Nothing", "ColouredStarsAndNames" })
             {
@@ -495,7 +514,7 @@ internal static partial class PovCompatibilityContracts
                     "all modifier icons preserved regardless of PoV display: " + selection);
             }
             hud.GetMethod("ClearRows", All)!.Invoke(null, null);
-            source.SetValue(null, (Func<Character, int>)(_ => { reads++; return 0; }));
+            source.SetValue(null, (Func<Character, long>)(_ => { reads++; return 0; }));
             object cachedHud = newHud();
             reads = 0; HudTime = 2;
             read.Invoke(null, new object[] { Actor, cachedHud });
@@ -505,11 +524,13 @@ internal static partial class PovCompatibilityContracts
             Require(reads == 2, "active effect policy is read again after refresh deadline");
             hudData.GetField("m_isMount", All)!.SetValue(cachedHud, true);
             Require(read.Invoke(null, new object[] { Actor, cachedHud }) == null, "mount HUD remains outside takeover");
+            CheckIconFixtures(hud, read, newHud, source, rowType);
         }
         finally
         {
             source.SetValue(null, savedSource); tile.SetValue(null, savedTile); display.SetValue(null, savedDisplay);
             hud.GetMethod("ClearRows", All)!.Invoke(null, null);
+            EndIconFixtures(hud);
         }
         foreach (string selection in new[] { "Full", "ExceptLevel", "Off", "Full" })
         {
@@ -570,6 +591,7 @@ internal static partial class PovCompatibilityContracts
             Copy(Levels.GetMethod("ApplyHealthMultiplier", All)!).Invoke(null, new object[] { Actor, 1.5f });
         Require(Maximum == 600 && Health == 400, "repeated restoration neither heals nor loses HP");
         // Genuine old/raw follow-up conversions still work outside CM's final writes.
+        FixtureFrame++;
         Actor.SetMaxHealth(100); Actor.SetHealth(80);
         Require(Maximum == 400 && Health == 380, "PoV raw follow-up still converts missing HP");
         Maximum = 400; Health = 200;
@@ -665,6 +687,7 @@ internal static partial class PovCompatibilityContracts
     private static MethodInfo? Boundary(MethodInfo method)
     {
         if (BloodBoundary(method) is MethodInfo blood) return blood;
+        if (IconBoundary(method) is MethodInfo icon) return icon;
         string type = method.DeclaringType!.FullName!, name = method.Name;
         string? replacement = type == "UnityEngine.Object" ? name switch { "op_Equality" => nameof(Equal), "op_Inequality" => nameof(Different), "GetInstanceID" => nameof(InstanceId), _ => null }
             : type == "UnityEngine.Component" && name == "GetComponent" && method.IsGenericMethod && method.GetGenericArguments()[0] == typeof(Character) ? nameof(ViewCharacter)
@@ -676,6 +699,7 @@ internal static partial class PovCompatibilityContracts
             : type == "PassiveTree.CreatureStars" ? name switch { "OwnStars" => nameof(OwnStars), "Of" => nameof(TwoStars), "VanillaLootFactor" => nameof(Four), "Trophy" or "Single" => nameof(FalsePrefab), _ => null }
             : type == "ZDO" && name == "Set" && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), typeof(float) }) ? nameof(SetFloat)
             : type == "ZDO" && name == "Set" && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), typeof(int) }) ? nameof(SetInt)
+            : type == "ZDO" && name == "Set" && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), typeof(long) }) ? nameof(SetLong)
             : type == "ZDO" && name == "Set" && method.GetParameters().Select(p => p.ParameterType).SequenceEqual(new[] { typeof(string), typeof(bool) }) ? nameof(SetBool)
             : type == "CreatureManager.CreatureDomainManager" && name == "IsSynchronizedConfigurationReady" ? nameof(ReadyConfig)
             : type == Levels.FullName ? name switch { "IsDungeonCreature" => nameof(IsInterior), "IsFrozenKingPhaseTwo" when method.GetParameters()[0].ParameterType == typeof(Character) => nameof(IsFrozen), "IsReadyForModifierApplication" => nameof(ReadyLevel),
@@ -700,6 +724,10 @@ internal static partial class PovCompatibilityContracts
             else if (code.operand is ConstructorInfo ctor && ctor.DeclaringType == typeof(HashSet<GameObject>))
             {
                 code.opcode = OpCodes.Call; code.operand = AccessTools.Method(typeof(PovCompatibilityContracts), nameof(PrefabSet));
+            }
+            else if (IconFixturesActive && code.opcode == OpCodes.Newobj && code.operand is ConstructorInfo textureCtor && textureCtor.DeclaringType == typeof(Texture2D))
+            {
+                code.opcode = OpCodes.Call; code.operand = AccessTools.Method(typeof(PovCompatibilityContracts), nameof(NewIconTexture));
             }
             yield return code;
         }
@@ -746,7 +774,8 @@ internal static partial class PovCompatibilityContracts
     private static bool FalsePrefab(GameObject prefab) => false;
     private static int TwoStars(Character c) => 2;
     private static float Four(Character c) => 4f;
-    private static int Frame() => 42;
+    private static int FixtureFrame = 42;
+    private static int Frame() => FixtureFrame;
     private static float RandomValue() => .5f;
     private static float GetMaxHealth(Character c) => Maximum;
     private static float GetHealth(Character c) => Health;
@@ -755,6 +784,7 @@ internal static partial class PovCompatibilityContracts
     private static void SetLevel(Character c, int level)
     {
         CurrentLevel = level;
+        FixtureFrame++; // The real game SetLevel caller is not a foreign read-derived writer.
         if (BloodFixtureActive) { BloodLevelWrites++; SetInt(Data, "level", level); }
         c.SetMaxHealth(100f * level);
     }
@@ -776,6 +806,12 @@ internal static partial class PovCompatibilityContracts
     private static void SetHealth(Character c, float value) => Health = value;
     private static void SetFloat(ZDO zdo, string key, float value) => ZDOExtraData.Set(zdo.m_uid, key.GetStableHashCode(), value);
     private static void SetInt(ZDO zdo, string key, int value) => ZDOExtraData.Set(zdo.m_uid, key.GetStableHashCode(), value);
+    private static void SetLong(ZDO zdo, string key, long value) => ZDOExtraData.Set(zdo.m_uid, key.GetStableHashCode(), value);
+    private static void SetPovMask(long value)
+    {
+        SetInt(Data, "pt.crmod", unchecked((int)value));
+        SetInt(Data, "pt.crmod2", unchecked((int)(value >> 32)));
+    }
     private static void SetBool(ZDO zdo, string key, bool value) => SetInt(zdo, key, value ? 1 : 0);
     private static bool HasReaping(ZDO zdo, long mask) => true;
     private static HashSet<GameObject> PrefabSet() => new(new PrefabComparer());
