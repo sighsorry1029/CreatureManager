@@ -241,6 +241,7 @@ internal sealed class LevelDefinition
     }
 
     public bool ModifiersCleared { get; set; }
+    public bool EnforcerOnly { get; set; }
     public bool IsPreset { get; set; }
 }
 
@@ -273,6 +274,22 @@ internal sealed class ModifierDefinition
         ModifierDefinition clone = new();
         clone.OverlayFrom(this);
         return clone;
+    }
+
+    internal static void OverlayBlock(Dictionary<string, ModifierDefinition> result, ref bool fallbackBlocked,
+        Dictionary<string, ModifierDefinition>? overlay, bool clear)
+    {
+        if (clear)
+        {
+            result.Clear();
+            fallbackBlocked = true;
+        }
+        if (overlay == null) return;
+        foreach (var entry in overlay)
+        {
+            if (result.TryGetValue(entry.Key, out var inherited)) inherited.OverlayFrom(entry.Value);
+            else result.Add(entry.Key, entry.Value.Clone());
+        }
     }
 
     internal void OverlayFrom(ModifierDefinition source)

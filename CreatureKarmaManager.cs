@@ -435,8 +435,7 @@ internal static class CreatureKarmaManager
     {
         return """
 # Outdoor and dungeon Karma are stored separately; the rules below apply to both.
-# toxicDeath is accepted as toxicAura with chance/power preserved; old radius/effect values are ignored. Within one modifier block, toxicAura wins.
-# Blink always uses fx_Adrenaline1; an old fourth tuple value is accepted but ignored (including none).
+# Configure leader effects in modifier.yml under Enforcer or <prefab>.enforcer. Legacy modifiers blocks here are ignored.
 
 karma:
   thresholds: [60, 120, 180]             # +1, +2, ... level at each value; the last value caps gain. [] disables bonuses and the cap.
@@ -457,43 +456,6 @@ karma:
 Enforcer:
   settings: [40, 30, 2]                  # [requiredKarma, consumeKarma, levelBonus].
   checks: [50, 1200, 60, 24~48]          # [chance%, cooldownSeconds, intervalSeconds, outdoorRadiusMin~MaxMeters].
-  modifiers:                             # Partial map; omitted/{} inherits levels.yml, [] clears fallback, and trailing tuple values may be omitted.
-    # Offense: Enraged to Undodgeable
-    enraged: 10, 0.15                    # chance%, outgoingDamageBonus.
-    fire: 10, 0.2                        # chance%, addedFireDamage.
-    frost: 10, 0.1                       # chance%, addedFrostDamage.
-    lightning: 10, 0.1                   # chance%, addedLightningDamage.
-    spirit: 10, 0.05                     # chance%, addedSpiritDoT.
-    armorPiercing: 10, 0.3               # chance%, ignoredPlayerArmor.
-    staggering: 10, 0.6                  # chance%, staggerBonus.
-    undodgeable: 10, 0.25                # chance%, damageReduction.
-    # Defense: Armored to Chameleon
-    armored: 10, 0.3                     # chance%, damageReduction.
-    deathward: 10, 0.2, 10, 3            # chance%, restoredMaxHealthRatio, cooldownSeconds, maxActivations.
-    regenerating: 10, 0.005, 20          # chance%, maxHealthRatioPerSecond, healthPerSecondCap (0 = unlimited).
-    reflection: 10, 0.1, 0.5             # chance%, actualMeleeDamageReflected, procChance.
-    vortex: 10, 0.5                      # chance%, projectileIgnoreProc.
-    adaptive: 10, 0.5                    # chance%, rememberedTypeDamageReduction.
-    unflinching: 10                      # chance%.
-    chameleon: 10, 10                    # chance%, immunitySwitchSeconds.
-    # Affliction: Exposed to ToxicAura
-    exposed: 10, 0.2, 0.5, 5             # chance%, damageTaken, proc, duration.
-    weakened: 10, 0.2, 0.5, 5            # chance%, outgoingDamageReduction, proc, duration.
-    withered: 10, 0.5, 0.5, 5            # chance%, healingReduction, proc, duration.
-    crippling: 10, 0.5, 0.5, 0.5, 5     # chance%, moveReduction, jumpReduction, proc, duration.
-    disruptive: 10, 0.5, 0.5, 0.5, 5    # chance%, staminaRegenReduction, eitrRegenReduction, proc, duration.
-    adrenalineDrain: 10, 0.5, 0.5, 0.5, 5 # chance%, currentAdrenalineRemoved, adrenalineGainReduction, procChance, duration.
-    corrosive: 10, 0.5, 0.5, 5           # chance%, durabilityLossBonus, procChance, duration.
-    toxicAura: 10, 0.1               # chance%, maxHealthPoison per application; every 1s, body radius + 3m.
-    # Special: Swift to Blamer
-    swift: 10, 0.4                       # chance%, movementSpeedBonus.
-    attackSpeed: 10, 0.3                 # chance%, attackSpeedBonus.
-    vampiric: 10, 0.3                    # chance%, actualDirectDamageHealing.
-    reaping: 10, 0.05, 20, 0.1, 2, 0.01, 0.2, 0.05, 0.5 # chance%, heal/base, healMaxActivations, maxHealth/base, maxHealthCap, damagePerKill, damageCap, scalePerKill, scaleCap.
-    blink: 10, 6, 16                    # chance%, cooldown, maxRange; fixed fx_Adrenaline1 effect.
-    omen: 10, 0.5                        # chance%, forcedEnforcerChance.
-    juggernaut: 10, 150, 5               # chance%, minimumPushForce, cooldownSeconds.
-    blamer: 0, 1, 60, 0.75               # chance%, karmaPerSecond, maxKarmaGain, fleeHealthRatio (0 maxKarmaGain = unlimited).
 
 # Use top-level Global as the fallback table for unmatched biomes.
 BlackForest:
@@ -503,20 +465,10 @@ BlackForest:
       settings: [40, 30, 1]             # [requiredKarma, consumeKarma, levelBonus]; omit to inherit Enforcer.settings.
       weight: 1                          # Relative selection weight; default 1.
       loot: [TrophyGreydwarfBrute:1, Amber:3] # Guaranteed extras as itemPrefab:amount; normal drops remain.
-      modifiers:                         # Partial map; omitted/{} inherits Enforcer.modifiers, while [] clears fallback.
-        staggering: 30, 0.6              # chance%, staggerBonus.
-        deathward: 30, 0.2, 10, 3        # chance%, restored max-health ratio, cooldown seconds, max activations.
-        toxicAura: 30, 0.1
-        juggernaut: 30, 150, 5
     - summon: [Bjorn]
       settings: [50, 40, 1]
       weight: 3
       loot: [TrophyBjorn:1, Amber:3]
-      modifiers:
-        lightning: 10, 0.1
-        deathward: 20, 0.2, 10, 3
-        disruptive: 10, 0.5, 0.5, 0.5, 5
-        blink: 10, 6, 16
   dungeonEnforcers:                      # Matching location > unrestricted dungeon > outdoor fallback.
     - summon: [Skeleton_Poison, Skeleton:2]
       # location: MountainCave02          # Optional; quote names containing ':'.
@@ -981,12 +933,7 @@ DeepNorth:
             BroadcastRegionalCenterQuote(EnforcerDeathQuotes, context.Position);
         }
 
-        if (context.KarmaSummoned)
-        {
-            return;
-        }
-
-        if (!ShouldBlockKarmaGain(context.Position, context.DeadId))
+        if (!context.KarmaSummoned && !ShouldBlockKarmaGain(context.Position, context.DeadId))
         {
             float amount = GetKillKarma(
                 context.Prefab,
@@ -2061,7 +2008,7 @@ DeepNorth:
         }
 
         bool ignoreCooldown =
-            CreatureManagerPlugin.BlockOmenEnforcerDuringCooldown?.Value == CreatureManagerPlugin.Toggle.Off;
+            CreatureManagerPlugin.BlockOmenEnforcerDuringCooldown?.Value != CreatureManagerPlugin.Toggle.On;
 
         return TrySummonForPlayer(
             player,
@@ -2438,15 +2385,7 @@ DeepNorth:
             return false;
         }
 
-        if (TryGetRuntimeEnforcerSettings(character, out ResolvedEnforcerSettings runtimeSettings))
-        {
-            modifiers = runtimeSettings.Modifiers;
-            fallbackBlocked = runtimeSettings.ModifiersCleared;
-            return true;
-        }
-
-        modifiers = Settings.Enforcer.Modifiers;
-        fallbackBlocked = Settings.Enforcer.ModifiersCleared;
+        CreatureLevelManager.OverlayEnforcerModifiers(character, modifiers, ref fallbackBlocked);
         return true;
     }
 
@@ -3152,16 +3091,6 @@ DeepNorth:
         if (overrides.RequiredKarma.HasValue) settings.RequiredKarma = Mathf.Max(0f, overrides.RequiredKarma.Value);
         if (overrides.ConsumeKarma.HasValue) settings.ConsumeKarma = Mathf.Max(0f, overrides.ConsumeKarma.Value);
         if (overrides.LevelBonus.HasValue) settings.LevelBonus = Mathf.Max(0, overrides.LevelBonus.Value);
-        if (overrides.ModifiersCleared)
-        {
-            settings.Modifiers.Clear();
-            settings.ModifiersCleared = true;
-        }
-
-        if (overrides.Modifiers != null)
-        {
-            MergeModifierOverrides(settings.Modifiers, overrides.Modifiers);
-        }
     }
 
     private static bool TrySelectEnforcerCandidate(
@@ -5222,7 +5151,7 @@ DeepNorth:
             throw new FormatException($"Karma YAML from {source} must contain one top-level mapping.");
         }
 
-        CreatureYaml.ValidateUniqueMappingKeys(root, source, "root");
+        CreatureYaml.ValidateUniqueMappingKeys(root, source, "root", skipLegacyModifierValues: true);
 
         if (TryGetNode(root, "karma", out YamlNode karmaNode))
         {
@@ -5264,11 +5193,6 @@ DeepNorth:
             ValidateKnownFields(enforcerMap, EnforcerFields, source, "Enforcer");
             ApplyEnforcerSettingsTuple(enforcerMap, settings.Enforcer, source);
             ApplyEnforcerChecksTuple(enforcerMap, settings.Enforcer, source, "Enforcer");
-            if (TryReadModifierBlock(enforcerMap, source, "Enforcer.modifiers", out Dictionary<string, ModifierDefinition>? modifiers, out bool modifiersCleared))
-            {
-                settings.Enforcer.Modifiers = modifiers ?? new Dictionary<string, ModifierDefinition>(StringComparer.OrdinalIgnoreCase);
-                settings.Enforcer.ModifiersCleared = modifiersCleared;
-            }
         }
         else if (TryGetNode(root, "enforcer", out _))
         {
@@ -5420,6 +5344,8 @@ DeepNorth:
             {
                 throw new FormatException($"Karma YAML from {source} {label} has unknown field '{field}'.");
             }
+            if (field.Equals("modifiers", StringComparison.OrdinalIgnoreCase))
+                CreatureYaml.WarnIgnoredModifierFile(source);
         }
     }
 
@@ -5519,61 +5445,6 @@ DeepNorth:
         }
 
         return values;
-    }
-
-    private static bool TryReadModifierBlock(
-        YamlMappingNode owner,
-        string source,
-        string label,
-        out Dictionary<string, ModifierDefinition>? modifiers,
-        out bool cleared)
-    {
-        modifiers = null;
-        cleared = false;
-        if (!TryGetNode(owner, "modifiers", out YamlNode node))
-        {
-            return false;
-        }
-
-        if (!CreatureYaml.TryReadModifierBlock(
-            node,
-            source,
-            label,
-            CreatureYaml.ModifierYamlContext.Karma,
-            out modifiers,
-            out cleared))
-        {
-            throw new FormatException($"Karma YAML from {source} {label} is invalid.");
-        }
-
-        return true;
-    }
-
-    private static Dictionary<string, ModifierDefinition> CloneModifiers(Dictionary<string, ModifierDefinition> source)
-    {
-        Dictionary<string, ModifierDefinition> clone = new(StringComparer.OrdinalIgnoreCase);
-        foreach (KeyValuePair<string, ModifierDefinition> entry in source)
-        {
-            clone[entry.Key] = entry.Value.Clone();
-        }
-
-        return clone;
-    }
-
-    private static void MergeModifierOverrides(
-        Dictionary<string, ModifierDefinition> target,
-        Dictionary<string, ModifierDefinition> overrides)
-    {
-        foreach (KeyValuePair<string, ModifierDefinition> entry in overrides)
-        {
-            if (!target.TryGetValue(entry.Key, out ModifierDefinition current))
-            {
-                target[entry.Key] = entry.Value.Clone();
-                continue;
-            }
-
-            current.OverlayFrom(entry.Value);
-        }
     }
 
     private static Dictionary<string, EnforcerBiomeDefinition> ReadEnforcerBiomes(YamlMappingNode root, string source)
@@ -5747,7 +5618,7 @@ DeepNorth:
             Weight = Mathf.Max(0f, ReadFloat(map, "weight", 1f)),
             Loot = ReadEnforcerLoot(map, source, label),
             Location = location,
-            Override = ReadEnforcerCandidateOverride(map, source, label)
+            Override = ReadEnforcerSettingsOverride(map, source, label)
         };
     }
 
@@ -5810,18 +5681,6 @@ DeepNorth:
         }
 
         return loot;
-    }
-
-    private static EnforcerOverrideSettings ReadEnforcerCandidateOverride(YamlMappingNode map, string source, string label)
-    {
-        EnforcerOverrideSettings settings = ReadEnforcerSettingsOverride(map, source, label);
-        if (TryReadModifierBlock(map, source, $"{label}.modifiers", out Dictionary<string, ModifierDefinition>? modifiers, out bool modifiersCleared))
-        {
-            settings.Modifiers = modifiers;
-            settings.ModifiersCleared = modifiersCleared;
-        }
-
-        return settings;
     }
 
     private static EnforcerSummonSet ReadSummonSet(List<string> values, string source, string label)
@@ -6098,8 +5957,6 @@ DeepNorth:
         internal float SpawnRadiusMax = 48f;
         internal float DungeonSpawnerSearchRadius = 32f;
         internal int LevelBonus = 2;
-        internal Dictionary<string, ModifierDefinition> Modifiers = new(StringComparer.OrdinalIgnoreCase);
-        internal bool ModifiersCleared;
         internal Dictionary<string, EnforcerBiomeDefinition> Biomes = new(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -6114,8 +5971,6 @@ DeepNorth:
         internal float SpawnRadiusMin;
         internal float SpawnRadiusMax;
         internal int LevelBonus;
-        internal Dictionary<string, ModifierDefinition> Modifiers = new(StringComparer.OrdinalIgnoreCase);
-        internal bool ModifiersCleared;
 
         internal static ResolvedEnforcerSettings FromGlobal(EnforcerSettings settings)
         {
@@ -6129,28 +5984,13 @@ DeepNorth:
                 BossHud = true,
                 SpawnRadiusMin = Mathf.Max(0f, settings.SpawnRadiusMin),
                 SpawnRadiusMax = Mathf.Max(settings.SpawnRadiusMin, settings.SpawnRadiusMax),
-                LevelBonus = Mathf.Max(0, settings.LevelBonus),
-                Modifiers = CloneModifiers(settings.Modifiers),
-                ModifiersCleared = settings.ModifiersCleared
+                LevelBonus = Mathf.Max(0, settings.LevelBonus)
             };
         }
 
         internal ResolvedEnforcerSettings Clone()
         {
-            return new ResolvedEnforcerSettings
-            {
-                RequiredKarma = RequiredKarma,
-                ConsumeKarma = ConsumeKarma,
-                Chance = Chance,
-                Cooldown = Cooldown,
-                IsBoss = IsBoss,
-                BossHud = BossHud,
-                SpawnRadiusMin = SpawnRadiusMin,
-                SpawnRadiusMax = SpawnRadiusMax,
-                LevelBonus = LevelBonus,
-                Modifiers = CloneModifiers(Modifiers),
-                ModifiersCleared = ModifiersCleared
-            };
+            return (ResolvedEnforcerSettings)MemberwiseClone();
         }
     }
 
@@ -6159,8 +5999,6 @@ DeepNorth:
         internal float? RequiredKarma;
         internal float? ConsumeKarma;
         internal int? LevelBonus;
-        internal Dictionary<string, ModifierDefinition>? Modifiers;
-        internal bool ModifiersCleared;
     }
 
     private sealed class EnforcerBiomeDefinition

@@ -194,6 +194,36 @@ try
         nestedLevels is [{ Target: "Troll", Biome: "Meadows", Damage: 1.5f }],
         "Nested biome level syntax did not normalize to the expected definition.");
 
+    var importedGroups = new Dictionary<string, List<string>?>(StringComparer.OrdinalIgnoreCase);
+    Require(CreatureYaml.TryReadRuleFile("groups: {Brutes: [Troll]}", "levels_pack.yml", out _, importedGroups, false),
+        "Group-only level files must export memberships.");
+    const string roleYaml = """
+        Global: {modifiers: {fire: 5}}
+        Enforcer: {modifiers: {regenerating: 10}}
+        Brutes:
+          BlackForest:
+            modifiers: {fire: 8}
+            enforcer: {modifiers: {staggering: 15}}
+        Troll: {enforcer: {modifiers: []}}
+        """;
+    Require(CreatureYaml.TryReadRuleFile(roleYaml, "modifier.yml", out var roles, importedGroups, true) && roles.Count == 5,
+        "Role, biome and group selectors must parse together.");
+    var scoped = roles.Single(rule => rule.EnforcerOnly && rule.Target == "Brutes");
+    RoundTrip(scoped, rule => Require(rule.EnforcerOnly && rule.Biome == "BlackForest" && rule.Prefabs is ["Troll"]
+        && rule.Modifiers!["staggering"].Chance == 15 && rule.Modifiers["staggering"].Power == null,
+        "Sync must retain leader scope, group membership and omitted tuple fields."));
+    RoundTrip(roles.Single(rule => rule.Target == "Troll"), rule => Require(rule.EnforcerOnly && rule.ModifiersCleared &&
+        CreatureYaml.ValidateDefinitions(new[] { rule }, "synced leader clear"), "Leader clear must survive synchronization."));
+    Require(!CreatureYaml.ValidateDefinitions(new[] { new LevelDefinition { Target = "Troll", EnforcerOnly = true, Health = 2 } },
+        "invalid synced role"), "A synced leader-only rule must not alter health.");
+    foreach (string invalid in new[] { "Troll: {enforcer: {BlackForest: {modifiers: []}}}", "Troll: {health: 1}",
+        "Boss: {enforcer: {modifiers: []}}", "Global: {modifiers: {typo: 5}}" })
+        Require(!CreatureYaml.TryReadRuleFile(invalid, "invalid modifier.yml", out _, importedGroups, true), "Invalid modifier rules accepted: " + invalid);
+    Require(CreatureYaml.TryReadRuleFile("groups: {Brutes: [Lox]}", "levels_other.yml", out _, importedGroups, false) &&
+            !CreatureYaml.TryReadRuleFile(roleYaml, "ambiguous group", out _, importedGroups, true) &&
+            CreatureYaml.TryReadRuleFile("groups: {Brutes: [Troll]}\n" + roleYaml, "explicit membership", out _, importedGroups, true),
+        "Conflicting imported memberships require an explicit local group.");
+
     const string invalidScalarLevelYaml = """
         Troll:
           damage: not-a-number
@@ -237,13 +267,37 @@ try
         !CreatureYaml.TryReadLevelDefinitions(duplicateCaseLevelYaml, "duplicate key contract", out _),
         "Case-insensitive duplicate level keys were accepted.");
 
+    string legacySource = Path.Combine(Path.GetTempPath(), "levels_test.yaml");
+    const string ignoredLevelYaml = """
+        Global:
+          health: 2
+          distanceScaling: [0.1, 0.2, 1000, 4]
+          modifierDistanceScaling: invalid
+          modifiers: {fire: broken, FIRE: unparsed}
+        Troll:
+          BlackForest:
+            modifiers: []
+        Lox:
+          modifiers: {unknown: invalid}
+        """;
+    for (int reload = 0; reload < 2; reload++)
+        Require(CreatureYaml.TryReadLevelDefinitions(ignoredLevelYaml, legacySource, out var legacyRules) &&
+                legacyRules is [{ Health: 2, DistanceScaling.Count: 4, Modifiers: null, ModifiersCleared: false, ModifierDistanceScaling: null }],
+            "Retired modifier blocks must not override, clear or invalidate active level rules.");
+    Require(CreatureManagerPlugin.Log.Warnings.Count(message => message.Contains(legacySource)) == 1,
+        "One migration notice per legacy file, including modifier-only targets and reloads.");
+    Require(!CreatureYaml.TryReadLevelDefinitions(ignoredLevelYaml.Replace("health: 2", "health: invalid"),
+            legacySource, out _), "Invalid active stats must still reject the file.");
+    Require(ReadModifierRules("# intentionally empty", "modifier.yml", out var emptyRules) && emptyRules.Count == 0,
+        "Comment-only modifier.yml must permit zero rolls.");
+
     const string unknownLevelModifierYaml = """
         Troll:
           modifiers:
             definitelyNotAModifier: 10
         """;
     Require(
-        !CreatureYaml.TryReadLevelDefinitions(unknownLevelModifierYaml, "unknown modifier contract", out _),
+        !ReadModifierRules(unknownLevelModifierYaml, "unknown modifier contract", out _),
         "An unknown modifier key was accepted.");
     const string regeneratingModifierYaml = """
         Global:
@@ -251,7 +305,7 @@ try
             regenerating: 10, 0.01, 20
         """;
     Require(
-        CreatureYaml.TryReadLevelDefinitions(
+        ReadModifierRules(
             regeneratingModifierYaml,
             "regenerating modifier contract",
             out List<LevelDefinition> regeneratingLevels),
@@ -271,7 +325,7 @@ try
             regenerating: 10, 0.01
         """;
     Require(
-        CreatureYaml.TryReadLevelDefinitions(
+        ReadModifierRules(
             regeneratingDefaultCapYaml,
             "regenerating default cap contract",
             out List<LevelDefinition> regeneratingDefaultCapLevels),
@@ -296,7 +350,7 @@ try
             regenerating: 10, 0.01, 0
         """;
     Require(
-        CreatureYaml.TryReadLevelDefinitions(
+        ReadModifierRules(
             regeneratingUnlimitedCapYaml,
             "regenerating unlimited cap contract",
             out List<LevelDefinition> regeneratingUnlimitedCapLevels) &&
@@ -308,7 +362,7 @@ try
             regenerating: 10
         """;
     Require(
-        CreatureYaml.TryReadLevelDefinitions(
+        ReadModifierRules(
             regeneratingDefaultsYaml,
             "regenerating defaults contract",
             out List<LevelDefinition> regeneratingDefaultsLevels),
@@ -324,7 +378,7 @@ try
             CreatureModifierCatalog.Keys.Select(modifier => $"    {modifier}: 10")) +
         "\n";
     Require(
-        CreatureYaml.TryReadLevelDefinitions(
+        ReadModifierRules(
             chanceOnlyModifierYaml,
             "chance-only modifier contract",
             out List<LevelDefinition> chanceOnlyModifierLevels),
@@ -367,7 +421,7 @@ try
             blamer: 10, 0.5, 45
         """;
     Require(
-        CreatureYaml.TryReadLevelDefinitions(
+        ReadModifierRules(
             partialTrailingModifierYaml,
             "partial trailing modifier contract",
             out List<LevelDefinition> partialTrailingModifierLevels),
@@ -401,7 +455,7 @@ try
     Require(
         !partialModifiers["toxicAura"].Radius.HasValue && partialModifiers["toxicAura"].Power == 0.05f,
         "Toxic Aura did not preserve its poison strength or invented a radius override.");
-    Require(!CreatureYaml.TryReadLevelDefinitions(
+    Require(!ReadModifierRules(
             "Global:\n  modifiers:\n    toxicAura: 10, 0.05, 6\n",
             "removed toxic aura radius contract", out _),
         "Toxic Aura accepted the removed radius field.");
@@ -440,7 +494,7 @@ try
             deathward: 10, , 12
         """;
     Require(
-        !CreatureYaml.TryReadLevelDefinitions(
+        !ReadModifierRules(
             emptyInteriorModifierYaml,
             "empty interior modifier contract",
             out _),
@@ -451,7 +505,7 @@ try
             reflection: 10,
         """;
     Require(
-        !CreatureYaml.TryReadLevelDefinitions(
+        !ReadModifierRules(
             danglingModifierCommaYaml,
             "dangling modifier comma contract",
             out _),
@@ -462,7 +516,7 @@ try
             unflinching: 10, 1
         """;
     Require(
-        !CreatureYaml.TryReadLevelDefinitions(
+        !ReadModifierRules(
             excessiveModifierValuesYaml,
             "excessive modifier values contract",
             out _),
@@ -1072,15 +1126,18 @@ void RoundTrip<T>(T value, Action<T> verify)
     verify(values[0]);
 }
 
+static bool ReadModifierRules(string yaml, string source, out List<LevelDefinition> rules) =>
+    CreatureYaml.TryReadRuleFile(yaml, source, out rules, null, modifierFile: true);
+
 void CheckFixedBlinkEffect()
 {
-    foreach (var context in new[] { CreatureYaml.ModifierYamlContext.Level, CreatureYaml.ModifierYamlContext.Karma })
+    foreach (bool enforcer in new[] { false, true })
     {
         foreach (string tuple in new[] { "10", "10, 6", "10, 6, 16", "10, 6, 16, fx_Adrenaline1", "10, 6, 16, blob_aoe", "10, 6, 16, none", "10, 6, 16, " })
         {
             YamlStream stream = new();
             stream.Load(new StringReader("blink: " + tuple));
-            Require(CreatureYaml.TryReadModifierBlock(stream.Documents[0].RootNode, "fixed Blink fixture", "modifiers", context,
+            Require(CreatureYaml.TryReadModifierBlock(stream.Documents[0].RootNode, "fixed Blink fixture", "modifiers", enforcer,
                     out var result, out _) && result != null, "Valid old/new Blink tuple rejected: " + tuple);
             var blink = result!["blink"];
             Require(blink.Chance == 10f && blink.Cooldown == (tuple == "10" ? null : 6f) &&
@@ -1091,7 +1148,7 @@ void CheckFixedBlinkEffect()
         {
             YamlStream stream = new();
             stream.Load(new StringReader("blink: " + tuple));
-            Require(!CreatureYaml.TryReadModifierBlock(stream.Documents[0].RootNode, "invalid Blink fixture", "modifiers", context,
+            Require(!CreatureYaml.TryReadModifierBlock(stream.Documents[0].RootNode, "invalid Blink fixture", "modifiers", enforcer,
                 out _, out _), "Blink accepted malformed active settings: " + tuple);
         }
     }
@@ -1108,26 +1165,26 @@ void CheckFixedBlinkEffect()
 
 void CheckToxicAuraAlias()
 {
-    Dictionary<string, ModifierDefinition> Read(string text, CreatureYaml.ModifierYamlContext context, bool expected = true)
+    Dictionary<string, ModifierDefinition> Read(string text, bool enforcer, bool expected = true)
     {
         YamlStream stream = new();
         stream.Load(new StringReader(text));
         bool valid = CreatureYaml.TryReadModifierBlock(stream.Documents[0].RootNode,
-            "Toxic Aura alias contract", "modifiers", context, out var result, out _);
-        Require(valid == expected, $"Unexpected {context} modifier result: {text}");
+            "Toxic Aura alias contract", "modifiers", enforcer, out var result, out _);
+        Require(valid == expected, $"Unexpected modifier result (enforcer={enforcer}): {text}");
         return result ?? new Dictionary<string, ModifierDefinition>();
     }
 
     int NoticeCount() => CreatureManagerPlugin.Log.Warnings.Count(message => message.Contains("toxicDeath is now read as Toxic Aura"));
     Require(NoticeCount() == 0, "Alias notice appeared before an alias was used.");
-    Read("toxicDeath: invalid, 0.3", CreatureYaml.ModifierYamlContext.Level, false);
+    Read("toxicDeath: invalid, 0.3", false, false);
     Require(NoticeCount() == 0, "Invalid alias consumed the compatibility notice.");
 
-    foreach (var context in new[] { CreatureYaml.ModifierYamlContext.Level, CreatureYaml.ModifierYamlContext.Karma })
+    foreach (bool enforcer in new[] { false, true })
     {
         foreach (string tuple in new[] { "10", "10, 0.3", "10, 0.3, 4", "10, 0.3, 4, blob_aoe", "10, 0.3, ignored, custom_fx", "10, 0.3, , " })
         {
-            var result = Read("toxicDeath: " + tuple, context);
+            var result = Read("toxicDeath: " + tuple, enforcer);
             Require(result.Count == 1 && !result.ContainsKey("toxicDeath"), "Alias leaked into downstream modifier selection.");
             var aura = result["toxicAura"];
             Require(aura.Chance == 10f && aura.Power == (tuple == "10" ? null : 0.3f) && aura.Radius == null,
@@ -1138,22 +1195,22 @@ void CheckToxicAuraAlias()
         {
             string canonical = "ToXiCAuRa: 0";
             string both = legacyFirst ? alias + "\n" + canonical : canonical + "\n" + alias;
-            var result = Read(both, context);
+            var result = Read(both, enforcer);
             Require(result.Count == 1 && result["toxicAura"].Chance == 0f && result["toxicAura"].Power == null,
                 "Explicit new key lost priority or inherited power from its obsolete sibling.");
         }
         foreach (string invalid in new[] { "toxicDeath: 10, nope", "toxicDeath: 10, NaN", "toxicDeath: ', 0.3'", "toxicDeath: 10, , 4", "toxicDeath: 10, 0.3, 4, fx, extra", "toxicAura: 10, 0.3, 4", "toxicAura: 10, bad\ntoxicDeath: 10, 0.3" })
-            Read(invalid, context, false);
-        Require(Read("toxicDeath: 0, 0", context)["toxicAura"].Chance == 0f &&
-                Read("toxicDeath: 10, 0.05", context)["toxicAura"].Power == 0.05f,
+            Read(invalid, enforcer, false);
+        Require(Read("toxicDeath: 0, 0", enforcer)["toxicAura"].Chance == 0f &&
+                Read("toxicDeath: 10, 0.05", enforcer)["toxicAura"].Power == 0.05f,
             "Explicit disabled/custom settings were overwritten by the default.");
-        Require(Read("{}", context).Count == 0 && Read("[]", context).Count == 0,
+        Require(Read("{}", enforcer).Count == 0 && Read("[]", enforcer).Count == 0,
             "Alias handling inserted an unsolicited default effect.");
     }
     Require(NoticeCount() == 1, "Alias warning was repeated across blocks/files/contexts.");
 
     const string nested = "Global:\n  modifiers:\n    toxicAura: 10, 0.3\nTroll:\n  modifiers:\n    toxicDeath: 0\n";
-    Require(CreatureYaml.TryReadLevelDefinitions(nested, "alias specificity", out var levels), "Valid mixed old/new level rules rejected.");
+    Require(ReadModifierRules(nested, "alias specificity", out var levels), "Valid mixed old/new level rules rejected.");
     var inherited = levels[0].Modifiers!["toxicAura"].Clone();
     inherited.OverlayFrom(levels[1].Modifiers!["toxicAura"]);
     Require(inherited.Chance == 0f && inherited.Power == 0.3f,

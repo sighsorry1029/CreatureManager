@@ -402,6 +402,8 @@ internal static class LevelModeContracts
         FieldInfo toggleField = entry.GetField("BossesFollowBiomeLevelPreset", Static)!;
         FieldInfo presetField = entry.GetField("BiomeLevelPreset", Static)!;
         FieldInfo definitionsField = Levels.GetField("ActiveDefinitions", Static)!;
+        FieldInfo leadersField = Levels.GetField("EnforcerModifierRules", Static)!;
+        object savedLeaders = leadersField.GetValue(null)!;
         object? savedToggle = toggleField.GetValue(null), savedPreset = presetField.GetValue(null);
         object savedDefinitions = definitionsField.GetValue(null)!;
         ConfigEntryBase Bind(FieldInfo field, string value) => (ConfigEntryBase)bind
@@ -451,6 +453,12 @@ internal static class LevelModeContracts
             return copies[source] = copy.Generate();
         }
         object? Select(string name, params object?[] args) => CopySelection(Levels.GetMethod(name, Static)!).Invoke(null, args);
+        void SetContext(bool boss, bool enforcer)
+        {
+            RuleContext = Activator.CreateInstance(context, Instance, null,
+                new object[] { "Bonemass", Heightmap.Biome.Swamp, 0f, boss, enforcer }, null)!;
+            Levels.GetMethod("InvalidateRuleSearchCache", Static)!.Invoke(null, null);
+        }
         void Rules(string yaml, bool boss = true, bool enforcer = false)
         {
             object?[] args = { yaml, "boss biome selection fixture", null };
@@ -460,9 +468,7 @@ internal static class LevelModeContracts
             Array active = Array.CreateInstance(definition, rules.Length);
             for (int i = 0; i < rules.Length; i++) active.SetValue(rules[i], i);
             definitionsField.SetValue(null, active);
-            RuleContext = Activator.CreateInstance(context, Instance, null,
-                new object[] { "Bonemass", Heightmap.Biome.Swamp, 0f, boss, enforcer }, null)!;
-            Levels.GetMethod("InvalidateRuleSearchCache", Static)!.Invoke(null, null);
+            SetContext(boss, enforcer);
         }
         void Weights(string label, params float[] expected)
         {
@@ -472,7 +478,7 @@ internal static class LevelModeContracts
         }
         try
         {
-            const string biome = "Swamp:\n  level: [100]\n  health: 9\n  damage: 9\n  speed: 9\n  scalePerLevel: 9\n  distanceScaling: [1, 1, 100, 0]\n  modifiers:\n    swift: 100, 0.2\n";
+            const string biome = "Swamp:\n  level: [100]\n  health: 9\n  damage: 9\n  speed: 9\n  scalePerLevel: 9\n  distanceScaling: [1, 1, 100, 0]\n";
             const string global = "Global:\n  level: [0, 100]\n";
             Rules(biome);
             Weights("boss biome YAML overrides Easy preset", 100);
@@ -525,12 +531,47 @@ internal static class LevelModeContracts
             preset.SetSerializedValue("None");
             Rules(global, enforcer: true);
             Weights("Enforcer still uses Global fallback", 0, 100);
+
+            // Exercise the same selectors before and after real Load splits ordinary and leader rules.
+            string modifierYaml = @"Global: {modifiers: {fire: 8}}
+Boss: {modifiers: {vortex: 20}}
+Enforcer: {modifiers: {fire: 25, frost: 10}}
+Swamp: {modifiers: {swift: 100}, enforcer: {modifiers: {fire: 30}}}
+Bonemass:
+  enforcer: {modifiers: {fire: '40, 0.6'}}
+  Swamp: {enforcer: {modifiers: {fire: 50}}}";
+            object?[] parsed = { modifierYaml, "modifier.yml", null, null, true };
+            Require((bool)parse.DeclaringType!.GetMethod("TryReadRuleFile", Static)!.Invoke(null, parsed)!, "parse modifier selectors");
+            Levels.GetMethod("Load", Static)!.Invoke(null, new[] { parsed[2] });
+            SetContext(boss: true, enforcer: false);
+            var bossValues = (IDictionary)Select("GetEffectiveModifierDefinitions", Select("GetRuleSearch", character, full))!;
+            Require(bossValues.Count == 1 && bossValues.Contains("vortex"), "ordinary boss excludes global and leader tables");
+            SetContext(boss: false, enforcer: false);
+            object ordinary = Select("GetRuleSearch", character, full)!;
+            var baseValues = (IDictionary)Select("GetEffectiveModifierDefinitions", ordinary)!;
+            object fire = baseValues["fire"]!;
+            float? Chance(object value) => (float?)value.GetType().GetProperty("Chance")!.GetValue(value);
+            Require(Chance(fire) == 8 && baseValues.Count == 2 && baseValues.Contains("swift"), "ordinary modifier path excludes every leader override");
+            SetContext(boss: false, enforcer: true);
+            var overlay = (IDictionary)Activator.CreateInstance(baseValues.GetType())!;
+            object?[] overlayArgs = { character, overlay, false };
+            Select("OverlayEnforcerModifiers", overlayArgs);
+            fire = overlay["fire"]!;
+            Require(Chance(fire) == 50 && (float?)fire.GetType().GetProperty("Power")!.GetValue(fire) == 0.6f &&
+                    Chance(overlay["frost"]!) == 10 && !(bool)overlayArgs[2]!, "common, biome, prefab and nested leader rules overlay individual fields");
+            parsed[0] = modifierYaml.Replace("modifiers: {fire: '40, 0.6'}", "modifiers: []");
+            Require((bool)parse.DeclaringType.GetMethod("TryReadRuleFile", Static)!.Invoke(null, parsed)!, "parse leader clear");
+            Levels.GetMethod("Load", Static)!.Invoke(null, new[] { parsed[2] });
+            Select("OverlayEnforcerModifiers", overlayArgs);
+            Require(overlay.Count == 1 && Chance(overlay["fire"]!) == 50 && (bool)overlayArgs[2]!,
+                "leader clear blocks fallback but a more specific rule can restore one effect");
         }
         finally
         {
             toggleField.SetValue(null, savedToggle);
             presetField.SetValue(null, savedPreset);
             definitionsField.SetValue(null, savedDefinitions);
+            leadersField.SetValue(null, savedLeaders);
             Levels.GetMethod("InvalidateRuleSearchCache", Static)!.Invoke(null, null);
             RuleContext = null!;
         }

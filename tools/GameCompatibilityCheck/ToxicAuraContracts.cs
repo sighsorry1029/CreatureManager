@@ -165,11 +165,6 @@ internal static class ToxicAuraContracts
             "selection uses only existing players, without an all-creature or overlap scan");
         Require(typeof(Character).GetMethod("GetCollider")!.IsPublic && typeof(BaseAI).GetMethod("IsEnemy", new[] { typeof(Character), typeof(Character) })!.IsPublic,
             "new game calls are public on the original DLL");
-        // The shared parser runs in both Level/Karma contexts in YamlSyncContractCheck.
-        // Inspect this call without starting Karma's Unity-dependent static initializer.
-        var karmaReader = module.GetType("CreatureManager.CreatureKarmaManager").Methods.Single(m => m.Name == "TryReadModifierBlock");
-        Require(Calls(karmaReader).Any(m => m.DeclaringType.FullName == "CreatureManager.CreatureYaml" && m.Name == "TryReadModifierBlock"),
-            "Karma modifier blocks use the shared alias parser");
     }
 
     private static float Radius(Bounds bounds)

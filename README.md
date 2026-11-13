@@ -212,9 +212,12 @@ Active files live under `BepInEx/config/CreatureManager/`. Reference files are f
 | `creatures.yml` | Creature edits/clones, equipment, appearance, textures, and AI assignment. |
 | `attacks.yml`, `projectile.yml` | Attack edits/clones, projectiles, and spawn abilities. |
 | `ai.yml`, `factions.yml` | AI presets and faction relationships. |
-| `levels.yml` | Level weights, stat scaling, and combat modifiers. |
+| `levels.yml` | Level weights, movement, damage, health, and size. |
+| `modifier.yml` | Combat modifier chances, powers, distance scaling, and Enforcer leader overrides. |
 | `karma.yml` | Karma gain/decay, Enforcers, minions, and bonus loot. |
 | `localization/<Language>.yml`, `textures/` | Server text and custom PNG textures. |
+
+**Upgrading custom modifiers:** copy your chances, powers and disabled effects from level and Karma files into `modifier.yml`. A missing file starts with the full defaults. [Modifier upgrade guide](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md#modifier-rules-and-upgrades)
 
 Use the [default YAML reference](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/README.md) and [configuration guide](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/user-guide.md#configuration-files) for fields, split files, and examples. The generated headers describe the accepted syntax; merge the settings you need instead of replacing a customized file.
 

@@ -27,10 +27,13 @@ internal static class CreatureYaml
     internal const int MaxLocalizationTextLength = 4096;
     private static int ToxicDeathAliasNoticeReported;
 
-    internal enum ModifierYamlContext
+    private static readonly HashSet<string> ReportedLegacyModifierFiles = new(StringComparer.OrdinalIgnoreCase);
+
+    internal static void WarnIgnoredModifierFile(string source)
     {
-        Level,
-        Karma
+        // Only authoritative disk reads use absolute paths. Synced Karma is parsed on every peer.
+        if (!Path.IsPathRooted(source) || !ReportedLegacyModifierFiles.Add(source)) return;
+        CreatureManagerPlugin.Log.LogWarning($"Ignoring legacy modifier settings in {source}. Move custom chances, powers, clears and modifier distance scaling to modifier.yml. This notice is shown once per file.");
     }
 
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
@@ -466,6 +469,12 @@ internal static class CreatureYaml
     }
 
     internal static bool TryReadLevelDefinitions(string yaml, string source, out List<LevelDefinition> definitions)
+        => TryReadRuleFile(yaml, source, out definitions, null, modifierFile: false);
+
+    // Levels split files keep their own group scope. Only the new modifier file
+    // imports their declarations; null denotes conflicting memberships.
+    internal static bool TryReadRuleFile(string yaml, string source, out List<LevelDefinition> definitions,
+        Dictionary<string, List<string>?>? sharedGroups, bool modifierFile)
     {
         definitions = new List<LevelDefinition>();
         if (string.IsNullOrWhiteSpace(yaml) || IsCommentOnlyYaml(yaml))
@@ -485,7 +494,7 @@ internal static class CreatureYaml
 
             if (stream.Documents.Count != 1)
             {
-                throw new FormatException($"Level YAML from {source} must contain exactly one YAML document.");
+                throw new FormatException($"Expected one YAML document in {source}.");
             }
 
             YamlNode rootNode = stream.Documents[0].RootNode;
@@ -496,13 +505,42 @@ internal static class CreatureYaml
 
             if (rootNode is not YamlMappingNode root)
             {
-                CreatureManagerPlugin.Log.LogError($"Failed to read level YAML from {source}: expected a top-level mapping or an empty sequence.");
+                CreatureManagerPlugin.Log.LogError($"Failed to read rules from {source}: expected a top-level mapping or an empty sequence.");
                 return false;
             }
 
-            ValidateUniqueMappingKeys(root, source, "root");
+            ValidateUniqueMappingKeys(root, source, "root", skipLegacyModifierValues: !modifierFile);
 
             Dictionary<string, List<string>> groups = ReadLevelGroups(root, source);
+            if (modifierFile)
+            {
+                foreach (var entry in root.Children)
+                {
+                    string target = GetYamlScalar(entry.Key);
+                    if (target.Equals("groups", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (target.Length == 0 || IsUnsupportedLevelTarget(target) || entry.Value is not YamlMappingNode block)
+                        throw new FormatException($"Invalid modifier target '{target}' in {source}.");
+
+                    bool enforcer = target.Equals("Enforcer", StringComparison.OrdinalIgnoreCase);
+                    if (!groups.TryGetValue(target, out var members) && sharedGroups != null &&
+                        sharedGroups.TryGetValue(target, out members) && members == null)
+                        throw new FormatException($"Group '{target}' has conflicting memberships in levels files. Define it in {source}.");
+                    ReadModifierTarget(block, source, target, enforcer ? "Global" : target, null, members,
+                        enforcer, definitions);
+                }
+                return ValidateDefinitions(definitions, source);
+            }
+
+            if (sharedGroups != null)
+            {
+                foreach (var group in groups)
+                {
+                    if (!sharedGroups.TryGetValue(group.Key, out var previous))
+                        sharedGroups.Add(group.Key, group.Value);
+                    else if (previous != null && !new HashSet<string>(previous, StringComparer.OrdinalIgnoreCase).SetEquals(group.Value))
+                        sharedGroups[group.Key] = null;
+                }
+            }
             List<LevelDefinition> nestedDefinitions = ReadNestedLevelDefinitions(root, groups, source, out HashSet<string> targetsWithNestedDefinitions);
             definitions = ReadTopLevelLevelDefinitions(root, groups, source, targetsWithNestedDefinitions);
             definitions.AddRange(nestedDefinitions);
@@ -510,10 +548,38 @@ internal static class CreatureYaml
         }
         catch (Exception ex)
         {
-            CreatureManagerPlugin.Log.LogError($"Failed to read level YAML from {source}: {ex.Message}");
+            CreatureManagerPlugin.Log.LogError($"Failed to read rules from {source}: {ex.Message}");
             definitions.Clear();
             return false;
         }
+    }
+
+    private static void ReadModifierTarget(YamlMappingNode block, string source, string path, string target,
+        string? biome, List<string>? members, bool enforcer, List<LevelDefinition> rules)
+    {
+        LevelDefinition rule = new() { Target = target, Biome = biome, Prefabs = members, EnforcerOnly = enforcer };
+        foreach (var entry in block.Children)
+        {
+            string key = GetYamlScalar(entry.Key);
+            if (key.Equals("modifiers", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryReadModifierBlock(entry.Value, source, path, enforcer, out var modifiers, out bool cleared))
+                    throw new FormatException($"Invalid {path}.modifiers in {source}.");
+                rule.Modifiers = modifiers;
+                rule.ModifiersCleared = cleared;
+            }
+            else if (!enforcer && key.Equals("modifierDistanceScaling", StringComparison.OrdinalIgnoreCase))
+                rule.ModifierDistanceScaling = ReadFloatList(entry.Value, source, path, key);
+            else if (!enforcer && entry.Value is YamlMappingNode child && key.Length > 0 && !LevelFieldNames.Contains(key))
+            {
+                bool role = key.Equals("enforcer", StringComparison.OrdinalIgnoreCase);
+                if ((!role && biome != null) || (role && target.Equals("Boss", StringComparison.OrdinalIgnoreCase)))
+                    throw new FormatException($"Unsupported modifier nesting '{path}.{key}' in {source}.");
+                ReadModifierTarget(child, source, $"{path}.{key}", target, role ? biome : key, members, role, rules);
+            }
+            else throw new FormatException($"Unknown field '{path}.{key}' in {source}. Use target > optional biome > optional enforcer > modifiers.");
+        }
+        if (ValidateLevelDefinition(rule, source, path, warnNoEffect: false)) rules.Add(rule);
     }
 
     private static List<LevelDefinition> ReadTopLevelLevelDefinitions(YamlMappingNode root, Dictionary<string, List<string>> groups, string source, HashSet<string> targetsWithNestedDefinitions)
@@ -542,14 +608,14 @@ internal static class CreatureYaml
                 throw new FormatException($"Level YAML from {source} '{target}' must be a mapping.");
             }
 
-            LevelDefinition rule = ReadLevelDefinition(targetMap, source, target, allowNestedDefinitions: true);
+            LevelDefinition rule = ReadLevelDefinition(targetMap, source, target, out bool ignoredModifiers, allowNestedDefinitions: true);
             rule.Target = target;
             if (groups.TryGetValue(target, out List<string>? prefabs) && prefabs != null)
             {
                 rule.Prefabs = prefabs;
             }
 
-            bool warnNoEffect = !targetsWithNestedDefinitions.Contains(target);
+            bool warnNoEffect = !ignoredModifiers && !targetsWithNestedDefinitions.Contains(target);
             if (ValidateLevelDefinition(rule, source, target, warnNoEffect))
             {
                 definitions.Add(rule);
@@ -646,7 +712,7 @@ internal static class CreatureYaml
 
                 targetsWithNestedDefinitions.Add(target);
                 string label = $"{target}.{biome}";
-                LevelDefinition rule = ReadLevelDefinition(nestedMap, source, label);
+                LevelDefinition rule = ReadLevelDefinition(nestedMap, source, label, out bool ignoredModifiers);
                 rule.Target = target;
                 rule.Biome = biome;
                 if (groups.TryGetValue(target, out List<string>? prefabs) && prefabs != null)
@@ -654,7 +720,7 @@ internal static class CreatureYaml
                     rule.Prefabs = prefabs;
                 }
 
-                if (ValidateLevelDefinition(rule, source, label, warnNoEffect: true))
+                if (ValidateLevelDefinition(rule, source, label, warnNoEffect: !ignoredModifiers))
                 {
                     definitions.Add(rule);
                 }
@@ -669,7 +735,7 @@ internal static class CreatureYaml
         return string.Equals(target, "Bosses", StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static void ValidateUniqueMappingKeys(YamlNode node, string source, string path)
+    internal static void ValidateUniqueMappingKeys(YamlNode node, string source, string path, bool skipLegacyModifierValues = false)
     {
         if (node is YamlMappingNode mapping)
         {
@@ -682,7 +748,10 @@ internal static class CreatureYaml
                     throw new FormatException($"YAML from {source} {path} has duplicate key '{key}' when compared case-insensitively.");
                 }
 
-                ValidateUniqueMappingKeys(entry.Value, source, $"{path}.{key}");
+                if (skipLegacyModifierValues && path != "root" &&
+                    (key.Equals("modifiers", StringComparison.OrdinalIgnoreCase) ||
+                     key.Equals("modifierDistanceScaling", StringComparison.OrdinalIgnoreCase))) continue;
+                ValidateUniqueMappingKeys(entry.Value, source, $"{path}.{key}", skipLegacyModifierValues);
             }
 
             return;
@@ -692,7 +761,7 @@ internal static class CreatureYaml
         {
             for (int index = 0; index < sequence.Children.Count; index++)
             {
-                ValidateUniqueMappingKeys(sequence.Children[index], source, $"{path}[{index + 1}]");
+                ValidateUniqueMappingKeys(sequence.Children[index], source, $"{path}[{index + 1}]", skipLegacyModifierValues);
             }
         }
     }
@@ -732,8 +801,10 @@ internal static class CreatureYaml
         YamlMappingNode node,
         string source,
         string label,
+        out bool ignoredModifiers,
         bool allowNestedDefinitions = false)
     {
+        ignoredModifiers = false;
         LevelDefinition rule = new();
         foreach (KeyValuePair<YamlNode, YamlNode> entry in node.Children)
         {
@@ -768,21 +839,9 @@ internal static class CreatureYaml
                     rule.DistanceScaling = ReadFloatList(entry.Value, source, label, "distanceScaling");
                     break;
                 case "modifierdistancescaling":
-                    rule.ModifierDistanceScaling = ReadFloatList(entry.Value, source, label, "modifierDistanceScaling");
-                    break;
                 case "modifiers":
-                    if (!TryReadModifierBlock(
-                            entry.Value,
-                            source,
-                            label,
-                            ModifierYamlContext.Level,
-                            out Dictionary<string, ModifierDefinition>? modifiers,
-                            out bool modifiersCleared))
-                    {
-                        throw new FormatException($"Level YAML from {source} '{label}'.modifiers is invalid.");
-                    }
-                    rule.Modifiers = modifiers;
-                    rule.ModifiersCleared = modifiersCleared;
+                    ignoredModifiers = true;
+                    WarnIgnoredModifierFile(source);
                     break;
                 default:
                     if (allowNestedDefinitions && entry.Value is YamlMappingNode)
@@ -834,13 +893,13 @@ internal static class CreatureYaml
         YamlNode node,
         string source,
         string label,
-        ModifierYamlContext context,
+        bool enforcer,
         out Dictionary<string, ModifierDefinition>? modifiers,
         out bool modifiersCleared)
     {
         modifiers = null;
         modifiersCleared = false;
-        string blockPath = GetModifierBlockPath(source, label, context);
+        string blockPath = $"Modifier YAML from {source} '{label}'.modifiers";
         if (node is YamlSequenceNode sequence)
         {
             if (sequence.Children.Count == 0)
@@ -867,16 +926,9 @@ internal static class CreatureYaml
         foreach (KeyValuePair<YamlNode, YamlNode> entry in mapping.Children)
         {
             string modifier = GetYamlScalar(entry.Key);
-            if (context == ModifierYamlContext.Karma)
-            {
-                modifier = modifier.ToLowerInvariant();
-            }
-
             if (modifier.Length == 0)
             {
-                CreatureManagerPlugin.Log.LogError(context == ModifierYamlContext.Level
-                    ? $"{blockPath} has an empty modifier name."
-                    : $"{blockPath} has unknown modifier ''.");
+                CreatureManagerPlugin.Log.LogError($"{blockPath} has an empty modifier name.");
                 return false;
             }
 
@@ -896,7 +948,7 @@ internal static class CreatureYaml
                 return false;
             }
 
-            if (!TryReadModifierDefinition(entry.Value, source, label, modifier, context, legacyToxicDeath, out ModifierDefinition definition))
+            if (!TryReadModifierDefinition(entry.Value, blockPath, modifier, enforcer, legacyToxicDeath, out ModifierDefinition definition))
             {
                 return false;
             }
@@ -917,10 +969,9 @@ internal static class CreatureYaml
 
     private static bool TryReadModifierDefinition(
         YamlNode node,
-        string source,
-        string label,
+        string blockPath,
         string modifier,
-        ModifierYamlContext context,
+        bool enforcer,
         bool legacyToxicDeath,
         out ModifierDefinition definition)
     {
@@ -959,13 +1010,11 @@ internal static class CreatureYaml
             isAdrenalineDrain,
             isToxicAura);
         if (legacyToxicDeath) format = "chance[, maxHealthPoison[, ignoredRadius[, ignoredEffect]]]";
-        string modifierPath = $"{GetModifierBlockPath(source, label, context)}.{(legacyToxicDeath ? "toxicDeath" : modifier)}";
+        string modifierPath = $"{blockPath}.{(legacyToxicDeath ? "toxicDeath" : modifier)}";
         string text = GetYamlScalar(node);
         if (text.Length == 0)
         {
-            CreatureManagerPlugin.Log.LogWarning(context == ModifierYamlContext.Level
-                ? $"{modifierPath} must be '{format}'."
-                : $"{modifierPath} must be {format}.");
+            CreatureManagerPlugin.Log.LogWarning($"{modifierPath} must be {format}.");
             return false;
         }
 
@@ -978,19 +1027,7 @@ internal static class CreatureYaml
         bool invalidCount = tokens.Length < 1 || tokens.Length > maxValues;
         if (invalidCount)
         {
-            if (context == ModifierYamlContext.Level)
-            {
-                string expected = maxValues == 1
-                    ? "1"
-                    : $"1 to {maxValues.ToString(CultureInfo.InvariantCulture)}";
-                CreatureManagerPlugin.Log.LogWarning(
-                    $"{modifierPath} expected {expected} tuple values but got {tokens.Length}. Use modifierDistanceScaling for distance-based chance scaling.");
-            }
-            else
-            {
-                CreatureManagerPlugin.Log.LogWarning($"{modifierPath} must be {format}.");
-            }
-
+            CreatureManagerPlugin.Log.LogWarning($"{modifierPath} must be {format}.");
             return false;
         }
 
@@ -1165,23 +1202,16 @@ internal static class CreatureYaml
             definition.ProcChance = values[2];
         }
 
-        if (context == ModifierYamlContext.Level)
+        if (!enforcer)
         {
             ValidateLevelModifier(definition, modifier, modifierPath);
         }
         else
         {
-            ValidateAndNormalizeKarmaModifier(definition, modifier, modifierPath);
+            ValidateAndNormalizeEnforcerModifier(definition, modifier, modifierPath);
         }
 
         return true;
-    }
-
-    private static string GetModifierBlockPath(string source, string label, ModifierYamlContext context)
-    {
-        return context == ModifierYamlContext.Level
-            ? $"Level YAML from {source} '{label}'.modifiers"
-            : $"Karma YAML from {source} {label}";
     }
 
     private static string GetModifierTupleFormat(
@@ -1217,7 +1247,7 @@ internal static class CreatureYaml
         return "chance[, power]";
     }
 
-    private static void ValidateAndNormalizeKarmaModifier(
+    private static void ValidateAndNormalizeEnforcerModifier(
         ModifierDefinition definition,
         string modifier,
         string modifierPath)
@@ -1382,6 +1412,12 @@ internal static class CreatureYaml
         {
             return Invalid(path, "modifiersCleared cannot be combined with modifier entries.");
         }
+
+        if (rule.EnforcerOnly && (rule.IsPreset || rule.Level != null || rule.Damage.HasValue || rule.DamagePerLevel.HasValue ||
+            rule.Health.HasValue || rule.HealthPerLevel.HasValue || rule.Speed.HasValue || rule.SpeedPerLevel.HasValue ||
+            rule.ScalePerLevel.HasValue || rule.DistanceScaling != null || rule.ModifierDistanceScaling != null ||
+            string.Equals(rule.Target, "Boss", StringComparison.OrdinalIgnoreCase)))
+            return Invalid(path, "Enforcer-only rules accept modifier overrides on non-boss targets.");
 
         if (rule.Modifiers != null)
         {

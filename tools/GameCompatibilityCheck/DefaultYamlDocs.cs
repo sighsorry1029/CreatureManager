@@ -22,6 +22,7 @@ internal static class DefaultYamlDocs
         var templates = new[]
         {
             ("levels.yml", "CreatureDomainManager", "BuildDefaultLevelOverrideYaml"),
+            ("modifier.yml", "CreatureDomainManager", "BuildDefaultModifierYaml"),
             ("karma.yml", "CreatureKarmaManager", "BuildDefaultYaml"),
             ("factions.yml", "CreatureFactionManager", "BuildDefaultOverrideYaml"),
             ("creatures.yml", "CreatureDomainManager", "BuildDefaultOverrideYaml"),
@@ -41,6 +42,7 @@ internal static class DefaultYamlDocs
             generated.Add(template.Item1, Normalize(yaml));
         }
 
+        CheckModifierFileCreation(plugin, generated["modifier.yml"]);
         if (write) Directory.CreateDirectory(directory);
         foreach (var file in generated)
         {
@@ -54,6 +56,41 @@ internal static class DefaultYamlDocs
     }
 
     private static string Normalize(string yaml) => yaml.Replace("\r\n", "\n");
+
+    private static void CheckModifierFileCreation(Assembly plugin, string freshTemplate)
+    {
+        MethodInfo ensure = Copy(plugin.GetType("CreatureManager.CreatureDomainManager", true)!
+            .GetMethod("EnsureModifierFile", Static)!);
+        string directory = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "CM-modifiers-" + Guid.NewGuid())).FullName;
+        string path = Path.Combine(directory, "modifier.yml");
+        try
+        {
+            foreach (string existing in new[] { "levels.reference.yml", "levels.yml", "levels_pack.yaml", "karma.yml" })
+            {
+                string original = Path.Combine(directory, existing);
+                const string custom = "# User removed all modifier rolls.\n";
+                File.WriteAllText(original, custom);
+                ensure.Invoke(null, new object[] { path });
+                string created = File.ReadAllText(path);
+                if (Normalize(created) != freshTemplate || File.ReadAllText(original) != custom)
+                    throw new InvalidOperationException("Missing modifier defaults or modified user file with " + existing);
+                foreach (string userFile in new[] { "", "# keep empty", "Troll: {modifiers: []}" })
+                {
+                    File.WriteAllText(path, userFile);
+                    ensure.Invoke(null, new object[] { path });
+                    if (File.ReadAllText(path) != userFile)
+                        throw new InvalidOperationException("Existing modifier.yml was overwritten.");
+                }
+                File.Delete(path);
+                File.Delete(original);
+            }
+        }
+        finally
+        {
+            foreach (string file in Directory.GetFiles(directory)) File.Delete(file);
+            Directory.Delete(directory);
+        }
+    }
 
     private static MethodInfo Copy(MethodInfo source)
     {

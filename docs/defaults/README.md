@@ -1,10 +1,11 @@
 # Default YAML reference
 
-**Version scope: CreatureManager 1.3.13.** These files are generated from the same methods that create missing configuration files on first launch. They are not a dump of anyone's personal/server configuration. The scale guidance reflects the Full-mode behavior introduced in 1.3.5; 1.3.9 introduced Toxic Aura defaults and removed configurable Blink effects. The commented `speed`/`speedPerLevel` examples require 1.3.10 or later. Active default values are unchanged; the new comments describe shared biome level weights for bosses introduced in 1.3.13.
+**CreatureManager 1.3.14.** These eight files match the first-launch templates. The [1.3.13 reference](https://github.com/sighsorry1029/CreatureManager/tree/4cd9b55/docs/defaults) uses the previous two-file layout. A missing `modifier.yml` is created with the full defaults on both fresh installs and upgrades. Existing files are preserved, including an empty `modifier.yml`. For custom values from older files, see the [modifier upgrade guide](../user-guide.md#modifier-rules-and-upgrades).
 
 | File | Contents |
 | --- | --- |
-| [levels.yml](levels.yml) | Level/stat/modifier defaults, mode guidance, and commented biome distributions for Easy, Normal, Hard, and VeryHard. |
+| [levels.yml](levels.yml) | Level and stat defaults, mode guidance, and commented biome distributions for Easy, Normal, Hard, and VeryHard. |
+| [modifier.yml](modifier.yml) | Combat modifier chances, powers, distance scaling, and leader overrides by biome, group or prefab. |
 | [karma.yml](karma.yml) | Karma gain/decay, outdoor and dungeon Enforcer candidates, bonuses, and loot. |
 | [factions.yml](factions.yml) | Default faction relationships and custom-faction examples. |
 | [creatures.yml](creatures.yml) | Commented creature override schema and examples. |
@@ -17,7 +18,7 @@ Additional inactive examples are maintained in [creatures.sample.yml](../../defa
 ## Applying selected settings
 
 - Existing files under `BepInEx/config/CreatureManager/` are preserved by the mod. Compare and merge the entries you need; do not replace a customized file wholesale.
-- Toxic Aura defaults to `0.1` poison strength. Existing `toxicDeath` YAML entries still work as an alias, preserving chance and power but ignoring the former radius/effect. An explicit old `0.3` remains `0.3` and may be strong for the recurring aura: review modifier blocks in both `levels.yml` and `karma.yml`, including overrides, and change the second value to `0.1` if desired. Prefer the new form `toxicAura: 10, 0.1`; keep your existing chance instead of copying `10` blindly. In the same block, explicit `toxicAura` takes priority.
+- Toxic Aura defaults to `0.1` poison strength. In `modifier.yml`, `toxicDeath` works as an alias, preserving chance and power but ignoring the former radius/effect. An explicit old `0.3` remains `0.3` and may be strong for the recurring aura: review any per-creature and Enforcer values copied into `modifier.yml` and change the second value to `0.1` if desired. Prefer the new form `toxicAura: 10, 0.1`; keep your existing chance instead of copying `10` blindly. In the same block, explicit `toxicAura` takes priority.
 - Blink always uses `fx_Adrenaline1`. Its old fourth tuple value, including `none`, is accepted but ignored; new templates use only chance, cooldown, and range.
 - The new `levels.yml` leaves `Global.level` commented out. Published 1.3.3 generated an active `Global.level: [80, 20]`; that existing rule stays active until you remove/comment it yourself.
 - `Full + None` keeps game/other-mod levels only where no YAML level weights and no Karma/Enforcer bonus apply. Health, damage, scale, and modifier rules remain independent. This is not a switch to fully vanilla combat balance.
@@ -51,6 +52,6 @@ try {
 }
 ```
 
-For a read-only comparison, set only `CREATUREMANAGER_DEFAULT_YAML_DIR` and run the same checker without `CREATUREMANAGER_WRITE_DEFAULT_YAML`. Missing or stale YAML fails the check. Generation executes the compiled template methods with manager initialization bypassed; it parses all seven outputs before writing. Line endings are normalized, and unchanged files are not rewritten. No game scene, network session, or user configuration is loaded by the export/check step. The Debug build separately updates the local plugin DLL under the normal build procedure.
+For a read-only comparison, set only `CREATUREMANAGER_DEFAULT_YAML_DIR` and run the same checker without `CREATUREMANAGER_WRITE_DEFAULT_YAML`. Missing or stale YAML fails the check. Generation executes the compiled template methods with manager initialization bypassed; it parses all eight outputs before writing. Line endings are normalized, and unchanged files are not rewritten. No game scene, network session, or user configuration is loaded by the export/check step. The Debug build separately updates the local plugin DLL under the normal build procedure.
 
 When preparing a release, regenerate/check these files, update this version notice and the README notice, and link the release's changelog to the appropriate fixed revision. Do not relabel an old release with newer defaults.

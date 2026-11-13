@@ -34,6 +34,7 @@ internal static class CreatureLevelManager
     private const string EmissionColorProperty = "_EmissionColor";
     private static readonly object Sync = new();
     private static LevelDefinition[] ActiveDefinitions = Array.Empty<LevelDefinition>();
+    private static LevelDefinition[] EnforcerModifierRules = Array.Empty<LevelDefinition>();
     private static readonly HashSet<int> ManagedLevelCharacters = new();
     private static readonly Stack<(string Reason, Character? Source)> ExplicitLevelContexts = new();
     private static Character? CachedRuleSearchCharacter;
@@ -158,7 +159,8 @@ internal static class CreatureLevelManager
     {
         lock (Sync)
         {
-            ActiveDefinitions = definitions.ToArray();
+            ActiveDefinitions = definitions.Where(rule => !rule.EnforcerOnly).ToArray();
+            EnforcerModifierRules = definitions.Where(rule => rule.EnforcerOnly).ToArray();
         }
 
         InvalidateRuleSearchCache();
@@ -2210,6 +2212,29 @@ internal static class CreatureLevelManager
         }
 
         LevelRuleContext context = LevelRuleContext.From(character);
+        CachedRuleSearch = new LevelRuleSearch(context, MatchCandidates(definitions, context, scope));
+        CachedRuleSearchCharacter = character;
+        CachedRuleSearchScope = scope;
+        CachedRuleSearchFrame = frame;
+        return CachedRuleSearch;
+    }
+
+    // Called only for an Enforcer's initial roll, after distance scaling of ordinary rules.
+    internal static void OverlayEnforcerModifiers(Character character, Dictionary<string, ModifierDefinition> modifiers, ref bool cleared)
+    {
+        LevelDefinition[] rules;
+        lock (Sync) rules = EnforcerModifierRules;
+        if (rules.Length == 0) return;
+        var candidates = MatchCandidates(rules, LevelRuleContext.From(character), LevelRuleScope.Full);
+        for (int index = candidates.Count - 1; index >= 0; --index)
+        {
+            LevelDefinition rule = candidates[index].Definition;
+            ModifierDefinition.OverlayBlock(modifiers, ref cleared, rule.Modifiers, rule.ModifiersCleared);
+        }
+    }
+
+    private static List<LevelRuleCandidate> MatchCandidates(LevelDefinition[] definitions, LevelRuleContext context, LevelRuleScope scope)
+    {
         List<LevelRuleCandidate> candidates = new(definitions.Length);
         for (int index = 0; index < definitions.Length; index++)
         {
@@ -2220,11 +2245,7 @@ internal static class CreatureLevelManager
         }
 
         candidates.Sort((left, right) => right.CompareTo(left));
-        CachedRuleSearchCharacter = character;
-        CachedRuleSearchScope = scope;
-        CachedRuleSearchFrame = frame;
-        CachedRuleSearch = new LevelRuleSearch(context, candidates);
-        return CachedRuleSearch;
+        return candidates;
     }
 
     private static bool TrySelectFloatValue(Character character, Func<LevelDefinition, float?> selector, out float value, LevelRuleScope scope = LevelRuleScope.Full)

@@ -20,7 +20,7 @@ namespace CreatureManager;
 public class CreatureManagerPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CreatureManager";
-    internal const string ModVersion = "1.3.13";
+    internal const string ModVersion = "1.3.14";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGUID}.cfg";
@@ -140,7 +140,7 @@ public class CreatureManagerPlugin : BaseUnityPlugin
             BlockEnforcerWhileBossActive = config("3 - Karma", "Block Enforcer While Boss Is Active", Toggle.On, Ordered("If on, Enforcer summons are blocked while a non-Enforcer boss is active in the same fixed 3x3 Karma neighborhood.", 80));
             BlockKarmaGainWhileBossActive = config("3 - Karma", "Block Karma Gain While Boss Is Active", Toggle.On, Ordered("If on, creature kills do not add Karma while a non-Enforcer boss is alive in the same fixed 3x3 Karma neighborhood. Killing the last active boss can still award Karma.", 75));
             BlockKarmaGainWhileEnforcerActive = config("3 - Karma", "Block Karma Gain While Enforcer Is Active", Toggle.On, Ordered("If on, creature kills do not add Karma while an Enforcer is alive in the same fixed 3x3 Karma neighborhood.", 74));
-            BlockOmenEnforcerDuringCooldown = config("3 - Karma", "Block Omen Enforcer During Cooldown", Toggle.On, Ordered("If on, Omen cannot summon an Enforcer while the target Karma region's Enforcer cooldown is active. Omen still bypasses the normal summon chance and required Karma.", 73));
+            BlockOmenEnforcerDuringCooldown = config("3 - Karma", "Block Omen Enforcer During Cooldown", Toggle.Off, Ordered("Off lets Omen summon during the target Karma region's Enforcer cooldown. Turn On to block Omen during that cooldown. In both modes Omen skips the normal summon chance and required Karma, and the regional Enforcer cap still applies.", 73));
             ShowKarmaValueOnMinimap = config("3 - Karma", "Show Karma Value On Minimap", Toggle.On, Ordered("If on, the minimap Karma label includes the current Karma value, for example 'Karma Lv. 2 (137)'.", 70), synchronizedSetting: false);
             MultiplayerHealthIncreasePerPlayer = config("4 - Multiplayer Difficulty", "HP Increase Per Player In Multiplayer (%)", 30f, Ordered("Extra creature effective health per nearby player after the first. Vanilla is 30%. This does not increase max health directly; vanilla applies it by reducing damage taken, while floating damage text generally shows the pre-scaling damage.", 100, new AcceptableValueRange<float>(0f, 200f)));
             MultiplayerDamageIncreasePerPlayer = config("4 - Multiplayer Difficulty", "DMG Increase Per Player In Multiplayer (%)", 4f, Ordered("Extra creature damage per nearby player after the first. Vanilla is 4%.", 90, new AcceptableValueRange<float>(0f, 200f)));

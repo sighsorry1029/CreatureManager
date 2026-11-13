@@ -17,7 +17,7 @@ internal static class CreatureDomainManager
 {
     private const long ReloadDebounceTicks = TimeSpan.TicksPerSecond / 4;
     private const long SyncedApplyDebounceTicks = TimeSpan.TicksPerSecond / 10;
-    private const int SyncedYamlBundleVersion = 5;
+    private const int SyncedYamlBundleVersion = 7; // Earlier readers can apply modifier blocks from the raw Karma YAML in this bundle.
     private const string ReferenceLogicVersion = "2026-07-21-ragdoll-visual-v2";
     private const string MainTextureProperty = "_MainTex";
     private const string RagdollCloneSuffix = "_CreatureManagerRagdoll";
@@ -164,6 +164,7 @@ internal static class CreatureDomainManager
     internal static string TextureDirectoryPath => Path.Combine(ConfigDirectoryPath, "textures");
     internal static string FactionConfigurationPath => Path.Combine(ConfigDirectoryPath, "factions.yml");
     internal static string LevelConfigurationPath => Path.Combine(ConfigDirectoryPath, "levels.yml");
+    internal static string ModifierConfigurationPath => Path.Combine(ConfigDirectoryPath, "modifier.yml");
     internal static string KarmaConfigurationPath => Path.Combine(ConfigDirectoryPath, "karma.yml");
     internal static string AiConfigurationPath => Path.Combine(ConfigDirectoryPath, "ai.yml");
     internal static string AiReferenceConfigurationPath => Path.Combine(ConfigDirectoryPath, "ai.reference.yml");
@@ -4917,7 +4918,7 @@ internal static class CreatureDomainManager
         definitions = new List<T>();
         try
         {
-            foreach (string file in EnumerateOverrideFiles(prefix))
+            foreach (string file in EnumerateOverrideFiles(ConfigDirectoryPath, prefix))
             {
                 string yaml = File.ReadAllText(file);
                 if (!reader(yaml, file, out List<T> fileDefinitions))
@@ -4941,7 +4942,12 @@ internal static class CreatureDomainManager
 
     private static bool TryLoadLevelDefinitions(out List<LevelDefinition> definitions)
     {
-        if (!TryLoadOverrideFiles("levels", CreatureYaml.TryReadLevelDefinitions, out List<LevelDefinition> overrideDefinitions))
+        var groups = new Dictionary<string, List<string>?>(StringComparer.OrdinalIgnoreCase);
+        bool ReadLevels(string yaml, string source, out List<LevelDefinition> rules) =>
+            CreatureYaml.TryReadRuleFile(yaml, source, out rules, groups, modifierFile: false);
+        if (!TryLoadOverrideFiles("levels", ReadLevels, out List<LevelDefinition> overrideDefinitions) ||
+            !TryReadTextFile(ModifierConfigurationPath, "Modifier", out string modifierYaml) ||
+            !CreatureYaml.TryReadRuleFile(modifierYaml, ModifierConfigurationPath, out var modifierRules, groups, modifierFile: true))
         {
             definitions = new List<LevelDefinition>();
             return false;
@@ -4949,6 +4955,7 @@ internal static class CreatureDomainManager
 
         definitions = LoadLevelPresetDefinitions();
         definitions.AddRange(overrideDefinitions);
+        definitions.AddRange(modifierRules);
         return true;
     }
 
@@ -5031,12 +5038,15 @@ internal static class CreatureDomainManager
         return new KeyValuePair<string, float[]>(biome, weights);
     }
 
-    private static IEnumerable<string> EnumerateOverrideFiles(string prefix)
+    private static IEnumerable<string> EnumerateOverrideFiles(string directory, string prefix)
     {
-        return Directory.EnumerateFiles(ConfigDirectoryPath, "*.yml")
-            .Concat(Directory.EnumerateFiles(ConfigDirectoryPath, "*.yaml"))
-            .Where(path => IsConfigurationFile(path, prefix))
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
+        var matches = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(directory, "*.yml").Concat(Directory.EnumerateFiles(directory, "*.yaml")))
+        {
+            if (IsConfigurationFile(file, prefix)) matches.Add(file);
+        }
+        matches.Sort(StringComparer.OrdinalIgnoreCase);
+        return matches;
     }
 
     private static bool IsOverrideFile(string path)
@@ -5046,6 +5056,7 @@ internal static class CreatureDomainManager
                IsConfigurationFile(path, "attacks") ||
                IsConfigurationFile(path, "projectile") ||
                IsConfigurationFile(path, "levels") ||
+               IsConfigurationFile(path, "modifier") ||
                IsConfigurationFile(path, "karma") ||
                IsConfigurationFile(path, "factions");
     }
@@ -5053,7 +5064,8 @@ internal static class CreatureDomainManager
     private static bool IsConfigurationFile(string path, string prefix)
     {
         string stem = Path.GetFileNameWithoutExtension(path);
-        if (prefix.Equals("factions", StringComparison.OrdinalIgnoreCase) ||
+        if (prefix.Equals("modifier", StringComparison.OrdinalIgnoreCase) ||
+            prefix.Equals("factions", StringComparison.OrdinalIgnoreCase) ||
             prefix.Equals("karma", StringComparison.OrdinalIgnoreCase))
         {
             return stem.Equals(prefix, StringComparison.OrdinalIgnoreCase) &&
@@ -5074,6 +5086,8 @@ internal static class CreatureDomainManager
         {
             File.WriteAllText(FactionConfigurationPath, CreatureFactionManager.BuildDefaultOverrideYaml());
         }
+
+        EnsureModifierFile(ModifierConfigurationPath);
 
         if (!File.Exists(LevelConfigurationPath))
         {
@@ -5113,6 +5127,22 @@ internal static class CreatureDomainManager
             "CreatureManager.defaults.attacks.sample.yml");
     }
 
+    private static void EnsureModifierFile(string path)
+    {
+        if (File.Exists(path)) return;
+        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, BuildDefaultModifierYaml());
+            try { File.Move(temporary, path); }
+            catch (IOException) when (File.Exists(path)) { } // Another process supplied the active file first.
+        }
+        finally
+        {
+            File.Delete(temporary);
+        }
+    }
+
     private static void WriteEmbeddedDefaultIfMissing(string path, string resourceName)
     {
         if (File.Exists(path))
@@ -5148,8 +5178,7 @@ internal static class CreatureDomainManager
     {
         StringBuilder builder = new();
         AppendTemplateComment(builder, "Config relationship: [2 - Levels] in sighsorry.CreatureManager.cfg (defaults: Full + Easy).");
-        AppendTemplateComment(builder, "toxicDeath is accepted as toxicAura with chance/power preserved; old radius/effect values are ignored. Within one modifier block, toxicAura wins.");
-        AppendTemplateComment(builder, "Blink always uses fx_Adrenaline1; an old fourth tuple value is accepted but ignored (including none).");
+        AppendTemplateComment(builder, "Configure modifiers and modifierDistanceScaling only in modifier.yml. Legacy entries here are ignored.");
         AppendTemplateComment(builder, "Enable Level System:");
         AppendTemplateComment(builder, "  Off = no CM automatic level assignment, level stat/distance/scale rules, or modifiers.");
         AppendTemplateComment(builder, "  ExceptLevel = keep game/other-mod levels; ignore ALL YAML level weights, biome presets, and Karma/Enforcer level bonuses.");
@@ -5171,7 +5200,6 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "Nested biome blocks override their parent target in that biome.");
         AppendTemplateComment(builder, "speed/speedPerLevel: movement, acceleration, and turning only; multiply with Swift, not attack speed or distanceScaling.");
         AppendTemplateComment(builder, "Speed is saved per creature; completed creatures keep their saved value (1 if absent) until a supported level change.");
-        AppendTemplateComment(builder, "modifiers: omit/{} = inherit, [] = clear; tuples start with chance% and may omit only trailing values.");
         AppendTemplateBlankLine(builder);
 
         builder.AppendLine("Global:");
@@ -5184,8 +5212,6 @@ internal static class CreatureDomainManager
         AppendTemplateLine(builder, 1, "speed: 1                             # Optional movement multiplier; must be > 0. Values below 1 slow movement.");
         AppendTemplateLine(builder, 1, "speedPerLevel: 0                     # Optional star growth >= 0: speed * (1 + (level - 1) * value). No matching rule = 1 / 0.");
         AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # damageStep, healthStep, stepMeters, maxSteps (0 = unlimited).");
-        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.03, 1000, 8] # chanceStep, stepMeters, maxSteps; 20% -> 20.6% at 1000m, 24.8% at 8000m+.");
-        AppendDefaultLevelModifiers(builder, bossDefaults: false);
         builder.AppendLine();
 
         builder.AppendLine("Boss:                                  # Regular bosses only; Enforcers use non-boss rules.");
@@ -5197,11 +5223,6 @@ internal static class CreatureDomainManager
         AppendIndented(builder, 1, "healthPerLevel: 0.5");
         AppendTemplateLine(builder, 1, "speed: 1");
         AppendTemplateLine(builder, 1, "speedPerLevel: 0");
-        AppendDefaultLevelModifiers(builder, bossDefaults: true);
-        builder.AppendLine();
-
-        builder.AppendLine("TentaRoot:");
-        AppendIndented(builder, 1, "modifiers: []                       # Clears inherited modifiers for this prefab.");
         builder.AppendLine();
 
         AppendTemplateComment(builder, "Optional examples; uncomment only what you need.");
@@ -5250,13 +5271,57 @@ internal static class CreatureDomainManager
         }
     }
 
-    private static void AppendDefaultLevelModifiers(StringBuilder builder, bool bossDefaults)
+    private static string BuildDefaultModifierYaml()
     {
-        string chance = bossDefaults ? "10" : "5";
-        string regenerationPerSecond = bossDefaults ? "0.002" : "0.01";
-        string blamerChance = bossDefaults ? "0" : chance;
-        string blamerKarmaPerSecond = bossDefaults ? "1" : "0.5";
-        string blamerMaxKarmaGain = bossDefaults ? "60" : "45";
+        StringBuilder builder = new();
+        builder.AppendLine("# Automatic combat modifier rolls. Full and ExceptLevel use these rules; Off disables them.");
+        builder.AppendLine("# Ordinary targets: Global (or Boss for regular bosses), biome, group, prefab. More specific rules override individual values.");
+        builder.AppendLine("# Regular bosses skip Global and shared biome rules. A nested biome restricts its parent target.");
+        builder.AppendLine("# Enforcer leaders: ordinary rules, then Enforcer, biome.enforcer, group.enforcer, prefab.enforcer, prefab.biome.enforcer.");
+        builder.AppendLine("# Use enforcer last: Troll: { BlackForest: { enforcer: { modifiers: { staggering: 15 } } } }.");
+        builder.AppendLine("# Minions use ordinary rules. Only modifier.yml supplies effect rules, including for Enforcer leaders.");
+        builder.AppendLine("# Omit modifiers or use {} to inherit; [] clears lower layers. A zero chance excludes just that effect.");
+        builder.AppendLine("# Tuples start with chance%; omitted trailing values inherit. toxicDeath is an alias for toxicAura; obsolete radius/effect values are ignored.");
+        builder.AppendLine("# Blink uses fx_Adrenaline1; the old fourth value is ignored. The cfg controls the maximum number of effects.");
+        builder.AppendLine();
+        builder.AppendLine("Global:");
+        AppendTemplateLine(builder, 1, "modifierDistanceScaling: [0.03, 1000, 8] # chanceStep, stepMeters, maxSteps; applies before Enforcer overrides.");
+        AppendDefaultModifierTable(builder, "5", "0.01", bossOrEnforcer: false);
+        builder.AppendLine();
+        builder.AppendLine("Boss:");
+        AppendDefaultModifierTable(builder, "10", "0.002", bossOrEnforcer: true);
+        builder.AppendLine();
+        builder.AppendLine("Enforcer:");
+        AppendDefaultModifierTable(builder, "10", "0.005", bossOrEnforcer: true);
+        builder.AppendLine();
+        builder.AppendLine("TentaRoot:");
+        AppendIndented(builder, 1, "modifiers: []");
+        builder.AppendLine();
+        builder.AppendLine("Greydwarf_Elite:");
+        AppendIndented(builder, 1, "BlackForest:");
+        AppendIndented(builder, 2, "enforcer:");
+        AppendIndented(builder, 3, "modifiers:");
+        AppendIndented(builder, 4, "staggering: 30, 0.6");
+        AppendIndented(builder, 4, "deathward: 30, 0.2, 10, 3");
+        AppendIndented(builder, 4, "toxicAura: 30, 0.1");
+        AppendIndented(builder, 4, "juggernaut: 30, 150, 5");
+        builder.AppendLine();
+        builder.AppendLine("Bjorn:");
+        AppendIndented(builder, 1, "BlackForest:");
+        AppendIndented(builder, 2, "enforcer:");
+        AppendIndented(builder, 3, "modifiers:");
+        AppendIndented(builder, 4, "lightning: 10, 0.1");
+        AppendIndented(builder, 4, "deathward: 20, 0.2, 10, 3");
+        AppendIndented(builder, 4, "disruptive: 10, 0.5, 0.5, 0.5, 5");
+        AppendIndented(builder, 4, "blink: 10, 6, 16");
+        return builder.ToString();
+    }
+
+    private static void AppendDefaultModifierTable(StringBuilder builder, string chance, string regenerationPerSecond, bool bossOrEnforcer)
+    {
+        string blamerChance = bossOrEnforcer ? "0" : chance;
+        string blamerKarmaPerSecond = bossOrEnforcer ? "1" : "0.5";
+        string blamerMaxKarmaGain = bossOrEnforcer ? "60" : "45";
         AppendIndented(builder, 1, "modifiers:                           # One per group; totals below 100 allow none, above 100 are weights.");
         AppendIndented(builder, 2, "# Offense: Enraged to Undodgeable");
         AppendIndented(builder, 2, $"enraged: {chance}, 0.15                 # chance%, outgoingDamageBonus");

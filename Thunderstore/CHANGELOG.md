@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.14
+
+- `Block Omen Enforcer During Cooldown` now defaults to `Off`. An Omen roll can summon an Enforcer during the regional cooldown. The cap still counts active Enforcers and pending summons. Servers with a saved value of `On` keep it until an administrator changes it.
+- Killing an Omen Enforcer or one of its Omen minions can trigger another Enforcer near the credited player. Both still grant zero kill Karma. At the default regional cap of one, a surviving leader blocks another summon when its minion dies.
+- Configure automatic modifier chances, powers, and distance scaling in `BepInEx/config/CreatureManager/modifier.yml`. Enforcer leaders can have biome, group, and prefab overrides. For example, use `Troll.BlackForest.enforcer` for a Troll leader in the Black Forest. Outdoor and dungeon candidates with the same leader prefab and biome share that rule. Minions use ordinary creature rules.
+- **Upgrading custom rules:** Copy your modifier values from `levels.yml`, split level files, and `karma.yml` into `modifier.yml`, including zero chances, clears (`[]`), and distance scaling. The old blocks are ignored. A missing `modifier.yml` is created with the full defaults. An existing empty file stays empty and disables automatic rolls. Previously assigned modifiers are preserved. Update the server and all clients to 1.3.14 together and restart.
+
 ## 1.3.13
 
 - In `Full` mode, extend **Bosses Follow Biome Level Preset** to top-level biome YAML `level` weights. Regular bosses now use matching biome YAML before the built-in preset when no Boss/group/prefab level rule applies. Explicit biome weights also work with preset `None`; turning the option Off excludes both biome fallbacks while keeping explicit boss rules.

@@ -2,7 +2,7 @@
 
 Detailed configuration and usage notes. For the feature overview, images, and GIFs, see the [README](../README.md).
 
-**Version scope:** CreatureManager 1.3.13. GitHub `main` can differ from a published package. For older releases, use the corresponding commit and [changelog](../Thunderstore/CHANGELOG.md). Existing user configurations are preserved; new defaults do not overwrite them.
+**CreatureManager 1.3.14.** For the previous two-file layout, see the [1.3.13 guide](https://github.com/sighsorry1029/CreatureManager/blob/4cd9b55/docs/user-guide.md).
 
 ## Contents
 
@@ -39,16 +39,17 @@ The [README settings table](../README.md#settings) lists the main switches. The 
 | `projectile.yml` | Clone projectile prefabs and override fixed or weighted-random on-hit spawns and spawn-ability prefab references. |
 | `ai.yml` | Override same-name creature AI directly or define uniquely named reusable AI presets. |
 | `factions.yml` | Define and edit factions. This domain is intentionally single-file. |
-| [`levels.yml`](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/levels.yml) | Configure level weights, stat scaling, distance scaling, visuals, and modifiers. |
+| [`levels.yml`](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/levels.yml) | Configure level weights, stat scaling, distance scaling, and visuals. |
+| [`modifier.yml`](defaults/modifier.yml) | Configure modifier chances, powers, distance scaling, and Enforcer leader rules. |
 | [`karma.yml`](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/karma.yml) | Configure regional Karma and Enforcer encounters. |
 | `localization/<Language>.yml` | Define server-authoritative localized text using Valheim language names such as `English.yml` and `Korean.yml`. |
 | `textures/` | Store top-level PNG files used by creature texture overrides. The server synchronizes only files referenced by active creature definitions; clients keep verified SHA-256 content in `cache/synced-textures`. Release packages install the bundled `cm_*.png` samples here as ordinary files; the DLL does not generate them. |
 
-Browse all seven [default YAML files](https://github.com/sighsorry1029/CreatureManager/tree/main/docs/defaults), generated from the same code used on first launch. These links track current source; check the version notice before copying. Existing user files are not automatically updated: merge only the entries you need rather than replacing your configuration wholesale.
+Browse all eight [default YAML files](https://github.com/sighsorry1029/CreatureManager/tree/main/docs/defaults), generated from the same code used on first launch. These links track current source; check the version notice before copying. Existing user files are not automatically updated: merge only the entries you need rather than replacing your configuration wholesale.
 
 ### Samples and File Names
 
-The creature, attack, projectile, AI, and level domains load both `.yml` and `.yaml` base or split files, such as `creatures.yml`, `creatures.yaml`, and `creatures_*.yaml`. The generated `creatures.sample.yml` and `attacks.sample.yml` names do not match those active patterns, so the examples remain inactive. Copy selected entries into the active files, or install MonsterLabZ and rename them to `creatures_sample.yml` and `attacks_sample.yml` to activate the complete sample set. Bonebeard, Vincent, and Root Witch require MonsterLabZ. Vitrfell uses the packaged `cm_boar2.png` texture. Faction and Karma configuration intentionally accept only the single canonical files `factions.yml` and `karma.yml`.
+The creature, attack, projectile, AI, and level domains load both `.yml` and `.yaml` base or split files, such as `creatures.yml`, `creatures.yaml`, and `creatures_*.yaml`. The generated `creatures.sample.yml` and `attacks.sample.yml` names do not match those active patterns, so the examples remain inactive. Copy selected entries into the active files, or install MonsterLabZ and rename them to `creatures_sample.yml` and `attacks_sample.yml` to activate the complete sample set. Bonebeard, Vincent, and Root Witch require MonsterLabZ. Vitrfell uses the packaged `cm_boar2.png` texture. Use the exact filenames `factions.yml`, `karma.yml` and `modifier.yml` for those domains.
 
 ## Generated References
 
@@ -159,7 +160,28 @@ CreatureManager is spawn-aware. Natural hostile spawns receive the complete matc
 
 `Global Modifiers`, `Boss Modifiers`, and `Enforcer Modifiers` in `2 - Levels` independently accept `Max4`, `Max3`, `Max2`, `Max1`, or `Off` (default: `Max4`). MaxN limits new automatic rolls; it does not trim previously stored, inherited, or explicitly forced modifiers. Off disables effects and icons without deleting stored values.
 
-Configure modifier chances and powers in `levels.yml` and Enforcer rules in `karma.yml`. The [README showcase](../README.md#combat-modifiers) and in-game Compendium describe all 32 effects.
+Configure modifier chances and powers in `modifier.yml`. The [README showcase](../README.md#combat-modifiers) and in-game Compendium describe all 32 effects.
+
+### Modifier rules and upgrades
+
+A fresh install puts all three base modifier tables in `modifier.yml`. For natural spawns, an individual prefab takes priority over its group, the biome and Global. Regular bosses use Boss, group and prefab rules. Enforcer leaders first use ordinary rules with their applicable distance adjustment, then Enforcer, biome.enforcer, group.enforcer and prefab.enforcer. A nested biome is more specific than its parent. Minions use their ordinary creature rules.
+
+```yaml
+Troll:
+  enforcer:
+    modifiers:
+      staggering: 15, 0.6
+  BlackForest:
+    enforcer:
+      modifiers:
+        staggering: 30  # Retains the 0.6 power.
+```
+
+Set `modifiers: []` to clear lower layers at that scope. An empty map or omitted field inherits. Place `modifierDistanceScaling` on an ordinary target. Leader chance overrides are applied after distance scaling. Define groups locally in this file or use group names from `levels.yml` and its split files. If two level files use the same name for different members, declare the intended group in `modifier.yml`.
+
+Only `modifier.yml` supplies automatic modifier rules. When it is missing, new and existing installations create the full default tables. An existing empty or comment-only file stays empty and supplies no automatic rolls. This also applies to files created by earlier development builds.
+
+The loader skips `modifiers` and `modifierDistanceScaling` in all active level files, and `modifiers` on Enforcer defaults and individual summons in `karma.yml`. On the host or dedicated server, the first such entry in each file produces a migration notice. To retain custom chances, powers, disabled effects (`0`), clears (`[]`) and distance scaling, move those values into `modifier.yml`. For a selected leader prefab use `prefab.enforcer` or `prefab.biome.enforcer`. A biome selector uses the leader's position at the roll. Outdoor and dungeon candidates for the same prefab in the same biome share that rule. Use matching builds on all peers. Hot reload affects future rolls; existing stored rolls are preserved.
 
 ### Tuple Syntax
 
@@ -167,15 +189,17 @@ Every modifier tuple requires `chance` first. Later values form an optional trai
 
 ### Toxic Aura
 
-Toxic Aura replaces Toxic Death. Use `toxicAura: chance, maxHealthPoison`, for example `toxicAura: 10, 0.1`. Existing `toxicDeath` entries in `levels.yml` and `karma.yml` are accepted as an alias: chance and power are preserved, while old radius/effect values are ignored. In the same modifier block, explicit `toxicAura` wins regardless of order and the two entries are never merged. New `toxicAura` entries accept only chance and optional power. A compatibility notice is logged once per session; existing files are not rewritten or populated automatically. The radius is the larger XZ extent of the live body collider plus 3m, so creature scaling is included. Poison is reapplied once per second through vanilla poison/resistance rules, without additional attacker damage multipliers; it does not stack as direct damage per second. Only the creature's network owner applies damage. Each client maintains a local particle-only visual extracted from `blob_aoe`, with no `Aoe`, `ZNetView` or repeated effect RPCs. Death, taming, disabled effects and scene teardown stop it; there is no death burst or lingering pool.
+Toxic Aura replaces Toxic Death. Use `toxicAura: chance, maxHealthPoison`, for example `toxicAura: 10, 0.1`. In `modifier.yml`, `toxicDeath` is accepted as an alias: chance and power are preserved, while old radius/effect values are ignored. In the same modifier block, explicit `toxicAura` wins regardless of order and the two entries are never merged. New `toxicAura` entries accept only chance and optional power. A compatibility notice is logged once per session; existing files are not rewritten or populated automatically. The radius is the larger XZ extent of the live body collider plus 3m, so creature scaling is included. Poison is reapplied once per second through vanilla poison/resistance rules, without additional attacker damage multipliers; it does not stack as direct damage per second. Only the creature's network owner applies damage. Each client maintains a local particle-only visual extracted from `blob_aoe`, with no `Aoe`, `ZNetView` or repeated effect RPCs. Death, taming, disabled effects and scene teardown stop it; there is no death burst or lingering pool.
 
-**Upgrading from Toxic Death:** the new default poison strength is `0.1`, but an existing YAML value of `0.3` is preserved and may feel much stronger as a recurring aura. Review the applicable modifier blocks in **both `levels.yml` and `karma.yml`**, including per-creature and Enforcer overrides. To use the new default strength, change the second tuple value to `0.1` while keeping your chance, for example `toxicDeath: 10, 0.1, 4, blob_aoe`, or replace it with `toxicAura: 10, 0.1`. Existing saved Toxic Death flags also become Toxic Aura; old per-creature power/radius/effect fields are not migrated, and a missing new aura power uses `0.1`.
+**Upgrading from Toxic Death:** the new default poison strength is `0.1`, and a value of `0.3` copied into `modifier.yml` gives the recurring aura that stronger setting. Review both creature and Enforcer entries when moving old blocks. To use the new default strength, change the second tuple value to `0.1` while keeping your chance, for example `toxicDeath: 10, 0.1, 4, blob_aoe`, or replace it with `toxicAura: 10, 0.1`. Existing saved Toxic Death flags also become Toxic Aura; old per-creature power/radius/effect fields are not migrated, and a missing new aura power uses `0.1`.
 
 ### Blink
 
-Blink always uses the built-in `fx_Adrenaline1` effect. Configure `blink: chance, cooldown, maxRange` in `levels.yml` or `karma.yml`. An existing fourth tuple value (including `none`) is accepted but ignored; stored creature effect names are also ignored. Existing YAML files are not rewritten. This prevents custom effect prefabs from creating unintended network or gameplay objects; Blink's chance, cooldown and range remain configurable.
+Blink always uses the built-in `fx_Adrenaline1` effect. Configure `blink: chance, cooldown, maxRange` in `modifier.yml`. An existing fourth tuple value (including `none`) is accepted but ignored; stored creature effect names are also ignored. Existing YAML files are not rewritten. This prevents custom effect prefabs from creating unintended network or gameplay objects; Blink's chance, cooldown and range remain configurable.
 
 ### Karma, Omen, and Reaping Kill Credit
+
+Enforcers and their summoned minions grant zero kill Karma. If one carries Omen, a credited player kill can still trigger an Enforcer summon near the killer. By default, Omen can trigger during the regional cooldown. If your server already has `Block Omen Enforcer During Cooldown = On`, set it to `Off` to allow this. The dead creature is excluded from the regional cap. With a cap of one, killing an Omen minion while its Enforcer is still active in that region cannot summon another.
 
 Karma/Omen DoT rewards use the damage pool that actually killed the creature, not unrelated active effects or a recent-hit timeout. Karma accepts confirmed player/tamed/PlayerSpawned contributors; Omen still requires a real player. Within each pool the first confirmed player takes precedence over a tame/summon. Simultaneous fire/spirit ticks also prefer a real player, then use the fire candidate if both are equally eligible. This selects a reward representative, not the largest damage contributor. The server still validates that source, ownership and duplicate deaths; a disconnected/unverifiable selected source is not replaced with a nearby player.
 
@@ -207,7 +231,7 @@ CreatureManager does not rewrite the selected setting or the other mod's configu
 
 Karma is a regional pressure system based on a sliding 3x3 neighborhood of vanilla zones. Outdoor and dungeon neighborhoods track independent Karma, levels, decay, and Enforcer cooldowns while sharing the configured thresholds and gain rules. Kills of untamed, non-player creatures by a player, a tamed creature, or another player-side creature raise Karma in the current neighborhood; runtime-summoned creatures, including Enforcers and their minions, do not. Higher thresholds can add levels to future natural spawns, and idle regions decay over time.
 
-Enforcers turn high Karma into encounters. A biome or dungeon table can choose an Enforcer, minions, modifiers, level bonus, bonus loot, and location restrictions. Nearby overlapping player regions are evaluated as one connected check region to avoid duplicate rolls for the same group.
+Enforcers turn high Karma into encounters. Biome and dungeon tables in `karma.yml` select the Enforcer, minions, level bonus, bonus loot, and location restrictions. Set the leader's modifiers in `modifier.yml`. Nearby overlapping player regions are evaluated as one connected check region to avoid duplicate rolls for the same group.
 
 New default `karma.yml` files include three DeepNorth encounters: Barka alone outdoors, ElakingMole with one Elaking in `TheHole01`, and JotunWarrior with one BlobMork in `MorkBorg`. Each uses `[40, 30, 2]` for required Karma, consumed Karma, and additional level bonus, inherits the Enforcer modifier rules, and grants its Enforcer's trophy plus two Silver Necklaces as bonus loot. The level bonus is not a final star cap. Dungeon entries match the location prefab names, not the dungeon generator names. Existing `karma.yml` files are preserved; add a DeepNorth section manually to enable these encounters in an existing configuration.
 
@@ -243,7 +267,7 @@ Generated references compact repeated prefab entries into weighted lists while p
 
 ### Tune Progression or Encounters
 
-Use `levels.yml` for biome, group, prefab, boss, distance, and modifier rules. Use `karma.yml` for regional gain/decay and outdoor or dungeon Enforcer tables. Start with broad defaults and add only the narrower overrides you need.
+Use `levels.yml` for level and stat rules and `modifier.yml` for modifier rules. Use `karma.yml` for regional gain/decay and outdoor or dungeon Enforcer tables. Start with broad defaults and add only the narrower overrides you need.
 
 ### Reskin a Creature
 
