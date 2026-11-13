@@ -22,6 +22,13 @@ internal static class CreatureLevelManager
     private const string DamageMultiplierKey = "CreatureManager_LevelDamageMultiplier";
     private const string DamageReplacesVanillaKey = "CreatureManager_LevelDamageReplacesVanilla";
     private const string SpeedMultiplierKey = "CreatureManager_LevelSpeedMultiplier";
+    // Ordinary keys remain the unmodified basis for growth/inheritance. Only effective
+    // stats overridden by a companion rule get a separate network value.
+    private static readonly int CompanionHealthKey = "CreatureManager_CompanionHealth".GetStableHashCode();
+    private static readonly int CompanionDamageKey = "CreatureManager_CompanionDamage".GetStableHashCode();
+    private static readonly int CompanionDamageGrowthKey = "CreatureManager_CompanionDamageGrowth".GetStableHashCode();
+    private static readonly int CompanionSpeedKey = "CreatureManager_CompanionSpeed".GetStableHashCode();
+    private static readonly int CompanionStatsKey = "CreatureManager_HasCompanionStats".GetStableHashCode();
     private const string KarmaBonusRequestRpc = "CreatureManager_LevelKarmaBonusRequest";
     private const string KarmaBonusResponseRpc = "CreatureManager_LevelKarmaBonusResponse";
     private const float KarmaBonusRetryInterval = 0.5f;
@@ -35,6 +42,7 @@ internal static class CreatureLevelManager
     private static readonly object Sync = new();
     private static LevelDefinition[] ActiveDefinitions = Array.Empty<LevelDefinition>();
     private static LevelDefinition[] EnforcerModifierRules = Array.Empty<LevelDefinition>();
+    private static LevelDefinition[] CompanionRules = Array.Empty<LevelDefinition>();
     private static readonly HashSet<int> ManagedLevelCharacters = new();
     private static readonly Stack<(string Reason, Character? Source)> ExplicitLevelContexts = new();
     private static Character? CachedRuleSearchCharacter;
@@ -44,6 +52,7 @@ internal static class CreatureLevelManager
     private static ZRoutedRpc? RegisteredRoutedRpc;
     private static int NextKarmaBonusRequestId;
     private static readonly Dictionary<int, Character> PendingLevelCharacters = new();
+    private static readonly Dictionary<int, Character> PendingTamenessChanges = new();
     private static readonly Dictionary<ZDOID, PendingKarmaBonusRequest> PendingKarmaBonusRequests = new();
     private static readonly Dictionary<ZDOID, int> ResolvedKarmaBonuses = new();
     private static readonly int[] ServerKarmaBonusOutcomeCounts = new int[(int)KarmaBonusRequestOutcome.Count];
@@ -159,8 +168,11 @@ internal static class CreatureLevelManager
     {
         lock (Sync)
         {
-            ActiveDefinitions = definitions.Where(rule => !rule.EnforcerOnly).ToArray();
+            ActiveDefinitions = definitions.Where(rule => !rule.EnforcerOnly && rule.Companion == CompanionRole.None).ToArray();
             EnforcerModifierRules = definitions.Where(rule => rule.EnforcerOnly).ToArray();
+            // At equal specificity the later definition wins, matching ordinary split-file overrides.
+            CompanionRules = definitions.Where(rule => rule.Companion != CompanionRole.None).Reverse()
+                .OrderByDescending(rule => IsGlobalTarget(rule.Target!) ? 0 : rule.Prefabs != null ? 1 : 2).ToArray();
         }
 
         InvalidateRuleSearchCache();
@@ -172,6 +184,7 @@ internal static class CreatureLevelManager
         ManagedLevelCharacters.Clear();
         NextKarmaBonusRequestId = 0;
         PendingLevelCharacters.Clear();
+        PendingTamenessChanges.Clear();
         PendingKarmaBonusRequests.Clear();
         ResolvedKarmaBonuses.Clear();
         Array.Clear(ServerKarmaBonusOutcomeCounts, 0, ServerKarmaBonusOutcomeCounts.Length);
@@ -206,6 +219,7 @@ internal static class CreatureLevelManager
         UpdateTimedOutKarmaBonusRequests();
         if (!IsLevelSystemEnabled())
         {
+            PendingTamenessChanges.Clear();
             foreach (KeyValuePair<int, Character> pending in PendingLevelCharacters.ToArray())
             {
                 TryApplyLevel(pending.Value);
@@ -218,6 +232,16 @@ internal static class CreatureLevelManager
             return;
         }
 
+        if (PendingTamenessChanges.Count > 0)
+        {
+            foreach (var entry in PendingTamenessChanges.ToArray())
+            {
+                PendingTamenessChanges.Remove(entry.Key);
+                var character = entry.Value;
+                if (character != null && TryGetOwnedZdo(character, out var zdo) && !IsDeadOrWithoutHealth(character, zdo))
+                    RefreshCompanionStats(character, zdo);
+            }
+        }
         if (PendingLevelCharacters.Count == 0)
         {
             return;
@@ -290,6 +314,7 @@ internal static class CreatureLevelManager
     {
         if (character != null)
         {
+            PendingTamenessChanges.Remove(character.GetInstanceID());
             ForgetPendingLevelCharacter(character, character.GetZDOID());
         }
     }
@@ -515,6 +540,7 @@ internal static class CreatureLevelManager
         }
 
         StoreSpeedMultiplier(character, zdo);
+        RefreshCompanionStats(character, zdo);
         CreaturePovCompatibility.TryCompleteBloodChallengeHealth(character);
         zdo.Set(ProcessingCompleteKey, true);
         ForgetPendingLevelCharacter(character, zdo.m_uid);
@@ -954,7 +980,7 @@ internal static class CreatureLevelManager
             character.m_level = level;
         }
 
-        RestoreStoredHealthMultiplier(character, zdo);
+        if (!RefreshCompanionStats(character, zdo)) RestoreStoredHealthMultiplier(character, zdo);
     }
 
     private static void RestoreStoredHealthMultiplier(Character character, ZDO zdo)
@@ -962,14 +988,19 @@ internal static class CreatureLevelManager
         ZNetView? nview = character.m_nview;
         if (nview == null ||
             !nview.IsValid() ||
-            !nview.IsOwner() ||
-            !zdo.GetBool(HealthAppliedKey, false))
+            !nview.IsOwner())
         {
             return;
         }
 
-        float multiplier = zdo.GetFloat(HealthMultiplierKey, 1f);
-        ApplyHealthMultiplier(character, multiplier);
+        float companion = IsLevelSystemEnabled() ? zdo.GetFloat(CompanionHealthKey, -1f) : -1f;
+        if (companion > 0f)
+            ApplyCompanionHealth(character, zdo, companion);
+        else if (zdo.GetBool(HealthAppliedKey, false))
+        {
+            float multiplier = zdo.GetFloat(HealthMultiplierKey, 1f);
+            ApplyHealthMultiplier(character, multiplier);
+        }
     }
 
     internal static float CaptureStoredHealthDeficit(Character character)
@@ -978,7 +1009,7 @@ internal static class CreatureLevelManager
             character.IsPlayer() ||
             IsFrozenKingPhaseTwo(character) ||
             !TryGetOwnedZdo(character, out ZDO zdo) ||
-            !zdo.GetBool(HealthAppliedKey, false))
+            !(zdo.GetBool(HealthAppliedKey, false) || (IsLevelSystemEnabled() && zdo.GetFloat(CompanionHealthKey, -1f) > 0f)))
         {
             return float.NaN;
         }
@@ -1217,12 +1248,15 @@ internal static class CreatureLevelManager
 
         if (ShouldPreserveExistingRolls(character))
         {
-            RestoreStoredHealthMultiplier(character, zdo);
+            if (!RefreshCompanionStats(character, zdo)) RestoreStoredHealthMultiplier(character, zdo);
             return;
         }
 
         if (!zdo.GetBool(AppliedKey, false))
         {
+            // Full can preserve a level-one summon without recording a CM level decision.
+            // After initialization an external SetLevel still needs to update its per-star stats.
+            if (zdo.GetBool(ProcessingCompleteKey, false)) RefreshCompanionStats(character, zdo);
             return;
         }
 
@@ -1296,6 +1330,7 @@ internal static class CreatureLevelManager
         if (ShouldPreserveExistingRolls(character))
         {
             InheritLevelRuntimeState(source, character, zdo);
+            RefreshCompanionStats(character, zdo);
         }
         else
         {
@@ -1397,6 +1432,137 @@ internal static class CreatureLevelManager
             zdo.Set(DamageReplacesVanillaKey, false);
             zdo.Set(DamageAppliedKey, false);
         }
+        RefreshCompanionStats(character, zdo);
+    }
+
+    internal static void OnTamenessChanged(Character character)
+    {
+        if (!IsLevelSystemEnabled() || character.IsPlayer() || !TryGetOwnedZdo(character, out ZDO zdo) ||
+            IsFrozenKingPhaseTwo(zdo)) return;
+        bool ready = CreatureDomainManager.IsSynchronizedConfigurationReady();
+        if (ready && CompanionRules.Length == 0 && !zdo.GetBool(CompanionStatsKey, false)) return;
+        if (ready && zdo.GetBool(ProcessingCompleteKey, false))
+        {
+            if (!IsDeadOrWithoutHealth(character, zdo)) RefreshCompanionStats(character, zdo);
+            return;
+        }
+        // Let Awake record summon provenance and the spawning code finish level/inheritance writes.
+        // Only the changed creature is reconciled, even if multiple RPCs arrive in one frame.
+        PendingTamenessChanges[character.GetInstanceID()] = character;
+    }
+
+    // Rebuild overrides from configuration, never from a previous companion result.
+    // A summon that also starts tamed belongs exclusively to its recorded summon source.
+    private static bool RefreshCompanionStats(Character character, ZDO zdo)
+    {
+        bool previous = zdo.GetBool(CompanionStatsKey, false);
+        if ((CompanionRules.Length == 0 && !previous) || !character.m_nview.IsOwner()) return false;
+        if (!CreatureDomainManager.IsSynchronizedConfigurationReady())
+        {
+            PendingTamenessChanges[character.GetInstanceID()] = character;
+            return false;
+        }
+        var source = CreatureManagerSpawnLifecycle.GetSpawnSource(character);
+        CompanionRole role = source == CreatureSpawnSourceKind.PlayerSummon
+            ? CompanionRole.BloodMagicSummon : character.IsTamed() ? CompanionRole.Tamed : CompanionRole.None;
+        if (role == CompanionRole.None && !previous) return false;
+        string prefab = GetPrefabName(character.gameObject);
+        LevelDefinition? stats = role == CompanionRole.None ? null : SelectCompanionStats(role, prefab);
+        if (stats == null && !previous) return false;
+
+        // Use the ordinary lookup only for missing parts of an explicitly overridden
+        // stat. Its spawn point stays fixed even if a wolf travels to another biome.
+        float speed = -1f, damage = -1f, health = -1f;
+        bool replaceDamage = false;
+        if (stats != null)
+        {
+            bool hasSpeed = stats.Speed.HasValue || stats.SpeedPerLevel.HasValue;
+            bool hasDamage = stats.Damage.HasValue || stats.DamagePerLevel.HasValue;
+            bool hasHealth = stats.Health.HasValue || stats.HealthPerLevel.HasValue;
+            SpawnPolicy policy = GetSpawnPolicy(source);
+            var scope = source == CreatureSpawnSourceKind.TamedRestore ? LevelRuleScope.Full :
+                policy.StatScope ?? LevelRuleScope.BaselineOnly;
+            Vector3 origin = zdo.GetVec3(ZDOVars.s_spawnPoint, zdo.GetPosition());
+            var context = new LevelRuleContext(prefab, GetBiome(origin), GetHorizontalDistance(origin),
+                character.IsBoss(), CreatureKarmaManager.IsEnforcer(character));
+            float? healthDistance = null, damageDistance = null;
+            foreach (var candidate in MatchCandidates(ActiveDefinitions, context, scope))
+            {
+                LevelDefinition rule = candidate.Definition;
+                stats.InheritCompanionStats(rule);
+                if (!policy.AllowStatDistanceScaling && scope != LevelRuleScope.Full) continue;
+                if (hasDamage && !damageDistance.HasValue && HasDistanceScalingValue(rule.DistanceScaling, 0))
+                    damageDistance = GetDistanceScalingMultiplier(context.Distance, rule.DistanceScaling, 0);
+                if (hasHealth && !healthDistance.HasValue && HasDistanceScalingValue(rule.DistanceScaling, 1))
+                    healthDistance = GetDistanceScalingMultiplier(context.Distance, rule.DistanceScaling, 1);
+            }
+            if (hasSpeed)
+                speed = (stats.Speed ?? 1f) * GetPerLevelMultiplier(character, stats.SpeedPerLevel ?? 0f);
+            if (hasDamage)
+            {
+                replaceDamage = stats.DamagePerLevel.HasValue;
+                damage = (stats.Damage ?? 1f) * GetPerLevelMultiplier(character, stats.DamagePerLevel ?? 0f) * (damageDistance ?? 1f);
+            }
+            if (hasHealth)
+                health = (stats.Health ?? 1f) * GetPerLevelMultiplier(character, stats.HealthPerLevel ?? 1f) *
+                    (healthDistance ?? 1f) / GetVanillaLevelHealthMultiplier(character);
+            if (!previous) zdo.Set(CompanionStatsKey, true);
+        }
+
+        SetCompanionValue(zdo, CompanionSpeedKey, speed > 0f ? speed : -1f);
+        SetCompanionValue(zdo, CompanionDamageKey, damage);
+        if (zdo.GetBool(CompanionDamageGrowthKey, false) != replaceDamage)
+            zdo.Set(CompanionDamageGrowthKey, replaceDamage);
+        bool hadHealth = zdo.GetFloat(CompanionHealthKey, -1f) > 0f;
+        bool applyHealth = health > 0f && !float.IsInfinity(health);
+        if (hadHealth || applyHealth)
+        {
+            float effective = applyHealth ? health : zdo.GetFloat(HealthMultiplierKey, 1f);
+            if (!ApplyCompanionHealth(character, zdo, effective)) return false;
+            SetCompanionValue(zdo, CompanionHealthKey, applyHealth ? health : -1f);
+        }
+        if (stats == null) zdo.Set(CompanionStatsKey, false);
+        return hadHealth || applyHealth;
+    }
+
+    private static LevelDefinition? SelectCompanionStats(CompanionRole role, string prefab)
+    {
+        LevelDefinition? stats = null;
+        foreach (var rule in CompanionRules)
+        {
+            if (rule.Companion != role) continue;
+            bool matches = IsGlobalTarget(rule.Target!) || (rule.Prefabs != null
+                ? rule.Prefabs.Contains(prefab, StringComparer.OrdinalIgnoreCase)
+                : string.Equals(rule.Target, prefab, StringComparison.OrdinalIgnoreCase));
+            if (matches) (stats ??= new LevelDefinition()).InheritCompanionStats(rule);
+        }
+        return stats;
+    }
+
+    private static void SetCompanionValue(ZDO zdo, int key, float value)
+    {
+        // Use a replicated sentinel on removal; a raw extra-data removal alone does not bump the ZDO revision.
+        if (float.IsNaN(value) || float.IsInfinity(value)) value = -1f;
+        if (zdo.GetFloat(key, -1f) != value) zdo.Set(key, value);
+    }
+
+    private static bool ApplyCompanionHealth(Character character, ZDO zdo, float multiplier)
+    {
+        float before = character.GetMaxHealth();
+        float hp = character.GetHealth();
+        float rawMax = character.GetMaxHealthBase() * Math.Max(1, character.GetLevel()) * multiplier;
+        if (!(before > 0f && hp > 0f && rawMax > 0f) || float.IsInfinity(rawMax)) return false;
+        // PoV returns final HP on reads. Equal raw and displayed values can be coincidental.
+        if ((CreaturePovCompatibility.HasHealthBridge || !Mathf.Approximately(before, rawMax)) &&
+            !CreaturePovCompatibility.TrySetRawMaxHealth(character, rawMax)) return false;
+        CreatureModifierManager.RebaseCompanionReapingHealth(character, zdo);
+        float after = character.GetMaxHealth();
+        if (!(after > 0f) || float.IsInfinity(after)) return false;
+        if (!Mathf.Approximately(before, after))
+            CreaturePovCompatibility.SetFinalHealth(character, Mathf.Clamp(hp / before * after, Mathf.Min(1f, after), after));
+        else if (!Mathf.Approximately(hp, character.GetHealth()))
+            CreaturePovCompatibility.SetFinalHealth(character, hp);
+        return true;
     }
 
     private static void InheritLevelRuntimeState(Character? source, Character target, ZDO targetZdo)
@@ -1979,7 +2145,8 @@ internal static class CreatureLevelManager
 
         // Read the owner's saved result, including inherited stats. Do not reselect rules
         // or depend on modifier eligibility in this per-movement-call path.
-        float multiplier = zdo.GetFloat(SpeedMultiplierKey, 1f);
+        float multiplier = zdo.GetFloat(CompanionSpeedKey, -1f);
+        if (multiplier < 0f) multiplier = zdo.GetFloat(SpeedMultiplierKey, 1f);
         return multiplier > 0f && !float.IsInfinity(multiplier) ? multiplier : 1f;
     }
 
@@ -2015,7 +2182,14 @@ internal static class CreatureLevelManager
         }
 
         ZDO zdo = nview.GetZDO();
-        if (zdo == null || !zdo.GetBool(DamageAppliedKey, false))
+        if (zdo == null) return false;
+        float companion = zdo.GetFloat(CompanionDamageKey, -1f);
+        if (companion >= 0f)
+        {
+            multiplier = companion;
+            return !Mathf.Approximately(multiplier, 1f);
+        }
+        if (!zdo.GetBool(DamageAppliedKey, false))
         {
             return false;
         }
@@ -2027,7 +2201,10 @@ internal static class CreatureLevelManager
     internal static bool TryGetStoredHealthMultiplier(ZDO zdo, out float multiplier)
     {
         multiplier = float.NaN;
-        if (zdo == null || !zdo.GetBool(HealthAppliedKey, false))
+        if (zdo == null) return false;
+        multiplier = zdo.GetFloat(CompanionHealthKey, float.NaN);
+        if (multiplier > 0f) return true;
+        if (!zdo.GetBool(HealthAppliedKey, false))
         {
             return false;
         }
@@ -2050,6 +2227,8 @@ internal static class CreatureLevelManager
         }
 
         ZDO zdo = nview.GetZDO();
+        if (zdo != null && zdo.GetFloat(CompanionDamageKey, -1f) >= 0f)
+            return zdo.GetBool(CompanionDamageGrowthKey, false);
         return zdo != null &&
                zdo.GetBool(DamageAppliedKey, false) &&
                zdo.GetBool(DamageReplacesVanillaKey, false);
@@ -2596,7 +2775,7 @@ internal static class CreatureLevelManager
         internal bool IsBoss { get; }
         internal bool IsEnforcer { get; }
 
-        private LevelRuleContext(string prefabName, Heightmap.Biome biome, float distance, bool isBoss, bool isEnforcer)
+        internal LevelRuleContext(string prefabName, Heightmap.Biome biome, float distance, bool isBoss, bool isEnforcer)
         {
             PrefabName = prefabName;
             Biome = biome;

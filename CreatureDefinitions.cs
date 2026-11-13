@@ -215,6 +215,13 @@ internal static class CreatureModifierCatalog
     }
 }
 
+internal enum CompanionRole
+{
+    None,
+    Tamed,
+    BloodMagicSummon
+}
+
 internal sealed class LevelDefinition
 {
     private Dictionary<string, ModifierDefinition>? _modifiers;
@@ -241,8 +248,19 @@ internal sealed class LevelDefinition
     }
 
     public bool ModifiersCleared { get; set; }
+    public CompanionRole Companion { get; set; }
     public bool EnforcerOnly { get; set; }
     public bool IsPreset { get; set; }
+
+    internal void InheritCompanionStats(LevelDefinition fallback)
+    {
+        Health ??= fallback.Health;
+        HealthPerLevel ??= fallback.HealthPerLevel;
+        Damage ??= fallback.Damage;
+        DamagePerLevel ??= fallback.DamagePerLevel;
+        Speed ??= fallback.Speed;
+        SpeedPerLevel ??= fallback.SpeedPerLevel;
+    }
 }
 
 internal sealed class ModifierDefinition

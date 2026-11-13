@@ -154,6 +154,19 @@ The owner stores the resolved speed multiplier alongside each creature's level s
 
 CreatureManager is spawn-aware. Natural hostile spawns receive the complete matching rule, while breeding, eggs, grow-up transitions, tamed restores, Blood Magic summons, and explicit console spawns preserve or restrict values according to their lifecycle instead of blindly rerolling every creature initialization.
 
+In `levels.yml`, add `tamed` or `bloodMagicSummon` directly under `Global`, a group defined in that file, or a prefab. These optional blocks accept `health`, `damage`, `speed`, and their three `PerLevel` fields in `Full` and `ExceptLevel`. The example gives tamed wolves 1.5 times base health and doubles base damage for recognized Blood Magic summons.
+
+```yaml
+Wolf:
+  tamed:
+    health: 1.5
+Global:
+  bloodMagicSummon:
+    damage: 2
+```
+
+Merge these fields into any existing target. Each field checks the prefab's role block, then group and Global role blocks, then the ordinary stat rules available to that creature. Wild wolves keep their ordinary stats. A Blood Magic summon uses only the summon role even when the game marks it tamed. CreatureManager recognizes the Blood Magic weapon's summon path independently of the creature's faction. The game or summoning mod supplies its level. Taming an existing creature updates its configured stats and preserves its stars and modifier roll. Both roles work across biomes.
+
 `FrozenKing_p2` is protected because its health drives the seven-Aspect encounter. CreatureManager skips level/stat scaling, the creature `health` override (including regeneration time), and all modifiers for this exact prefab, and leaves incoming encounter damage unchanged. `cm:spawn` accepts it only at level 1 without modifiers; modifier inheritance and snapshot restore reject it. Phase 1, phase 3, and the Aspects retain their normal rules. This prevents interference in new encounters; it does not repair previously altered health or recover a stalled fight. Other mods and direct game commands can still alter the encounter.
 
 ## Combat Modifiers

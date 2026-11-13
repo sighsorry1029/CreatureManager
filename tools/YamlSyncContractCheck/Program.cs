@@ -195,6 +195,23 @@ try
         "Nested biome level syntax did not normalize to the expected definition.");
 
     var importedGroups = new Dictionary<string, List<string>?>(StringComparer.OrdinalIgnoreCase);
+    Require(CreatureYaml.TryReadLevelDefinitions("""
+        groups: {Pets: [Wolf, Boar]}
+        Pets: {tamed: {health: 2, damagePerLevel: 0}}
+        Wolf: {speed: 1.2, bloodMagicSummon: {speedPerLevel: 0.25}}
+        """, "companions", out var companions) && companions.Count == 3, "Companion and ordinary rules must coexist.");
+    RoundTrip(companions.Single(r => r.Companion == CompanionRole.Tamed), r => Require(
+        r.Target == "Pets" && r.Prefabs is ["Wolf", "Boar"] && r.Companion == CompanionRole.Tamed &&
+        r.Biome == null && r.Health == 2 && r.DamagePerLevel == 0 && !r.Damage.HasValue &&
+        CreatureYaml.ValidateDefinitions(new[] { r }, "synced pet"), "Sync lost a pet selector or an explicit zero."));
+    RoundTrip(companions.Single(r => r.Companion == CompanionRole.BloodMagicSummon), r => Require(
+        r.Companion == CompanionRole.BloodMagicSummon && r.SpeedPerLevel == 0.25f, "Sync lost summon stats."));
+    foreach (string invalid in new[] { "Wolf: {tamed: {level: [100]}}", "Global: {bloodMagicSummon: {scalePerLevel: 1}}",
+        "Wolf: {tamed: {Mountain: {speed: 1}}}", "Wolf: {Mountain: {tamed: {health: 2}}}",
+        "Mountain: {tamed: {damage: 2}}", "tamed: {damage: 2}", "Boss: {bloodMagicSummon: {damage: 2}}",
+        "Wolf: {tamed: {bloodMagicSummon: {health: 2}}}", "Boar: {tamed: {modifiers: []}}" })
+        Require(!CreatureYaml.TryReadLevelDefinitions(invalid, "invalid companion", out _), "Invalid selector accepted: " + invalid);
+    Require(!ReadModifierRules("Wolf: {tamed: {modifiers: []}}", "invalid modifier role", out _), "Companion role in modifier.yml.");
     Require(CreatureYaml.TryReadRuleFile("groups: {Brutes: [Troll]}", "levels_pack.yml", out _, importedGroups, false),
         "Group-only level files must export memberships.");
     const string roleYaml = """

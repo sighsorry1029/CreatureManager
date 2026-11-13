@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.15
+
+- In `Full` and `ExceptLevel`, use `tamed` and `bloodMagicSummon` in `levels.yml` to tune companion health, damage, movement speed, and per-star growth independently of wild creatures. Place either block directly under `Global`, a group, or a prefab. Each field uses the most specific value available.
+- Blood Magic summons keep the level assigned by the summoning system and use only their summon block, even when tamed. Taming a wild creature preserves its stars and modifier roll. When a companion health rule changes its maximum HP, it keeps its health percentage and any earned Reaping growth.
+- New [default levels.yml files](https://github.com/sighsorry1029/CreatureManager/blob/main/docs/defaults/levels.yml) include commented examples for both global rules, tamed wolves, and summoned skeletons. Existing files work without edits. To use the new rules in multiplayer, update the server and all clients to 1.3.15 together.
+
 ## 1.3.14
 
 - `Block Omen Enforcer During Cooldown` now defaults to `Off`. An Omen roll can summon an Enforcer during the regional cooldown. The cap still counts active Enforcers and pending summons. Servers with a saved value of `On` keep it until an administrator changes it.

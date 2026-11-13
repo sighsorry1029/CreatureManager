@@ -9562,6 +9562,20 @@ internal static class CreatureModifierManager
         return true;
     }
 
+    internal static void RebaseCompanionReapingHealth(Character character, ZDO zdo)
+    {
+        float previousBase = zdo.GetFloat(ReapingBaseMaxHealthKey, 0f);
+        if (previousBase <= 0f || !HasModifier(zdo, ModifierMask.Reaping)) return;
+        float newBase = character.GetMaxHealth();
+        if (!Mathf.Approximately(previousBase, newBase))
+        {
+            float bonus = zdo.GetFloat(ReapingBonusHealthKey, 0f);
+            zdo.Set(ReapingBaseMaxHealthKey, newBase);
+            if (bonus > 0f) zdo.Set(ReapingBonusHealthKey, bonus / previousBase * newBase);
+        }
+        ApplyStoredReapingHealth(character, zdo);
+    }
+
     private static void ApplyStoredReapingHealth(Character character, ZDO zdo)
     {
         if (zdo == null || !HasModifier(zdo, ModifierMask.Reaping))

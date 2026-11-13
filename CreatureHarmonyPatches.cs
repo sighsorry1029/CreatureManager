@@ -1267,6 +1267,17 @@ internal static class CreatureManagerProcreationProcreatePatch
     }
 }
 
+[HarmonyPatch(typeof(Character), "RPC_SetTamed", typeof(long), typeof(bool))]
+internal static class CreatureManagerCharacterTamenessPatch
+{
+    private static void Prefix(Character __instance, out bool __state) => __state = __instance.IsTamed();
+
+    private static void Postfix(Character __instance, bool __state)
+    {
+        if (__instance.IsTamed() != __state) CreatureLevelManager.OnTamenessChanged(__instance);
+    }
+}
+
 [HarmonyPatch(typeof(Character), nameof(Character.SetLevel))]
 internal static class CreatureManagerCharacterSetLevelPatch
 {

@@ -42,6 +42,11 @@ internal sealed class HitData
     }
 }
 
+internal class Heightmap
+{
+    internal enum Biome { None, Meadows, BlackForest, Swamp, Mountain, Plains, Ocean, Mistlands, AshLands, DeepNorth }
+}
+
 namespace CreatureManager
 {
     internal static class CreatureManagerPlugin

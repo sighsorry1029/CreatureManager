@@ -53,6 +53,14 @@ internal static class CreatureYaml
         "modifiers",
         "modifierDistanceScaling"
     };
+    private static readonly HashSet<string> CompanionStatFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "health", "healthPerLevel", "damage", "damagePerLevel", "speed", "speedPerLevel"
+    };
+
+    private static CompanionRole ParseCompanionRole(string key) =>
+        key.Equals("tamed", StringComparison.OrdinalIgnoreCase) ? CompanionRole.Tamed :
+        key.Equals("bloodMagicSummon", StringComparison.OrdinalIgnoreCase) ? CompanionRole.BloodMagicSummon : CompanionRole.None;
 
     internal static bool TryReadDefinitions<T>(string yaml, string source, out List<T> definitions)
     {
@@ -510,6 +518,8 @@ internal static class CreatureYaml
             }
 
             ValidateUniqueMappingKeys(root, source, "root", skipLegacyModifierValues: !modifierFile);
+            if (root.Children.Keys.Any(key => ParseCompanionRole(GetYamlScalar(key)) != CompanionRole.None))
+                throw new FormatException($"Companion roles in {source} belong under a Global, group or prefab target in levels.yml.");
 
             Dictionary<string, List<string>> groups = ReadLevelGroups(root, source);
             if (modifierFile)
@@ -572,6 +582,8 @@ internal static class CreatureYaml
                 rule.ModifierDistanceScaling = ReadFloatList(entry.Value, source, path, key);
             else if (!enforcer && entry.Value is YamlMappingNode child && key.Length > 0 && !LevelFieldNames.Contains(key))
             {
+                if (ParseCompanionRole(key) != CompanionRole.None)
+                    throw new FormatException($"'{path}.{key}' belongs in levels.yml.");
                 bool role = key.Equals("enforcer", StringComparison.OrdinalIgnoreCase);
                 if ((!role && biome != null) || (role && target.Equals("Boss", StringComparison.OrdinalIgnoreCase)))
                     throw new FormatException($"Unsupported modifier nesting '{path}.{key}' in {source}.");
@@ -712,9 +724,13 @@ internal static class CreatureYaml
 
                 targetsWithNestedDefinitions.Add(target);
                 string label = $"{target}.{biome}";
+                CompanionRole role = ParseCompanionRole(biome);
+                if (role != CompanionRole.None && nestedMap.Children.Keys.Any(key => !CompanionStatFields.Contains(GetYamlScalar(key))))
+                    throw new FormatException($"'{label}' in {source} accepts only health, damage, speed and their PerLevel fields.");
                 LevelDefinition rule = ReadLevelDefinition(nestedMap, source, label, out bool ignoredModifiers);
                 rule.Target = target;
-                rule.Biome = biome;
+                rule.Companion = role;
+                if (role == CompanionRole.None) rule.Biome = biome;
                 if (groups.TryGetValue(target, out List<string>? prefabs) && prefabs != null)
                 {
                     rule.Prefabs = prefabs;
@@ -1407,6 +1423,14 @@ internal static class CreatureYaml
         {
             return false;
         }
+
+        if (rule.Companion != CompanionRole.None &&
+            (rule.Companion is not (CompanionRole.Tamed or CompanionRole.BloodMagicSummon) ||
+             rule.Biome != null || rule.EnforcerOnly || rule.IsPreset || rule.Level != null || rule.ScalePerLevel.HasValue ||
+             rule.Modifiers != null || rule.ModifiersCleared || rule.DistanceScaling != null || rule.ModifierDistanceScaling != null ||
+             string.Equals(rule.Target, "Boss", StringComparison.OrdinalIgnoreCase) || string.Equals(rule.Target, "Enforcer", StringComparison.OrdinalIgnoreCase) ||
+             Enum.TryParse<Heightmap.Biome>(rule.Target, true, out _)))
+            return Invalid(path, "Companion stats require a Global, group or prefab target without a biome.");
 
         if (rule.ModifiersCleared && rule.Modifiers is { Count: > 0 })
         {

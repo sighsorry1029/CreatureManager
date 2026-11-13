@@ -19,6 +19,8 @@
 # Targets: Global, Boss, biome, group, or prefab; omitted fields inherit independently.
 # Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss > biome level fallback (if enabled).
 # Nested biome blocks override their parent target in that biome.
+# Place tamed and bloodMagicSummon directly under Global, a group, or a prefab. Omit both for ordinary stat rules.
+# Each block accepts health, damage, speed and their PerLevel fields. Both use the creature's assigned level and apply across biomes.
 # speed/speedPerLevel: movement, acceleration, and turning only; multiply with Swift, not attack speed or distanceScaling.
 # Speed is saved per creature; completed creatures keep their saved value (1 if absent) until a supported level change.
 #
@@ -32,6 +34,12 @@ Global:
 #   speed: 1                             # Optional movement multiplier; must be > 0. Values below 1 slow movement.
 #   speedPerLevel: 0                     # Optional star growth >= 0: speed * (1 + (level - 1) * value). No matching rule = 1 / 0.
 #   distanceScaling: [0.03, 0.08, 1000, 5] # damageStep, healthStep, stepMeters, maxSteps (0 = unlimited).
+
+#   tamed:                 # All tamed creatures except Blood Magic summons.
+#     health: 1.5
+#
+#   bloodMagicSummon:      # All Blood Magic summons, including those marked as tamed.
+#     health: 1.5
 
 Boss:                                  # Regular bosses only; Enforcers use non-boss rules.
   # level: [100]                       # Boss fallback: level 1; omit to allow enabled biome YAML/preset weights ([] is invalid).
@@ -57,6 +65,15 @@ Boss:                                  # Regular bosses only; Enforcers use non-
 #
 # Troll:
 #   BlackForest:
+#     damage: 1.2
+#
+# For a single prefab, set only the companion fields you want to override. Other fields inherit.
+# Wolf:
+#   tamed:
+#     health: 1.5
+#
+# Skeleton_Friendly:
+#   bloodMagicSummon:
 #     damage: 1.2
 #
 # Built-in distributions for Biome Level Preset (reference only; level weights apply in Full mode).

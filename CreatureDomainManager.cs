@@ -17,7 +17,7 @@ internal static class CreatureDomainManager
 {
     private const long ReloadDebounceTicks = TimeSpan.TicksPerSecond / 4;
     private const long SyncedApplyDebounceTicks = TimeSpan.TicksPerSecond / 10;
-    private const int SyncedYamlBundleVersion = 7; // Earlier readers can apply modifier blocks from the raw Karma YAML in this bundle.
+    private const int SyncedYamlBundleVersion = 8; // Earlier readers could apply companion-only stats to wild creatures.
     private const string ReferenceLogicVersion = "2026-07-21-ragdoll-visual-v2";
     private const string MainTextureProperty = "_MainTex";
     private const string RagdollCloneSuffix = "_CreatureManagerRagdoll";
@@ -4953,6 +4953,17 @@ internal static class CreatureDomainManager
             return false;
         }
 
+        foreach (var rule in overrideDefinitions)
+        {
+            if (rule.Companion == CompanionRole.None || rule.Prefabs != null ||
+                string.Equals(rule.Target, "Global", StringComparison.OrdinalIgnoreCase)) continue;
+            if (CreatureKarmaManager.TryResolveBiomeName(rule.Target!, out _))
+            {
+                CreatureManagerPlugin.Log.LogError($"Companion stats in '{rule.Target}' require a Global, group or prefab target. Biome targets are unsupported.");
+                definitions = new List<LevelDefinition>();
+                return false;
+            }
+        }
         definitions = LoadLevelPresetDefinitions();
         definitions.AddRange(overrideDefinitions);
         definitions.AddRange(modifierRules);
@@ -5198,6 +5209,8 @@ internal static class CreatureDomainManager
         AppendTemplateComment(builder, "Targets: Global, Boss, biome, group, or prefab; omitted fields inherit independently.");
         AppendTemplateComment(builder, "Priority: non-boss/Enforcer prefab > group > biome > Global; regular boss prefab > group > Boss > biome level fallback (if enabled).");
         AppendTemplateComment(builder, "Nested biome blocks override their parent target in that biome.");
+        AppendTemplateComment(builder, "Place tamed and bloodMagicSummon directly under Global, a group, or a prefab. Omit both for ordinary stat rules.");
+        AppendTemplateComment(builder, "Each block accepts health, damage, speed and their PerLevel fields. Both use the creature's assigned level and apply across biomes.");
         AppendTemplateComment(builder, "speed/speedPerLevel: movement, acceleration, and turning only; multiply with Swift, not attack speed or distanceScaling.");
         AppendTemplateComment(builder, "Speed is saved per creature; completed creatures keep their saved value (1 if absent) until a supported level change.");
         AppendTemplateBlankLine(builder);
@@ -5212,6 +5225,12 @@ internal static class CreatureDomainManager
         AppendTemplateLine(builder, 1, "speed: 1                             # Optional movement multiplier; must be > 0. Values below 1 slow movement.");
         AppendTemplateLine(builder, 1, "speedPerLevel: 0                     # Optional star growth >= 0: speed * (1 + (level - 1) * value). No matching rule = 1 / 0.");
         AppendTemplateLine(builder, 1, "distanceScaling: [0.03, 0.08, 1000, 5] # damageStep, healthStep, stepMeters, maxSteps (0 = unlimited).");
+        builder.AppendLine();
+        AppendTemplateLine(builder, 1, "tamed:                 # All tamed creatures except Blood Magic summons.");
+        AppendTemplateLine(builder, 2, "health: 1.5");
+        AppendTemplateBlankLine(builder);
+        AppendTemplateLine(builder, 1, "bloodMagicSummon:      # All Blood Magic summons, including those marked as tamed.");
+        AppendTemplateLine(builder, 2, "health: 1.5");
         builder.AppendLine();
 
         builder.AppendLine("Boss:                                  # Regular bosses only; Enforcers use non-boss rules.");
@@ -5239,6 +5258,15 @@ internal static class CreatureDomainManager
         AppendTemplateBlankLine(builder);
         AppendTemplateLine(builder, 0, "Troll:");
         AppendTemplateLine(builder, 1, "BlackForest:");
+        AppendTemplateLine(builder, 2, "damage: 1.2");
+        AppendTemplateBlankLine(builder);
+        AppendTemplateComment(builder, "For a single prefab, set only the companion fields you want to override. Other fields inherit.");
+        AppendTemplateLine(builder, 0, "Wolf:");
+        AppendTemplateLine(builder, 1, "tamed:");
+        AppendTemplateLine(builder, 2, "health: 1.5");
+        AppendTemplateBlankLine(builder);
+        AppendTemplateLine(builder, 0, "Skeleton_Friendly:");
+        AppendTemplateLine(builder, 1, "bloodMagicSummon:");
         AppendTemplateLine(builder, 2, "damage: 1.2");
         AppendTemplateBlankLine(builder);
         AppendLevelPresetTemplateComments(builder);

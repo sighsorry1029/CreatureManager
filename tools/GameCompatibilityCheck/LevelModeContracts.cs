@@ -160,6 +160,7 @@ internal static class LevelModeContracts
             CheckBossBiomeRules(plugin, entry, bind, config);
             CheckDefaultTemplate(plugin);
             CheckSpeedState(plugin, entry, bind, config, mode);
+            CheckCompanions(plugin, mode);
             character = NewCharacter(1);
             typeof(ZDO).GetField("m_prefab", Instance)!.SetValue(CurrentZdo, "FrozenKing_p2".GetStableHashCode());
             Require(!(bool)Call("TryApplyLevelState", character)! && !(bool)Call("AllowsModifierEffects", character)!, "FrozenKing phase two stays protected in ExceptLevel");
@@ -173,6 +174,91 @@ internal static class LevelModeContracts
             File.Delete(configPath);
         }
         System.Console.WriteLine("Level mode contracts passed: three config choices, legacy On/Vanilla/numeric/boxed values, canonical save/reload, biome preset None and existing numeric values, no-weight/no-bonus level preservation, weighted Full, disabled Off, ExceptLevel levels 1/3, sync/owner gates, health/damage/distance/scale/modifier eligibility, later level increases/decreases, missing-health preservation, no reroll, spawn policies, FrozenKing guard, native prefab sizes vs explicit overrides, default YAML. Rule inputs and native/world boundaries substituted.");
+    }
+
+    private static void CheckCompanions(Assembly plugin, ConfigEntryBase mode)
+    {
+        MethodInfo parse = plugin.GetType("CreatureManager.CreatureYaml", true)!.GetMethod("TryReadLevelDefinitions", Static)!;
+        void Rules(string yaml)
+        {
+            object?[] args = { yaml, "companions", null };
+            Require((bool)parse.Invoke(null, args)!, "companion YAML parses");
+            Levels.GetMethod("Load", Static)!.Invoke(null, new[] { args[2] });
+        }
+        string rules = @"groups: {Pets: [Boar]}
+Global: {healthPerLevel: 0.5, tamed: {health: 2, speed: 2}, bloodMagicSummon: {speedPerLevel: 0.25, damage: 0}}
+Pets: {tamed: {health: 3, damage: 2}}
+Boar: {tamed: {health: 4}}";
+        try
+        {
+            mode.SetSerializedValue("Full");
+            Rules(rules);
+            Character summon = NewCharacter(1);
+            Source = 3;
+            SetBool(CurrentZdo, "tamed", true);
+            Require((bool)Call("TryApplyLevelState", summon)! && LevelWrites == 0 && KarmaQueries == 0 &&
+                WeightQueries == 0 && GetLevel(summon) == 1 && !(bool)Call("ShouldRollModifiers", summon)!,
+                "Full does not roll a Blood Magic summon even when it is tamed");
+            CheckSpeed(summon, 1f, "summon excludes ordinary tamed speed");
+            object?[] damage = { summon, 1f };
+            Require((bool)Call("TryGetDamageMultiplier", damage)! && (float)damage[1]! == 0f &&
+                !(bool)Call("ReplacesVanillaLevelDamage", summon)!, "explicit zero outgoing summon damage");
+            LevelField.SetValue(summon, 3);
+            SetInt(CurrentZdo, "level", 3);
+            Call("RestoreConfiguredLevel", summon, 3);
+            CheckSpeed(summon, 1.5f, "per-star stats follow an external level change after a zero-star spawn");
+
+            mode.SetSerializedValue("ExceptLevel");
+            Character boar = NewCharacter(2);
+            Call("TryApplyLevelState", boar);
+            float wildMax = MaxHealth;
+            Health = wildMax * 0.25f;
+            SetBool(CurrentZdo, "tamed", true);
+            Call("OnTamenessChanged", boar);
+            Call("UpdatePendingApplications");
+            Require(MaxHealth == 600f && Health == 150f && GetLevel(boar) == 2,
+                "prefab pet health wins and uses ordinary per-star growth, keeping the injured fraction");
+            CheckSpeed(boar, 2f, "pet inherits Global role speed");
+            damage = new object?[] { boar, 0f };
+            Owner = false;
+            Require((bool)Call("TryGetDamageMultiplier", damage)! && (float)damage[1]! == 2f,
+                "replica reads the owner's group-role damage");
+            Rules("");
+            Call("OnTamenessChanged", boar);
+            Require(MaxHealth == 600f, "non-owner cannot change companion stats");
+            Owner = true;
+            Rules(rules);
+            Call("TryApplyLevelState", boar);
+            Require(MaxHealth == 600f && Health == 150f, "reloading an injured companion does not compound or heal");
+            Rules("");
+            Call("TryApplyLevelState", boar);
+            Require(MaxHealth == wildMax && Health == wildMax * 0.25f && LevelWrites == 0 &&
+                WeightQueries == 0 && KarmaQueries == 0, "removal restores the saved ordinary result without a roll");
+            CheckSpeed(boar, 1.32f, "removal restores ordinary speed");
+
+            Rules(rules);
+            SetFloat(CurrentZdo, "CreatureManager_ReapingBaseMaxHealth", wildMax);
+            SetFloat(CurrentZdo, "CreatureManager_ReapingBonusHealth", wildMax / 4f);
+            ZDOExtraData.Set(CurrentZdo.m_uid, "CreatureManager_ModifierMask64".GetStableHashCode(), 1L << 22);
+            MaxHealth = wildMax * 1.25f;
+            Health = MaxHealth / 2f;
+            Call("TryApplyLevelState", boar);
+            Require(MaxHealth == 750f && Health == 375f, "taming retains the acquired Reaping growth and wound");
+            Call("RestoreStoredHealthDeficit", boar, 375f);
+            Require(MaxHealth == 750f && Health == 375f, "the final SetLevel health restore preserves Reaping exactly once");
+            SetBool(CurrentZdo, "tamed", false);
+            Call("OnTamenessChanged", boar);
+            Call("UpdatePendingApplications");
+            Require(MaxHealth == wildMax * 1.25f && Health == MaxHealth / 2f,
+                "untaming restores wild health including the existing Reaping bonus");
+        }
+        finally
+        {
+            Rules("");
+            Owner = true;
+            Source = 0;
+        }
+        System.Console.WriteLine("Companion contracts passed: protected summon spawn, later level, exclusive roles, sparse inheritance, owner and replica stats, wounded tame, reload and rule removal.");
     }
 
     private static void CheckReentrantLevels(ConfigEntryBase mode)
@@ -830,9 +916,13 @@ Bonemass:
                     "IsPlayer" or "IsBoss" or "IsDead" => nameof(FalseCharacter), "GetLevel" => nameof(GetLevel),
                     "GetMaxHealthBase" => nameof(GetBaseHealth), "GetMaxHealth" => nameof(GetMaxHealth), "GetHealth" => nameof(GetHealth),
                     "SetMaxHealth" => nameof(SetMaxHealth), "SetHealth" => nameof(SetHealth), "SetLevel" => nameof(SetLevel),
-                    "GetZDOID" => nameof(GetZdoId), _ => null
+                    "GetZDOID" => nameof(GetZdoId), "IsTamed" => nameof(IsTamed), _ => null
                 }
                 : type == "ZNetView" && method.Name == "IsOwner" ? nameof(IsOwner)
+                : type == "ZDO" && method.Name == "Set" && method.Parameters[0].ParameterType.FullName == "System.Int32" ? method.Parameters[1].ParameterType.Name switch
+                {
+                    "Single" => nameof(SetFloatByHash), "Boolean" => nameof(SetBoolByHash), _ => null
+                }
                 : type == "ZDO" && method.Name == "Set" && method.Parameters[0].ParameterType.FullName == "System.String" ? method.Parameters[1].ParameterType.Name switch
                 {
                     "Int32" => nameof(SetInt), "Single" => nameof(SetFloat), "Boolean" => nameof(SetBool), "String" => nameof(SetString), _ => null
@@ -851,10 +941,12 @@ Bonemass:
                     "TrySelectFloatValue" => nameof(SelectFloat), "TrySelectDistanceScalingMultiplier" => nameof(SelectDistance),
                     "TryResolveKarmaBonus" => nameof(KarmaBonus), "TrySelectLevelWeights" => nameof(LevelWeights), "GetPrefabName" => nameof(GetPrefabName),
                     "IsDungeonCreature" => nameof(IsDungeon), "IsSaddleableCreature" => nameof(IsSaddleable),
+                    "GetBiome" => nameof(BiomeAt), "RegisterRpcs" or "UpdateTimedOutKarmaBonusRequests" => nameof(NoWorldAction),
                     "ApplyRuntimeVisuals" => nameof(UpdateVisuals), _ => null
                 } : null;
             MethodInfo? replacement = boundary == null ? null : typeof(LevelModeContracts).GetMethod(boundary, Static);
             if (replacement == null && (type == Levels.FullName || type == "CreatureManager.CreaturePovCompatibility" ||
+                type == "CreatureManager.CreatureModifierManager" && method.Name is "RebaseCompanionReapingHealth" or "ApplyStoredReapingHealth" ||
                 type == "CreatureManager.CreatureDomainManager" && (method.Name.StartsWith("Append", StringComparison.Ordinal) ||
                     method.Name is "GetLevelPresetWeights" or "BuildLevelPresetDefinitions" or "LevelPreset")))
             {
@@ -881,6 +973,11 @@ Bonemass:
     private static bool IsSaddleable(Character character) => Saddle;
     private static string GetPrefabName(GameObject value) => "Boar";
     private static bool FalseCharacter(Character character) => false;
+    private static bool IsTamed(Character character) => CurrentZdo.GetBool("tamed");
+    private static Heightmap.Biome BiomeAt(Vector3 position) => Heightmap.Biome.Meadows;
+    private static void NoWorldAction() { }
+    private static void SetFloatByHash(ZDO zdo, int key, float value) => ZDOExtraData.Set(zdo.m_uid, key, value);
+    private static void SetBoolByHash(ZDO zdo, int key, bool value) => ZDOExtraData.Set(zdo.m_uid, key, value ? 1 : 0);
     private static bool IsOwner(ZNetView view) => Owner;
     private static bool ConfigurationReady() => Ready;
     private static int GetSource(Character character) => Source;
